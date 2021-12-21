@@ -6,6 +6,9 @@ use crate::input::KeyboardMap;
 
 mod input;
 mod render;
+mod world;
+
+use world::Vector3;
 
 use render::geometry::primitives::cube;
 use render::shaders::{FRAGMENT_SHADER_SRC, VERTEX_SHADER_SRC};
@@ -22,7 +25,12 @@ fn main() {
 
     let mut elapsed_time: f32 = 0.0;
     let mut delta_time: f32 = 0.0;
-    let mut camera_x: f32 = 0.0;
+
+    let mut camera_pos = Vector3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
 
     let mut keyboard = KeyboardMap::new();
 
@@ -63,9 +71,15 @@ fn main() {
         };
 
         if keyboard.is_pressed(VirtualKeyCode::A) {
-            camera_x -= 3.0 * delta_time;
+            camera_pos.x -= 3.0 * delta_time;
         } else if keyboard.is_pressed(VirtualKeyCode::D) {
-            camera_x += 3.0 * delta_time;
+            camera_pos.x += 3.0 * delta_time;
+        }
+
+        if keyboard.is_pressed(VirtualKeyCode::W) {
+            camera_pos.z += 3.0 * delta_time;
+        } else if keyboard.is_pressed(VirtualKeyCode::S) {
+            camera_pos.z -= 3.0 * delta_time;
         }
 
         // Start drawing on window
@@ -94,7 +108,7 @@ fn main() {
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
-            [-camera_x, 0.0, 0.0, 1.0],
+            [-camera_pos.x, -camera_pos.y, -camera_pos.z, 1.0],
         ];
 
         let uniforms = uniform! {
