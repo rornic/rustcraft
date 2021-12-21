@@ -1,5 +1,3 @@
-use glium::{framebuffer::RenderBuffer, Frame};
-
 #[derive(Copy, Clone)]
 pub struct Vertex {
     position: [f32; 3],
