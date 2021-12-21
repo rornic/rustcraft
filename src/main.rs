@@ -5,41 +5,10 @@ use glium::{glutin::event::VirtualKeyCode, Surface};
 use crate::input::KeyboardMap;
 
 mod input;
-mod shapes;
+mod render;
 
-const VERTEX_SHADER_SRC: &str = r#"
-#version 150
-
-in vec3 position;
-in vec3 normal;
-
-out vec3 v_normal;
-
-uniform mat4 projection_matrix;
-uniform mat4 view_matrix;
-uniform mat4 model_matrix;
-
-void main() {
-    v_normal = transpose(inverse(mat3(model_matrix))) * normal;
-    gl_Position = projection_matrix * view_matrix * model_matrix * vec4(position, 1.0);
-}
-"#;
-
-const FRAGMENT_SHADER_SRC: &str = r#"
-#version 140
-
-in vec3 v_normal;
-out vec4 color;
-
-uniform vec3 u_light;
-
-void main() {
-    float brightness = dot(normalize(v_normal), normalize(u_light));
-    vec3 dark = vec3(0.6, 0.0, 0.0);
-    vec3 regular = vec3(1.0, 0.0, 0.0);
-    color = vec4(mix(dark, regular, brightness), 1.0);
-}
-"#;
+use render::geometry::primitives::cube;
+use render::shaders::{FRAGMENT_SHADER_SRC, VERTEX_SHADER_SRC};
 
 fn main() {
     use glium::glutin;
@@ -58,7 +27,7 @@ fn main() {
     let mut keyboard = KeyboardMap::new();
 
     // Set up cube for rendering
-    let shape = shapes::cube();
+    let shape = cube();
     let (vertex_buffer, normal_buffer, index_buffer) = (
         glium::VertexBuffer::new(&display, &shape.vertices).unwrap(),
         glium::VertexBuffer::new(&display, &shape.normals).unwrap(),
