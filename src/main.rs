@@ -13,7 +13,7 @@ mod input;
 mod render;
 mod world;
 
-use world::Vector3;
+use world::{Vector3, World};
 
 use render::model::primitives::cube;
 use render::shader::{FRAGMENT_SHADER_SRC, VERTEX_SHADER_SRC};
@@ -55,7 +55,9 @@ fn process_window_event(input: &mut Input, ev: Event<()>, control_flow: &mut Con
             _ => return,
         },
         glutin::event::Event::DeviceEvent { event, .. } => match event {
-            glutin::event::DeviceEvent::Key(ki) => input.keyboard.process_event(ki),
+            glutin::event::DeviceEvent::Key(ki) => {
+                input.keyboard.process_event(ki);
+            }
             _ => (),
         },
         _ => (),
@@ -70,7 +72,7 @@ fn main() {
 
     let mut camera_pos = Vector3 {
         x: 0.0,
-        y: 0.0,
+        y: 5.0,
         z: 0.0,
     };
 
@@ -97,6 +99,8 @@ fn main() {
         },
         ..Default::default()
     };
+
+    let world = World::new();
     event_loop.run(move |ev, _, control_flow| {
         let frame_start = std::time::Instant::now();
 
@@ -151,20 +155,24 @@ fn main() {
         };
         global_uniform_buffer.write(&global_render_uniforms);
 
-        let uniforms = uniform! {
-            model_matrix:  [
-                 [1.0, 0.0, 0.0, 0.0],
-                 [0.0, elapsed_time.cos(), -elapsed_time.sin(), 0.0],
-                 [0.0, elapsed_time.sin(), elapsed_time.cos(), 0.0],
-                 [0.0, 0.0, 15.0, 1.0f32],
-            ],
-            global_render_uniforms: &global_uniform_buffer,
-        };
-
-        model
-            .render(&mut target, &program, &uniforms, &params)
-            .unwrap();
-
+        for x in 0..world.blocks.len() {
+            for y in 0..world.blocks[x].len() {
+                for z in 0..world.blocks[x][y].len() {
+                    let uniforms = uniform! {
+                        model_matrix:  [
+                             [1.0, 0.0, 0.0, 0.0],
+                             [0.0, 1.0, 0.0, 0.0],
+                             [0.0, 0.0, 1.0, 0.0],
+                             [x as f32 * 0.5, y as f32 * 0.5, z as f32 * 0.5, 1.0f32],
+                        ],
+                        global_render_uniforms: &global_uniform_buffer,
+                    };
+                    model
+                        .render(&mut target, &program, &uniforms, &params)
+                        .unwrap();
+                }
+            }
+        }
         target.finish().unwrap();
 
         // Update delta_time with the time of this frame

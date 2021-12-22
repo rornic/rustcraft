@@ -5,6 +5,26 @@ pub struct Vector3 {
     pub z: f32,
 }
 
+// Simple representation of the world.
+// TODO: just a placeholder, will need replacing.
+pub struct World {
+    pub blocks: [[[bool; 16]; 2]; 16],
+}
+
+impl World {
+    pub fn new() -> World {
+        let mut blocks: [[[bool; 16]; 2]; 16] = [[[false; 16]; 2]; 16];
+
+        for x in 0..blocks.len() {
+            for z in 0..blocks[0][0].len() {
+                blocks[x][0][z] = true;
+            }
+        }
+
+        World { blocks }
+    }
+}
+
 pub struct Transform {
     position: Vector3,
     scale: Vector3,
