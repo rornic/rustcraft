@@ -1,2 +1,2 @@
-pub mod geometry;
-pub mod shaders;
+pub mod model;
+pub mod shader;
