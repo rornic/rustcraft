@@ -1,12 +1,5 @@
-use std::io::Empty;
-
 use glium::{
-    buffer::Content,
-    program::Uniform,
-    uniforms::{
-        AsUniformValue, EmptyUniforms, UniformBlock, UniformBuffer, UniformValue, Uniforms,
-        UniformsStorage,
-    },
+    uniforms::{AsUniformValue, UniformBuffer, Uniforms, UniformsStorage},
     Display, DrawError, DrawParameters, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 
@@ -113,6 +106,9 @@ impl From<glium::index::BufferCreationError> for ModelLoadError {
     }
 }
 
+/// Represents uniforms that are global across all shaders and should be present for every render.
+///
+/// This includes information required to project from model space to screen space as well as calculating lighting.
 #[derive(Copy, Clone)]
 pub struct GlobalRenderUniforms {
     pub projection_matrix: [[f32; 4]; 4],
@@ -121,6 +117,7 @@ pub struct GlobalRenderUniforms {
 }
 implement_uniform_block!(GlobalRenderUniforms, projection_matrix, view_matrix, light);
 
+/// A `UniformStorage` type that contains a `VertexBuffer<GlobalRenderUniforms>` alongside any extra uniforms for this render.
 type RenderUniforms<'a, T, R> =
     UniformsStorage<'a, &'a UniformBuffer<GlobalRenderUniforms>, UniformsStorage<'a, T, R>>;
 
@@ -140,9 +137,6 @@ pub trait Renderable<T, R> {
         R: Uniforms;
 }
 
-/// Implement the `Renderable` trait for `Model`.
-///
-/// This provides an implementation for how any `Model` should be rendered to the screen.
 impl<T, R> Renderable<T, R> for Model {
     fn render(
         &self,
