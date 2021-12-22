@@ -34,10 +34,11 @@ uniform global_render_uniforms {
     vec3 light;
 };
 
+
 void main() {
     float brightness = dot(normalize(v_normal), normalize(light));
-    vec3 dark = vec3(0.6, 0.0, 0.0);
-    vec3 regular = vec3(1.0, 0.0, 0.0);
+    vec3 dark = vec3(0.5, 0.0, 0.25);
+    vec3 regular = vec3(1.0, 0.0, 0.5);
     color = vec4(mix(dark, regular, brightness), 1.0);
 }
 "#;

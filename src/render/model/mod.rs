@@ -121,40 +121,39 @@ pub struct GlobalRenderUniforms {
 }
 implement_uniform_block!(GlobalRenderUniforms, projection_matrix, view_matrix, light);
 
-type RenderUniforms<'a, T> = UniformsStorage<
-    'a,
-    &'a UniformBuffer<GlobalRenderUniforms>,
-    UniformsStorage<'a, T, EmptyUniforms>,
->;
+type RenderUniforms<'a, T, R> =
+    UniformsStorage<'a, &'a UniformBuffer<GlobalRenderUniforms>, UniformsStorage<'a, T, R>>;
 
 /// A trait for anything that can be rendered to the screen.
 ///
 /// Takes in the frame to render to, the shader program to render with, a set of uniforms to run the shader with, and additional draw parameters.
-pub trait Renderable<T> {
+pub trait Renderable<T, R> {
     fn render(
         &self,
         target: &mut Frame,
         program: &Program,
-        uniforms: &RenderUniforms<T>,
+        uniforms: &RenderUniforms<T, R>,
         params: &DrawParameters,
     ) -> Result<(), DrawError>
     where
-        T: AsUniformValue;
+        T: AsUniformValue,
+        R: Uniforms;
 }
 
 /// Implement the `Renderable` trait for `Model`.
 ///
 /// This provides an implementation for how any `Model` should be rendered to the screen.
-impl<T> Renderable<T> for Model {
+impl<T, R> Renderable<T, R> for Model {
     fn render(
         &self,
         target: &mut Frame,
         program: &Program,
-        uniforms: &RenderUniforms<T>,
+        uniforms: &RenderUniforms<T, R>,
         params: &DrawParameters,
     ) -> Result<(), DrawError>
     where
         T: AsUniformValue,
+        R: Uniforms,
     {
         target.draw(
             (&self.vertex_buffer, &self.normal_buffer),
