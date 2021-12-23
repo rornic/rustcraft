@@ -80,9 +80,6 @@ fn main() {
     // Prepare keyboard for input
     let mut input = init_input();
 
-    // Set up cube for rendering
-    let model = cube().load(&display).unwrap();
-
     // Create the shader program
     let program = render::shader::load_shader(&display, "default").unwrap();
 
@@ -100,21 +97,8 @@ fn main() {
     };
 
     let world = World::new();
-    let mut block_uniform_buffers: Vec<Vec<Vec<[[f32; 4]; 4]>>> = vec![];
-    for x in 0..world.blocks.len() {
-        block_uniform_buffers.push(vec![]);
-        for y in 0..world.blocks[x].len() {
-            block_uniform_buffers[x].push(vec![]);
-            for z in 0..world.blocks[x][y].len() {
-                block_uniform_buffers[x][y].push([
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0, 0.0],
-                    [x as f32 * 0.5, y as f32 * 0.5, z as f32 * 0.5, 1.0f32],
-                ]);
-            }
-        }
-    }
+    let world_mesh = world.generate_chunk_mesh().load(&display).unwrap();
+
     event_loop.run(move |ev, _, control_flow| {
         match ev {
             glium::glutin::event::Event::MainEventsCleared => {
@@ -168,20 +152,22 @@ fn main() {
                     light: [-1.0, 0.4, 0.9f32],
                 };
                 global_uniform_buffer.write(&global_render_uniforms);
-
-                for x in 0..world.blocks.len() {
-                    for y in 0..world.blocks[x].len() {
-                        for z in 0..world.blocks[x][y].len() {
-                            let uniforms = uniform! {
-                                model_matrix: block_uniform_buffers[x][y][z],
-                                global_render_uniforms: &global_uniform_buffer,
-                            };
-                            model
-                                .render(&mut target, &program, &uniforms, &params)
-                                .unwrap();
-                        }
-                    }
-                }
+                world_mesh
+                    .render(
+                        &mut target,
+                        &program,
+                        &uniform! {
+                            model_matrix: [
+                                [1.0, 0.0, 0.0, 0.0],
+                                [0.0, 1.0, 0.0, 0.0],
+                                [0.0, 0.0, 1.0, 0.0],
+                                [0.0, 0.0, 0.0, 1.0f32],
+                            ],
+                            global_render_uniforms: &global_uniform_buffer
+                        },
+                        &params,
+                    )
+                    .unwrap();
                 target.finish().unwrap();
 
                 delta_time = (Instant::now() - frame_start).as_secs_f32();

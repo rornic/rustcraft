@@ -3,6 +3,8 @@ use glium::{
     Display, DrawError, DrawParameters, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 
+use crate::world::Vector3;
+
 pub mod primitives;
 
 /// A `Vertex` is represented by a 3D position.
@@ -12,6 +14,14 @@ pub struct Vertex {
 }
 implement_vertex!(Vertex, position);
 
+impl From<Vector3> for Vertex {
+    fn from(v: Vector3) -> Self {
+        Vertex {
+            position: [v.x, v.y, v.z],
+        }
+    }
+}
+
 /// A normal is represented by a 3D direction vector.
 #[derive(Copy, Clone)]
 pub struct Normal {
@@ -19,36 +29,26 @@ pub struct Normal {
 }
 implement_vertex!(Normal, normal);
 
-#[macro_export]
-macro_rules! vertex {
-    ( $x:expr,$y:expr,$z:expr ) => {
-        Vertex {
-            position: [$x, $y, $z],
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! normal {
-    ( $x:expr,$y:expr,$z:expr ) => {
+impl From<Vector3> for Normal {
+    fn from(v: Vector3) -> Self {
         Normal {
-            normal: [$x, $y, $z],
+            normal: [v.x, v.y, v.z],
         }
-    };
+    }
 }
 
 /// An abstract representation of a model by its vertices, normals and indices.
 ///
 /// Simply a store of model data that must be loaded onto the GPU for rendering.
 pub struct MeshData {
-    pub vertices: Vec<Vertex>,
-    pub normals: Vec<Normal>,
+    pub vertices: Vec<Vector3>,
+    pub normals: Vec<Vector3>,
     pub indices: Vec<u32>,
 }
 
 impl MeshData {
     /// Creates new `MeshData` from a list of vertices, normals and indices.
-    pub fn new(vertices: Vec<Vertex>, normals: Vec<Normal>, indices: Vec<u32>) -> MeshData {
+    pub fn new(vertices: Vec<Vector3>, normals: Vec<Vector3>, indices: Vec<u32>) -> MeshData {
         MeshData {
             vertices,
             normals,
@@ -60,9 +60,11 @@ impl MeshData {
     ///
     /// Returns a `MeshLoadError` if any part of the model failed to load.
     pub fn load(&self, display: &Display) -> Result<Mesh, MeshLoadError> {
+        let vertices: Vec<Vertex> = self.vertices.iter().map(|v| Vertex::from(*v)).collect();
+        let normals: Vec<Normal> = self.normals.iter().map(|v| Normal::from(*v)).collect();
         let (vertex_buffer, normal_buffer, index_buffer) = (
-            glium::VertexBuffer::new(display, &self.vertices)?,
-            glium::VertexBuffer::new(display, &self.normals)?,
+            glium::VertexBuffer::new(display, &vertices)?,
+            glium::VertexBuffer::new(display, &normals)?,
             glium::IndexBuffer::new(
                 display,
                 glium::index::PrimitiveType::TrianglesList,

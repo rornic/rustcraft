@@ -1,19 +1,19 @@
-use super::{MeshData, Normal, Vertex};
-use crate::{normal, vertex};
+use super::MeshData;
+use crate::vector3;
 
 pub fn square() -> MeshData {
     MeshData::new(
         vec![
-            vertex!(-0.5, 0.5, 0.0),
-            vertex!(0.5, 0.5, 0.0),
-            vertex!(-0.5, -0.5, 0.0),
-            vertex!(0.5, -0.5, 0.0),
+            vector3!(-0.5, 0.5, 0.0),
+            vector3!(0.5, 0.5, 0.0),
+            vector3!(-0.5, -0.5, 0.0),
+            vector3!(0.5, -0.5, 0.0),
         ],
         vec![
-            normal!(0.0, 0.0, -1.0),
-            normal!(0.0, 0.0, -1.0),
-            normal!(0.0, 0.0, -1.0),
-            normal!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
         ],
         vec![0, 1, 2, 2, 1, 3],
     )
@@ -23,67 +23,67 @@ pub fn cube() -> MeshData {
     MeshData::new(
         vec![
             // Front face
-            vertex!(-0.5, 0.5, -0.5),
-            vertex!(0.5, 0.5, -0.5),
-            vertex!(-0.5, -0.5, -0.5),
-            vertex!(0.5, -0.5, -0.5),
+            vector3!(-0.5, 0.5, -0.5),
+            vector3!(0.5, 0.5, -0.5),
+            vector3!(-0.5, -0.5, -0.5),
+            vector3!(0.5, -0.5, -0.5),
             // Right face
-            vertex!(0.5, 0.5, -0.5),
-            vertex!(0.5, -0.5, -0.5),
-            vertex!(0.5, 0.5, 0.5),
-            vertex!(0.5, -0.5, 0.5),
+            vector3!(0.5, 0.5, -0.5),
+            vector3!(0.5, -0.5, -0.5),
+            vector3!(0.5, 0.5, 0.5),
+            vector3!(0.5, -0.5, 0.5),
             // Left face
-            vertex!(-0.5, 0.5, -0.5),
-            vertex!(-0.5, -0.5, -0.5),
-            vertex!(-0.5, 0.5, 0.5),
-            vertex!(-0.5, -0.5, 0.5),
+            vector3!(-0.5, 0.5, -0.5),
+            vector3!(-0.5, -0.5, -0.5),
+            vector3!(-0.5, 0.5, 0.5),
+            vector3!(-0.5, -0.5, 0.5),
             // Back face
-            vertex!(-0.5, 0.5, 0.5),
-            vertex!(0.5, 0.5, 0.5),
-            vertex!(-0.5, -0.5, 0.5),
-            vertex!(0.5, -0.5, 0.5),
+            vector3!(-0.5, 0.5, 0.5),
+            vector3!(0.5, 0.5, 0.5),
+            vector3!(-0.5, -0.5, 0.5),
+            vector3!(0.5, -0.5, 0.5),
             // Top face
-            vertex!(-0.5, 0.5, 0.5),
-            vertex!(0.5, 0.5, 0.5),
-            vertex!(-0.5, 0.5, -0.5),
-            vertex!(0.5, 0.5, -0.5),
+            vector3!(-0.5, 0.5, 0.5),
+            vector3!(0.5, 0.5, 0.5),
+            vector3!(-0.5, 0.5, -0.5),
+            vector3!(0.5, 0.5, -0.5),
             // Bottom face
-            vertex!(-0.5, -0.5, 0.5),
-            vertex!(0.5, -0.5, 0.5),
-            vertex!(-0.5, -0.5, -0.5),
-            vertex!(0.5, -0.5, -0.5),
+            vector3!(-0.5, -0.5, 0.5),
+            vector3!(0.5, -0.5, 0.5),
+            vector3!(-0.5, -0.5, -0.5),
+            vector3!(0.5, -0.5, -0.5),
         ],
         vec![
             // Front face
-            normal!(0.0, 0.0, 1.0),
-            normal!(0.0, 0.0, 1.0),
-            normal!(0.0, 0.0, 1.0),
-            normal!(0.0, 0.0, 1.0),
+            vector3!(0.0, 0.0, 1.0),
+            vector3!(0.0, 0.0, 1.0),
+            vector3!(0.0, 0.0, 1.0),
+            vector3!(0.0, 0.0, 1.0),
             // Right face
-            normal!(1.0, 0.0, 0.0),
-            normal!(1.0, 0.0, 0.0),
-            normal!(1.0, 0.0, 0.0),
-            normal!(1.0, 0.0, 0.0),
+            vector3!(1.0, 0.0, 0.0),
+            vector3!(1.0, 0.0, 0.0),
+            vector3!(1.0, 0.0, 0.0),
+            vector3!(1.0, 0.0, 0.0),
             // Left face
-            normal!(-1.0, 0.0, 0.0),
-            normal!(-1.0, 0.0, 0.0),
-            normal!(-1.0, 0.0, 0.0),
-            normal!(-1.0, 0.0, 0.0),
+            vector3!(-1.0, 0.0, 0.0),
+            vector3!(-1.0, 0.0, 0.0),
+            vector3!(-1.0, 0.0, 0.0),
+            vector3!(-1.0, 0.0, 0.0),
             // Back face
-            normal!(0.0, 0.0, -1.0),
-            normal!(0.0, 0.0, -1.0),
-            normal!(0.0, 0.0, -1.0),
-            normal!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
+            vector3!(0.0, 0.0, -1.0),
             // Top face
-            normal!(0.0, 1.0, 0.0),
-            normal!(0.0, 1.0, 0.0),
-            normal!(0.0, 1.0, 0.0),
-            normal!(0.0, 1.0, 0.0),
+            vector3!(0.0, 1.0, 0.0),
+            vector3!(0.0, 1.0, 0.0),
+            vector3!(0.0, 1.0, 0.0),
+            vector3!(0.0, 1.0, 0.0),
             // Bottom face
-            normal!(0.0, -1.0, 0.0),
-            normal!(0.0, -1.0, 0.0),
-            normal!(0.0, -1.0, 0.0),
-            normal!(0.0, -1.0, 0.0),
+            vector3!(0.0, -1.0, 0.0),
+            vector3!(0.0, -1.0, 0.0),
+            vector3!(0.0, -1.0, 0.0),
+            vector3!(0.0, -1.0, 0.0),
         ],
         vec![
             0, 1, 2, 2, 1, 3, // Front
