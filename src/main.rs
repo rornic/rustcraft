@@ -18,7 +18,7 @@ mod world;
 use world::{Vector3, World};
 
 use render::mesh::primitives::cube;
-use render::shader::{FRAGMENT_SHADER_SRC, VERTEX_SHADER_SRC};
+use render::shader::load_shader;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
@@ -71,7 +71,6 @@ fn main() {
 
     let mut elapsed_time: f32 = 0.0;
     let mut delta_time: f32 = 0.0;
-    let mut last_frame = Instant::now();
 
     let mut camera_pos = Vector3 {
         x: 0.0,
@@ -86,9 +85,7 @@ fn main() {
     let model = cube().load(&display).unwrap();
 
     // Create the shader program
-    let program =
-        render::shader::create_shader_program(&display, VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
-            .expect("Failed to create shader program.");
+    let program = render::shader::load_shader(&display, "default").unwrap();
 
     // Create a buffer for global uniforms
     let global_uniform_buffer = UniformBuffer::empty(&display).unwrap();
@@ -179,9 +176,9 @@ fn main() {
 
                 for x in 0..world.blocks.len() {
                     for y in 0..world.blocks[x].len() {
-                        for z in 0..world.blocks[x][0].len() {
+                        for z in 0..world.blocks[x][y].len() {
                             let uniforms = uniform! {
-                                model_matrix: block_uniform_buffers[x][0][z],
+                                model_matrix: block_uniform_buffers[x][y][z],
                                 global_render_uniforms: &global_uniform_buffer,
                             };
                             model

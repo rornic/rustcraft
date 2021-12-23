@@ -1,49 +1,29 @@
 use glium::{Display, Program, ProgramCreationError};
 
-pub const VERTEX_SHADER_SRC: &str = r#"
-#version 150
-
-in vec3 position;
-in vec3 normal;
-
-out vec3 v_normal;
-
-uniform global_render_uniforms {
-    mat4 projection_matrix;
-    mat4 view_matrix;
-    vec3 light;
-};
-
-uniform mat4 model_matrix;
-
-void main() {
-    v_normal = transpose(inverse(mat3(model_matrix))) * normal;
-    gl_Position = projection_matrix * view_matrix * model_matrix * vec4(position, 1.0);
+/// Represents an error that can occur when loading a shader
+#[derive(Debug)]
+pub enum ShaderLoadError {
+    UnknownVertexShader(std::io::Error),
+    UnknownFragmentShader(std::io::Error),
+    ProgramCreationError(ProgramCreationError),
 }
-"#;
 
-pub const FRAGMENT_SHADER_SRC: &str = r#"
-#version 140
+/// Loads a vertex and fragment shader from `resources/shaders` using `shader_name` as the file name followed by the appropriate `.vert` or `.frag` file extension.
+///
+/// Then creates and returns a `Program` for this shader.
+pub fn load_shader(display: &Display, shader_name: &str) -> Result<Program, ShaderLoadError> {
+    let vertex_src = std::fs::read_to_string(format!("resources/shaders/{}.vert", shader_name))
+        .map_err(|e| ShaderLoadError::UnknownVertexShader(e))?;
 
-in vec3 v_normal;
-out vec4 color;
+    let fragment_src = std::fs::read_to_string(format!("resources/shaders/{}.frag", shader_name))
+        .map_err(|e| ShaderLoadError::UnknownFragmentShader(e))?;
 
-uniform global_render_uniforms {
-    mat4 projection_matrix;
-    mat4 view_matrix;
-    vec3 light;
-};
-
-
-void main() {
-    float brightness = dot(normalize(v_normal), normalize(light));
-    vec3 dark = vec3(0.5, 0.0, 0.25);
-    vec3 regular = vec3(1.0, 0.0, 0.5);
-    color = vec4(mix(dark, regular, brightness), 1.0);
+    create_shader_program(&display, &vertex_src, &fragment_src)
+        .map_err(|e| ShaderLoadError::ProgramCreationError(e))
 }
-"#;
 
-pub fn create_shader_program(
+/// Creates a shader `Program` from vertex and fragment shader strings.
+fn create_shader_program(
     display: &Display,
     vertex_shader_src: &str,
     fragment_shader_src: &str,
