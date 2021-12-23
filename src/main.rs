@@ -1,14 +1,16 @@
 #[macro_use]
 extern crate glium;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
+use glium::texture::SrgbTexture2d;
 use glium::uniforms::{
     MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
 };
-use glium::Display;
 use glium::{glutin::event::VirtualKeyCode, Surface};
+use glium::{Display, DrawParameters, Program};
+use render::mesh::Mesh;
 use render::texture;
 
 use crate::input::KeyboardMap;
@@ -85,7 +87,7 @@ fn main() {
     // Create the shader program
     let program = render::shader::load_shader(&display, "default").unwrap();
 
-    let texture = texture::load_texture(&display, "textures/dirt.png").unwrap();
+    let texture = texture::load_texture(&display, "textures/stone.png").unwrap();
 
     // Create a buffer for global uniforms
     let global_uniform_buffer = UniformBuffer::empty(&display).unwrap();
@@ -103,86 +105,108 @@ fn main() {
     let world = World::new();
     let world_mesh = world.generate_chunk_mesh().load(&display).unwrap();
 
-    event_loop.run(move |ev, _, control_flow| {
-        match ev {
-            glium::glutin::event::Event::MainEventsCleared => {
-                let frame_start = Instant::now();
+    event_loop.run(move |ev, _, control_flow| match ev {
+        glium::glutin::event::Event::MainEventsCleared => {
+            let frame_start = Instant::now();
 
-                if input.keyboard.is_pressed(VirtualKeyCode::A) {
-                    camera_pos.x -= 3.0 * delta_time;
-                } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
-                    camera_pos.x += 3.0 * delta_time;
-                }
+            render(
+                &display,
+                &world_mesh,
+                &camera_pos,
+                &program,
+                &texture,
+                &global_uniform_buffer,
+                &params,
+            );
 
-                if input.keyboard.is_pressed(VirtualKeyCode::W) {
-                    camera_pos.z += 3.0 * delta_time;
-                } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
-                    camera_pos.z -= 3.0 * delta_time;
-                }
+            update(delta_time, &mut camera_pos, &input);
 
-                // Start drawing on window
-                let mut target = display.draw();
-                target.clear_color_and_depth((0.01, 0.01, 0.01, 1.0), 1.0);
+            delta_time = (Instant::now() - frame_start).as_secs_f32();
+            elapsed_time += delta_time;
+        }
+        ev => process_window_event(&mut input, ev, control_flow),
+    });
+}
 
-                let projection_matrix = {
-                    let (width, height) = target.get_dimensions();
-                    let aspect_ratio = height as f32 / width as f32;
+fn update(delta_time: f32, camera_pos: &mut Vector3, input: &Input) {
+    if input.keyboard.is_pressed(VirtualKeyCode::A) {
+        camera_pos.x -= 3.0 * delta_time;
+    } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
+        camera_pos.x += 3.0 * delta_time;
+    }
 
-                    let fov: f32 = 3.141592 / 3.0;
-                    let zfar = 1024.0;
-                    let znear = 0.1;
+    if input.keyboard.is_pressed(VirtualKeyCode::W) {
+        camera_pos.z += 3.0 * delta_time;
+    } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
+        camera_pos.z -= 3.0 * delta_time;
+    }
+}
 
-                    let f = 1.0 / (fov / 2.0).tan();
+fn render(
+    display: &Display,
+    world_mesh: &Mesh,
+    camera_pos: &Vector3,
+    program: &Program,
+    texture: &SrgbTexture2d,
+    global_uniform_buffer: &UniformBuffer<GlobalRenderUniforms>,
+    params: &DrawParameters,
+) {
+    // Start drawing on window
+    let mut target = display.draw();
+    target.clear_color_and_depth((0.01, 0.01, 0.01, 1.0), 1.0);
 
-                    [
-                        [f * aspect_ratio, 0.0, 0.0, 0.0],
-                        [0.0, f, 0.0, 0.0],
-                        [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
-                        [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
-                    ]
-                };
+    let projection_matrix = {
+        let (width, height) = target.get_dimensions();
+        let aspect_ratio = height as f32 / width as f32;
 
-                let view_matrix = [
+        let fov: f32 = 3.141592 / 3.0;
+        let zfar = 1024.0;
+        let znear = 0.1;
+
+        let f = 1.0 / (fov / 2.0).tan();
+
+        [
+            [f * aspect_ratio, 0.0, 0.0, 0.0],
+            [0.0, f, 0.0, 0.0],
+            [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
+            [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
+        ]
+    };
+
+    let view_matrix = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [-camera_pos.x, -camera_pos.y, -camera_pos.z, 1.0],
+    ];
+
+    // Update global_uniform_buffer with updated projection and view matrices
+    let global_render_uniforms = GlobalRenderUniforms {
+        projection_matrix: projection_matrix,
+        view_matrix: view_matrix,
+        light: [-1.0, 0.4, 0.9f32],
+    };
+    global_uniform_buffer.write(&global_render_uniforms);
+    world_mesh
+        .render(
+            &mut target,
+            &program,
+            &uniform! {
+                model_matrix: [
                     [1.0, 0.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0, 0.0],
                     [0.0, 0.0, 1.0, 0.0],
-                    [-camera_pos.x, -camera_pos.y, -camera_pos.z, 1.0],
-                ];
-
-                // Update global_uniform_buffer with updated projection and view matrices
-                let global_render_uniforms = GlobalRenderUniforms {
-                    projection_matrix: projection_matrix,
-                    view_matrix: view_matrix,
-                    light: [-1.0, 0.4, 0.9f32],
-                };
-                global_uniform_buffer.write(&global_render_uniforms);
-                world_mesh
-                    .render(
-                        &mut target,
-                        &program,
-                        &uniform! {
-                            model_matrix: [
-                                [1.0, 0.0, 0.0, 0.0],
-                                [0.0, 1.0, 0.0, 0.0],
-                                [0.0, 0.0, 1.0, 0.0],
-                                [0.0, 0.0, 0.0, 1.0f32],
-                            ],
-                            tex: Sampler(&texture, SamplerBehavior {
-                                minify_filter: MinifySamplerFilter::Nearest,
-                                magnify_filter: MagnifySamplerFilter::Nearest,
-                                ..Default::default()
-                            }),
-                            global_render_uniforms: &global_uniform_buffer
-                        },
-                        &params,
-                    )
-                    .unwrap();
-                target.finish().unwrap();
-
-                delta_time = (Instant::now() - frame_start).as_secs_f32();
-                elapsed_time += delta_time;
-            }
-            ev => process_window_event(&mut input, ev, control_flow),
-        }
-    });
+                    [0.0, 0.0, 0.0, 1.0f32],
+                ],
+                tex: Sampler(texture, SamplerBehavior {
+                    minify_filter: MinifySamplerFilter::Nearest,
+                    magnify_filter: MagnifySamplerFilter::Nearest,
+                    ..Default::default()
+                }),
+                global_render_uniforms: global_uniform_buffer
+            },
+            &params,
+        )
+        .unwrap();
+    target.finish().unwrap();
 }
