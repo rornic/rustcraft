@@ -78,7 +78,7 @@ pub fn cube() -> MeshData {
             vertex!(
                 position: vector3!(-0.5, 0.5, -0.5),
                 normal: vector3!(-1.0, 0.0, 0.0),
-                uv: vector2!(0.0, 1.0)
+                uv: vector2!(1.0, 0.0)
             ),
             vertex!(
                 position: vector3!(-0.5, -0.5, -0.5),
@@ -93,7 +93,7 @@ pub fn cube() -> MeshData {
             vertex!(
                 position: vector3!(-0.5, -0.5, 0.5),
                 normal: vector3!(-1.0, 0.0, 0.0),
-                uv: vector2!(1.0, 0.0)
+                uv: vector2!(0.0, 1.0)
             ),
             // Back face
             vertex!(
