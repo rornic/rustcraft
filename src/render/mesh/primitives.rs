@@ -1,19 +1,29 @@
-use super::MeshData;
-use crate::vector3;
+use super::{MeshData, Vertex};
+use crate::{vector2, vector3, vertex};
 
 pub fn square() -> MeshData {
     MeshData::new(
         vec![
-            vector3!(-0.5, 0.5, 0.0),
-            vector3!(0.5, 0.5, 0.0),
-            vector3!(-0.5, -0.5, 0.0),
-            vector3!(0.5, -0.5, 0.0),
-        ],
-        vec![
-            vector3!(0.0, 0.0, -1.0),
-            vector3!(0.0, 0.0, -1.0),
-            vector3!(0.0, 0.0, -1.0),
-            vector3!(0.0, 0.0, -1.0),
+            vertex!(
+                position: vector3!(-0.5, 0.5, 0.0),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(-1.0, 1.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, 0.5, 0.0),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(1.0, 1.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, -0.5, 0.0),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(-1.0, -1.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, -0.5, 0.0),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(1.0, -1.0)
+            ),
         ],
         vec![0, 1, 2, 2, 1, 3],
     )
@@ -23,67 +33,131 @@ pub fn cube() -> MeshData {
     MeshData::new(
         vec![
             // Front face
-            vector3!(-0.5, 0.5, -0.5),
-            vector3!(0.5, 0.5, -0.5),
-            vector3!(-0.5, -0.5, -0.5),
-            vector3!(0.5, -0.5, -0.5),
+            vertex!(
+                position: vector3!(-0.5, 0.5, -0.5),
+                normal: vector3!(0.0, 0.0, 1.0),
+                uv: vector2!(0.0, 1.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, 0.5, -0.5),
+                normal: vector3!(0.0, 0.0, 1.0),
+                uv: vector2!(1.0, 1.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, -0.5, -0.5),
+                normal: vector3!(0.0, 0.0, 1.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, -0.5, -0.5),
+                normal: vector3!(0.0, 0.0, 1.0),
+                uv: vector2!(1.0, 0.0)
+            ),
             // Right face
-            vector3!(0.5, 0.5, -0.5),
-            vector3!(0.5, -0.5, -0.5),
-            vector3!(0.5, 0.5, 0.5),
-            vector3!(0.5, -0.5, 0.5),
+            vertex!(
+                position: vector3!(0.5, 0.5, -0.5),
+                normal: vector3!(1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, -0.5, -0.5),
+                normal: vector3!(1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, 0.5, 0.5),
+                normal: vector3!(1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, -0.5, 0.5),
+                normal: vector3!(1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
             // Left face
-            vector3!(-0.5, 0.5, -0.5),
-            vector3!(-0.5, -0.5, -0.5),
-            vector3!(-0.5, 0.5, 0.5),
-            vector3!(-0.5, -0.5, 0.5),
+            vertex!(
+                position: vector3!(-0.5, 0.5, -0.5),
+                normal: vector3!(-1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, -0.5, -0.5),
+                normal: vector3!(-1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, 0.5, 0.5),
+                normal: vector3!(-1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, -0.5, 0.5),
+                normal: vector3!(-1.0, 0.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
             // Back face
-            vector3!(-0.5, 0.5, 0.5),
-            vector3!(0.5, 0.5, 0.5),
-            vector3!(-0.5, -0.5, 0.5),
-            vector3!(0.5, -0.5, 0.5),
+            vertex!(
+                position: vector3!(-0.5, 0.5, 0.5),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, 0.5, 0.5),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, -0.5, 0.5),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, -0.5, 0.5),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(0.0, 0.0)
+            ),
             // Top face
-            vector3!(-0.5, 0.5, 0.5),
-            vector3!(0.5, 0.5, 0.5),
-            vector3!(-0.5, 0.5, -0.5),
-            vector3!(0.5, 0.5, -0.5),
+            vertex!(
+                position: vector3!(-0.5, 0.5, 0.5),
+                normal: vector3!(0.0, 1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, 0.5, 0.5),
+                normal: vector3!(0.0, 1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, 0.5, -0.5),
+                normal: vector3!(0.0, 1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, 0.5, -0.5),
+                normal: vector3!(0.0, 1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
             // Bottom face
-            vector3!(-0.5, -0.5, 0.5),
-            vector3!(0.5, -0.5, 0.5),
-            vector3!(-0.5, -0.5, -0.5),
-            vector3!(0.5, -0.5, -0.5),
-        ],
-        vec![
-            // Front face
-            vector3!(0.0, 0.0, 1.0),
-            vector3!(0.0, 0.0, 1.0),
-            vector3!(0.0, 0.0, 1.0),
-            vector3!(0.0, 0.0, 1.0),
-            // Right face
-            vector3!(1.0, 0.0, 0.0),
-            vector3!(1.0, 0.0, 0.0),
-            vector3!(1.0, 0.0, 0.0),
-            vector3!(1.0, 0.0, 0.0),
-            // Left face
-            vector3!(-1.0, 0.0, 0.0),
-            vector3!(-1.0, 0.0, 0.0),
-            vector3!(-1.0, 0.0, 0.0),
-            vector3!(-1.0, 0.0, 0.0),
-            // Back face
-            vector3!(0.0, 0.0, -1.0),
-            vector3!(0.0, 0.0, -1.0),
-            vector3!(0.0, 0.0, -1.0),
-            vector3!(0.0, 0.0, -1.0),
-            // Top face
-            vector3!(0.0, 1.0, 0.0),
-            vector3!(0.0, 1.0, 0.0),
-            vector3!(0.0, 1.0, 0.0),
-            vector3!(0.0, 1.0, 0.0),
-            // Bottom face
-            vector3!(0.0, -1.0, 0.0),
-            vector3!(0.0, -1.0, 0.0),
-            vector3!(0.0, -1.0, 0.0),
-            vector3!(0.0, -1.0, 0.0),
+            vertex!(
+                position: vector3!(-0.5, -0.5, 0.5),
+                normal: vector3!(0.0, -1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, -0.5, 0.5),
+                normal: vector3!(0.0, -1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, -0.5, -0.5),
+                normal: vector3!(0.0, -1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, -0.5, -0.5),
+                normal: vector3!(0.0, -1.0, 0.0),
+                uv: vector2!(0.0, 0.0)
+            ),
         ],
         vec![
             0, 1, 2, 2, 1, 3, // Front

@@ -1,3 +1,4 @@
+use crate::util;
 use glium::{Display, Program, ProgramCreationError};
 
 /// Represents an error that can occur when loading a shader
@@ -12,10 +13,10 @@ pub enum ShaderLoadError {
 ///
 /// Then creates and returns a `Program` for this shader.
 pub fn load_shader(display: &Display, shader_name: &str) -> Result<Program, ShaderLoadError> {
-    let vertex_src = std::fs::read_to_string(format!("resources/shaders/{}.vert", shader_name))
+    let vertex_src = util::get_resource_file_as_string(&format!("shaders/{}.vert", shader_name))
         .map_err(|e| ShaderLoadError::UnknownVertexShader(e))?;
 
-    let fragment_src = std::fs::read_to_string(format!("resources/shaders/{}.frag", shader_name))
+    let fragment_src = util::get_resource_file_as_string(&format!("shaders/{}.frag", shader_name))
         .map_err(|e| ShaderLoadError::UnknownFragmentShader(e))?;
 
     create_shader_program(&display, &vertex_src, &fragment_src)

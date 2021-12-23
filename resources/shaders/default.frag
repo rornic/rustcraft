@@ -1,6 +1,10 @@
 #version 140
 
 in vec3 v_normal;
+in vec2 v_uv;
+
+uniform sampler2D tex;
+
 out vec4 color;
 
 uniform global_render_uniforms {
@@ -12,7 +16,7 @@ uniform global_render_uniforms {
 
 void main() {
     float brightness = dot(normalize(v_normal), normalize(light));
-    vec3 dark = vec3(0.5, 0.0, 0.25);
-    vec3 regular = vec3(1.0, 0.0, 0.5);
-    color = vec4(mix(dark, regular, brightness), 1.0);
+    vec4 tex_color = texture(tex, vec2(v_uv.x, v_uv.y));
+    vec4 dark = tex_color * 0.5;
+    color = mix(dark, tex_color, brightness);
 }

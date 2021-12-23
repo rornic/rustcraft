@@ -1,7 +1,7 @@
 use std::ops::Add;
 
-use crate::render::mesh::MeshData;
-use crate::vector3;
+use crate::render::mesh::{MeshData, Vertex};
+use crate::{vector3, vertex};
 
 /// Represents a 3D position or direction in the world.
 #[derive(Copy, Clone, PartialEq)]
@@ -30,6 +30,20 @@ macro_rules! vector3 {
     };
 }
 
+/// Represents a 2D position or direction in the world.
+#[derive(Copy, Clone, PartialEq)]
+pub struct Vector2 {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[macro_export]
+macro_rules! vector2 {
+    ( $x:expr,$y:expr ) => {
+        crate::world::Vector2 { x: $x, y: $y }
+    };
+}
+
 // Simple representation of the world.
 // TODO: just a placeholder, will need replacing.
 pub struct World {
@@ -53,8 +67,7 @@ impl World {
 
     /// Generates a single chunk mesh from the whole world
     pub fn generate_chunk_mesh(&self) -> MeshData {
-        let mut vertices: Vec<Vector3> = vec![];
-        let mut normals: Vec<Vector3> = vec![];
+        let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];
 
         let mut block = 0;
@@ -63,15 +76,19 @@ impl World {
             for y in 0..self.blocks[x].len() {
                 for z in 0..self.blocks[x][y].len() {
                     if self.blocks[x][y][z] {
-                        let mut cube = super::render::mesh::primitives::cube();
+                        let cube = super::render::mesh::primitives::cube();
                         vertices.append(
                             &mut cube
                                 .vertices
                                 .into_iter()
-                                .map(|v| v + vector3!(x as f32, y as f32, z as f32))
+                                .map(|v| {
+                                    vertex!(
+                                    position: v.position + vector3!(x as f32, y as f32, z as f32),
+                                    normal: v.normal,
+                                    uv: v.uv)
+                                })
                                 .collect(),
                         );
-                        normals.append(&mut cube.normals);
                         indices.append(
                             &mut cube.indices.into_iter().map(|i| i + (block * 24)).collect(),
                         );
@@ -81,7 +98,7 @@ impl World {
             }
         }
 
-        MeshData::new(vertices, normals, indices)
+        MeshData::new(vertices, indices)
     }
 }
 

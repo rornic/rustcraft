@@ -1,59 +1,59 @@
 use glium::{
     uniforms::{AsUniformValue, UniformBuffer, Uniforms, UniformsStorage},
+    vertex::{Attribute, AttributeType},
     Display, DrawError, DrawParameters, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 
-use crate::world::Vector3;
+use crate::world::{Vector2, Vector3};
 
 pub mod primitives;
 
 /// A `Vertex` is represented by a 3D position.
 #[derive(Copy, Clone)]
 pub struct Vertex {
-    position: [f32; 3],
+    pub position: Vector3,
+    pub normal: Vector3,
+    pub uv: Vector2,
 }
-implement_vertex!(Vertex, position);
+implement_vertex!(Vertex, position, normal, uv);
 
-impl From<Vector3> for Vertex {
-    fn from(v: Vector3) -> Self {
+/// Implement `Attribute` for `Vector3` so that we can use it as a `Vertex` attribute on the GPU. Maps it to an `F32F32F32` or `vec3` type.
+unsafe impl Attribute for Vector3 {
+    fn get_type() -> glium::vertex::AttributeType {
+        AttributeType::F32F32F32
+    }
+}
+
+/// Implement `Attribute` for `Vector2` so that we can use it as a `Vertex` attribute on the GPU. Maps it to an `F32F32` or `vec2` type.
+unsafe impl Attribute for Vector2 {
+    fn get_type() -> glium::vertex::AttributeType {
+        AttributeType::F32F32
+    }
+}
+
+#[macro_export]
+macro_rules! vertex {
+    ( position: $position:expr, normal: $normal:expr, uv: $uv:expr) => {
         Vertex {
-            position: [v.x, v.y, v.z],
+            position: $position,
+            normal: $normal,
+            uv: $uv,
         }
-    }
-}
-
-/// A normal is represented by a 3D direction vector.
-#[derive(Copy, Clone)]
-pub struct Normal {
-    normal: [f32; 3],
-}
-implement_vertex!(Normal, normal);
-
-impl From<Vector3> for Normal {
-    fn from(v: Vector3) -> Self {
-        Normal {
-            normal: [v.x, v.y, v.z],
-        }
-    }
+    };
 }
 
 /// An abstract representation of a model by its vertices, normals and indices.
 ///
 /// Simply a store of model data that must be loaded onto the GPU for rendering.
 pub struct MeshData {
-    pub vertices: Vec<Vector3>,
-    pub normals: Vec<Vector3>,
+    pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
 }
 
 impl MeshData {
     /// Creates new `MeshData` from a list of vertices, normals and indices.
-    pub fn new(vertices: Vec<Vector3>, normals: Vec<Vector3>, indices: Vec<u32>) -> MeshData {
-        MeshData {
-            vertices,
-            normals,
-            indices,
-        }
+    pub fn new(vertices: Vec<Vertex>, indices: Vec<u32>) -> MeshData {
+        MeshData { vertices, indices }
     }
 
     /// Loads this `MeshData` onto the GPU and returns a `Mesh` that can be rendered to the screen.
@@ -61,10 +61,8 @@ impl MeshData {
     /// Returns a `MeshLoadError` if any part of the model failed to load.
     pub fn load(&self, display: &Display) -> Result<Mesh, MeshLoadError> {
         let vertices: Vec<Vertex> = self.vertices.iter().map(|v| Vertex::from(*v)).collect();
-        let normals: Vec<Normal> = self.normals.iter().map(|v| Normal::from(*v)).collect();
-        let (vertex_buffer, normal_buffer, index_buffer) = (
+        let (vertex_buffer, index_buffer) = (
             glium::VertexBuffer::new(display, &vertices)?,
-            glium::VertexBuffer::new(display, &normals)?,
             glium::IndexBuffer::new(
                 display,
                 glium::index::PrimitiveType::TrianglesList,
@@ -74,7 +72,6 @@ impl MeshData {
 
         Ok(Mesh {
             vertex_buffer,
-            normal_buffer,
             index_buffer,
         })
     }
@@ -84,7 +81,6 @@ impl MeshData {
 /// This model can be rendered.
 pub struct Mesh {
     vertex_buffer: VertexBuffer<Vertex>,
-    normal_buffer: VertexBuffer<Normal>,
     index_buffer: IndexBuffer<u32>,
 }
 
@@ -152,7 +148,7 @@ impl<T, R> Renderable<T, R> for Mesh {
         R: Uniforms,
     {
         target.draw(
-            (&self.vertex_buffer, &self.normal_buffer),
+            &self.vertex_buffer,
             &self.index_buffer,
             program,
             uniforms,

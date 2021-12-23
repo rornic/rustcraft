@@ -4,20 +4,22 @@ use std::time::{Duration, Instant};
 
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
-use glium::uniforms::UniformBuffer;
+use glium::uniforms::{
+    MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
+};
 use glium::Display;
 use glium::{glutin::event::VirtualKeyCode, Surface};
+use render::texture;
 
 use crate::input::KeyboardMap;
 use crate::render::mesh::{GlobalRenderUniforms, Renderable};
 
 mod input;
 mod render;
+mod util;
 mod world;
 
 use world::{Vector3, World};
-
-use render::mesh::primitives::cube;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
@@ -82,6 +84,8 @@ fn main() {
 
     // Create the shader program
     let program = render::shader::load_shader(&display, "default").unwrap();
+
+    let texture = texture::load_texture(&display, "textures/dirt.png").unwrap();
 
     // Create a buffer for global uniforms
     let global_uniform_buffer = UniformBuffer::empty(&display).unwrap();
@@ -163,6 +167,11 @@ fn main() {
                                 [0.0, 0.0, 1.0, 0.0],
                                 [0.0, 0.0, 0.0, 1.0f32],
                             ],
+                            tex: Sampler(&texture, SamplerBehavior {
+                                minify_filter: MinifySamplerFilter::Nearest,
+                                magnify_filter: MagnifySamplerFilter::Nearest,
+                                ..Default::default()
+                            }),
                             global_render_uniforms: &global_uniform_buffer
                         },
                         &params,
