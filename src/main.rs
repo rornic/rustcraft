@@ -120,10 +120,6 @@ fn main() {
             glium::glutin::event::Event::MainEventsCleared => {
                 let frame_start = Instant::now();
 
-                *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(
-                    frame_start + Duration::from_nanos(16666667),
-                );
-
                 if input.keyboard.is_pressed(VirtualKeyCode::A) {
                     camera_pos.x -= 3.0 * delta_time;
                 } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
