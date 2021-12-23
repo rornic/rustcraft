@@ -4,12 +4,12 @@ use std::time::{Duration, Instant};
 
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
-use glium::uniforms::{EmptyUniforms, UniformBuffer, UniformsStorage};
+use glium::uniforms::UniformBuffer;
 use glium::Display;
 use glium::{glutin::event::VirtualKeyCode, Surface};
 
 use crate::input::KeyboardMap;
-use crate::render::model::{GlobalRenderUniforms, Renderable};
+use crate::render::mesh::{GlobalRenderUniforms, Renderable};
 
 mod input;
 mod render;
@@ -17,7 +17,7 @@ mod world;
 
 use world::{Vector3, World};
 
-use render::model::primitives::cube;
+use render::mesh::primitives::cube;
 use render::shader::{FRAGMENT_SHADER_SRC, VERTEX_SHADER_SRC};
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.

@@ -40,26 +40,26 @@ macro_rules! normal {
 /// An abstract representation of a model by its vertices, normals and indices.
 ///
 /// Simply a store of model data that must be loaded onto the GPU for rendering.
-pub struct ModelData {
+pub struct MeshData {
     pub vertices: Vec<Vertex>,
     pub normals: Vec<Normal>,
     pub indices: Vec<u32>,
 }
 
-impl ModelData {
-    /// Creates new `ModelData` from a list of vertices, normals and indices.
-    pub fn new(vertices: Vec<Vertex>, normals: Vec<Normal>, indices: Vec<u32>) -> ModelData {
-        ModelData {
+impl MeshData {
+    /// Creates new `MeshData` from a list of vertices, normals and indices.
+    pub fn new(vertices: Vec<Vertex>, normals: Vec<Normal>, indices: Vec<u32>) -> MeshData {
+        MeshData {
             vertices,
             normals,
             indices,
         }
     }
 
-    /// Loads this `ModelData` onto the GPU and returns a `Model` that can be rendered to the screen.
+    /// Loads this `MeshData` onto the GPU and returns a `Mesh` that can be rendered to the screen.
     ///
-    /// Returns a `ModelLoadError` if any part of the model failed to load.
-    pub fn load(&self, display: &Display) -> Result<Model, ModelLoadError> {
+    /// Returns a `MeshLoadError` if any part of the model failed to load.
+    pub fn load(&self, display: &Display) -> Result<Mesh, MeshLoadError> {
         let (vertex_buffer, normal_buffer, index_buffer) = (
             glium::VertexBuffer::new(display, &self.vertices)?,
             glium::VertexBuffer::new(display, &self.normals)?,
@@ -70,7 +70,7 @@ impl ModelData {
             )?,
         );
 
-        Ok(Model {
+        Ok(Mesh {
             vertex_buffer,
             normal_buffer,
             index_buffer,
@@ -80,29 +80,29 @@ impl ModelData {
 
 /// A representation of a model that has been loaded onto the GPU.
 /// This model can be rendered.
-pub struct Model {
+pub struct Mesh {
     vertex_buffer: VertexBuffer<Vertex>,
     normal_buffer: VertexBuffer<Normal>,
     index_buffer: IndexBuffer<u32>,
 }
 
-/// Represents the errors that can occur when loading `ModelData` onto the GPU.
+/// Represents the errors that can occur when loading `MeshData` onto the GPU.
 #[derive(Debug)]
-pub enum ModelLoadError {
+pub enum MeshLoadError {
     VertexBufferCreationError(glium::vertex::BufferCreationError),
     IndexBufferCreationError(glium::index::BufferCreationError),
 }
 
-/// Conversion traits from `BufferCreationError` types to `ModelLoadError`
-impl From<glium::vertex::BufferCreationError> for ModelLoadError {
+/// Conversion traits from `BufferCreationError` types to `MeshLoadError`
+impl From<glium::vertex::BufferCreationError> for MeshLoadError {
     fn from(err: glium::vertex::BufferCreationError) -> Self {
-        ModelLoadError::VertexBufferCreationError(err)
+        MeshLoadError::VertexBufferCreationError(err)
     }
 }
 
-impl From<glium::index::BufferCreationError> for ModelLoadError {
+impl From<glium::index::BufferCreationError> for MeshLoadError {
     fn from(err: glium::index::BufferCreationError) -> Self {
-        ModelLoadError::IndexBufferCreationError(err)
+        MeshLoadError::IndexBufferCreationError(err)
     }
 }
 
@@ -137,7 +137,7 @@ pub trait Renderable<T, R> {
         R: Uniforms;
 }
 
-impl<T, R> Renderable<T, R> for Model {
+impl<T, R> Renderable<T, R> for Mesh {
     fn render(
         &self,
         target: &mut Frame,

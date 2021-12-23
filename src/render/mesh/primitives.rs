@@ -1,8 +1,8 @@
-use super::{ModelData, Normal, Vertex};
+use super::{MeshData, Normal, Vertex};
 use crate::{normal, vertex};
 
-pub fn square() -> ModelData {
-    ModelData::new(
+pub fn square() -> MeshData {
+    MeshData::new(
         vec![
             vertex!(-0.5, 0.5, 0.0),
             vertex!(0.5, 0.5, 0.0),
@@ -19,8 +19,8 @@ pub fn square() -> ModelData {
     )
 }
 
-pub fn cube() -> ModelData {
-    ModelData::new(
+pub fn cube() -> MeshData {
+    MeshData::new(
         vec![
             // Front face
             vertex!(-0.5, 0.5, -0.5),
