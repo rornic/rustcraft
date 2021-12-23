@@ -18,7 +18,6 @@ mod world;
 use world::{Vector3, World};
 
 use render::mesh::primitives::cube;
-use render::shader::load_shader;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
