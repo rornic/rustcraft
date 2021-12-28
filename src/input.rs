@@ -5,6 +5,7 @@ use glium::glutin::event::{ElementState, KeyboardInput, VirtualKeyCode};
 /// Represents the state of all input peripherals.
 ///
 /// Currently just represents the keyboard.
+#[derive(Default)]
 pub struct Input {
     pub keyboard: KeyboardMap,
 }
@@ -21,6 +22,7 @@ impl Input {
 ///
 /// Maintains a `HashMap` of `VirtualKeyCode` variants and the current `ElementState` they are observed to be in.
 /// Processes `KeyboardInput` events as they are received and updates the state accordingly.
+#[derive(Default)]
 pub struct KeyboardMap {
     map: HashMap<VirtualKeyCode, ElementState>,
 }

@@ -106,8 +106,8 @@ impl World {
 
 #[derive(Default)]
 pub struct Transform {
-    position: Vector3,
-    scale: Vector3,
+    pub position: Vector3,
+    pub scale: Vector3,
 }
 
 impl Transform {

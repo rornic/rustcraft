@@ -109,7 +109,7 @@ impl Component for RenderMesh {
     type Storage = VecStorage<Self>;
 }
 
-pub struct ViewMatrix([[f32; 4]; 4]);
+pub struct ViewMatrix(pub [[f32; 4]; 4]);
 
 impl Default for ViewMatrix {
     fn default() -> Self {
@@ -184,7 +184,7 @@ impl Renderer {
         }
     }
 
-    /// Loads a mesh onto the GPU, centrally mapping its UUID to its `VertexBuffer` and `IndexBuffer`.
+    /// Loads a mesh onto the GPU, mapping its UUID to its `VertexBuffer` and `IndexBuffer`.
     pub fn register_mesh(&mut self, mesh: &Mesh) -> Result<(), MeshLoadError> {
         let mesh_data = (
             glium::VertexBuffer::new(&self.display, &mesh.vertices)?,
@@ -215,6 +215,7 @@ impl Renderer {
             ..Default::default()
         };
 
+        // Set up projection matrix
         let projection_matrix = {
             let (width, height) = target.get_dimensions();
             let aspect_ratio = height as f32 / width as f32;
@@ -233,12 +234,7 @@ impl Renderer {
             ]
         };
 
-        let view_matrix = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0_f32],
-        ];
+        let view_matrix = world.read_resource::<ViewMatrix>().0;
 
         // Update global uniforms
         let global_render_uniforms = GlobalRenderUniforms {
@@ -250,6 +246,7 @@ impl Renderer {
 
         // Empty the draw call queue
         while let Some(draw_call) = world.write_resource::<VecDeque<DrawCall>>().pop_front() {
+            // Perform the draw call if the associated mesh could be found
             if let Some((vertex_buffer, index_buffer)) = self.mesh_register.get(&draw_call.mesh_id)
             {
                 target

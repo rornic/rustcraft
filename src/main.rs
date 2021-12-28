@@ -60,18 +60,6 @@ fn process_event(input: &mut Input, ev: Event<()>, control_flow: &mut ControlFlo
 fn main() {
     let (event_loop, display) = init_display();
 
-    let mut elapsed_time: f32 = 0.0;
-    let mut delta_time: f32 = 0.0;
-
-    let mut camera_pos = Vector3 {
-        x: 0.0,
-        y: 5.0,
-        z: 0.0,
-    };
-
-    // Prepare keyboard for input
-    let mut input = Input::new();
-
     let mut renderer = Renderer::new(display);
 
     let mut game_world = world::World::new();
@@ -82,6 +70,11 @@ fn main() {
     let mut world = specs::World::new();
     world.register::<Transform>();
     world.register::<RenderMesh>();
+
+    world.insert(ViewMatrix::default());
+    world.insert(DeltaTime(0.0));
+    world.insert(ElapsedTime(0.0));
+
     world
         .create_entity()
         .with(Transform::new(
@@ -91,10 +84,26 @@ fn main() {
         .with(RenderMesh::new(&world_mesh))
         .build();
 
+    let camera = world
+        .create_entity()
+        .with(Transform::new(
+            vector3!(0.0, 0.0, 25.0),
+            vector3!(1.0, 1.0, 1.0),
+        ))
+        .build();
+
     let mut dispatcher: Dispatcher = DispatcherBuilder::new()
         .with_thread_local(RenderingSystem)
+        .with(
+            CameraSystem {
+                camera_entity: camera,
+            },
+            "camera",
+            &[],
+        )
         .build();
     dispatcher.setup(&mut world);
+
     event_loop.run(move |ev, _, control_flow| match ev {
         glium::glutin::event::Event::MainEventsCleared => {
             let frame_start = Instant::now();
@@ -103,25 +112,68 @@ fn main() {
             world.maintain();
 
             renderer.render(&mut world);
-            update(delta_time, &mut camera_pos, &input);
 
-            delta_time = (Instant::now() - frame_start).as_secs_f32();
-            elapsed_time += delta_time;
+            let delta_time = (Instant::now() - frame_start).as_secs_f32();
+            world.write_resource::<DeltaTime>().0 = delta_time;
+            world.write_resource::<ElapsedTime>().0 += delta_time;
         }
-        ev => process_event(&mut input, ev, control_flow),
+        ev => process_event(&mut world.write_resource::<Input>(), ev, control_flow),
     });
 }
 
-fn update(delta_time: f32, camera_pos: &mut Vector3, input: &Input) {
-    if input.keyboard.is_pressed(VirtualKeyCode::A) {
-        camera_pos.x -= 3.0 * delta_time;
-    } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
-        camera_pos.x += 3.0 * delta_time;
-    }
+#[derive(Default)]
+struct DeltaTime(f32);
 
-    if input.keyboard.is_pressed(VirtualKeyCode::W) {
-        camera_pos.z += 3.0 * delta_time;
-    } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
-        camera_pos.z -= 3.0 * delta_time;
+#[derive(Default)]
+struct ElapsedTime(f32);
+
+/// Runs on a single `Entity` designated as the camera. This entity must have a `Transform` component otherwise the system will fail.
+struct CameraSystem {
+    camera_entity: Entity,
+}
+
+impl<'a> System<'a> for CameraSystem {
+    type SystemData = (
+        WriteStorage<'a, Transform>,
+        Read<'a, Input>,
+        Read<'a, DeltaTime>,
+        Write<'a, ViewMatrix>,
+    );
+
+    fn run(&mut self, (mut transforms, input, delta_time, mut view_matrix): Self::SystemData) {
+        let delta_time = delta_time.0;
+
+        let transform = transforms
+            .get_mut(self.camera_entity)
+            .expect("No transform found on camera entity");
+
+        view_matrix.0 = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [
+                -transform.position.x,
+                -transform.position.y,
+                -transform.position.z,
+                1.0,
+            ],
+        ];
+        if input.keyboard.is_pressed(VirtualKeyCode::A) {
+            transform.position.x -= 3.0 * delta_time;
+        } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
+            transform.position.x += 3.0 * delta_time;
+        }
+
+        if input.keyboard.is_pressed(VirtualKeyCode::Space) {
+            transform.position.y += 3.0 * delta_time;
+        } else if input.keyboard.is_pressed(VirtualKeyCode::LShift) {
+            transform.position.y -= 3.0 * delta_time;
+        }
+
+        if input.keyboard.is_pressed(VirtualKeyCode::W) {
+            transform.position.z += 3.0 * delta_time;
+        } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
+            transform.position.z -= 3.0 * delta_time;
+        }
     }
 }
