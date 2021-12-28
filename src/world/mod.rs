@@ -1,32 +1,30 @@
+use specs::{Builder, WorldExt};
+
 use crate::render::mesh::{Mesh, Vertex};
+use crate::render::{RenderMesh, Renderer};
 use crate::{vector3, vertex};
+
+use self::components::Transform;
 
 pub mod components;
 pub mod systems;
 
-// Simple representation of the world.
-// TODO: just a placeholder, will need replacing.
-pub struct World {
-    pub blocks: [[[bool; 16]; 16]; 16],
+/// Each chunk is a cube of blocks. `CHUNK_SIZE` determines the size of this cube in blocks.
+const CHUNK_SIZE: usize = 16;
+
+type ChunkBlocks = Vec<Vec<Vec<bool>>>;
+#[derive(Clone)]
+struct Chunk {
+    blocks: ChunkBlocks,
 }
 
-impl World {
-    pub fn new() -> World {
-        let mut blocks: [[[bool; 16]; 16]; 16] = [[[false; 16]; 16]; 16];
-
-        for x in 0..blocks.len() {
-            for y in 0..blocks[x].len() {
-                for z in 0..blocks[x][y].len() {
-                    blocks[x][y][z] = true;
-                }
-            }
-        }
-
-        World { blocks }
+impl Chunk {
+    fn new(blocks: ChunkBlocks) -> Chunk {
+        Chunk { blocks }
     }
 
-    /// Generates a single chunk mesh from the whole world
-    pub fn generate_chunk_mesh(&self) -> Mesh {
+    /// Generates a single mesh for this chunk
+    fn generate_mesh(&self) -> Mesh {
         let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];
 
@@ -57,7 +55,64 @@ impl World {
                 }
             }
         }
-
         Mesh::new(vertices, indices)
+    }
+}
+
+/// `WORLD_SIZE` determines the size of the world in chunks.
+const WORLD_SIZE: usize = 4;
+pub struct World {
+    chunks: Vec<Vec<Vec<Chunk>>>,
+}
+
+impl World {
+    pub fn new() -> World {
+        let mut chunks = vec![];
+        for chunk_x in 0..WORLD_SIZE {
+            chunks.push(vec![]);
+            for chunk_y in 0..WORLD_SIZE {
+                chunks[chunk_x].push(vec![]);
+                for chunk_z in 0..WORLD_SIZE {
+                    let mut blocks: ChunkBlocks = Vec::new();
+
+                    for x in 0..CHUNK_SIZE {
+                        blocks.push(Vec::new());
+                        for y in 0..CHUNK_SIZE {
+                            blocks[x].push(Vec::new());
+                            for _ in 0..CHUNK_SIZE {
+                                blocks[x][y].push(chunk_y * CHUNK_SIZE + y <= 2);
+                            }
+                        }
+                    }
+                    chunks[chunk_x][chunk_y].push(Chunk { blocks });
+                }
+            }
+        }
+
+        World { chunks }
+    }
+
+    pub fn generate_chunks(&self, renderer: &mut Renderer, world: &mut specs::World) {
+        for chunk_x in 0..WORLD_SIZE {
+            for chunk_y in 0..WORLD_SIZE {
+                for chunk_z in 0..WORLD_SIZE {
+                    let chunk_mesh = self.chunks[chunk_x][chunk_y][chunk_z].generate_mesh();
+                    renderer.register_mesh(&chunk_mesh).unwrap();
+
+                    world
+                        .create_entity()
+                        .with(Transform::new(
+                            vector3!(
+                                (chunk_x * CHUNK_SIZE) as f32,
+                                (chunk_y * CHUNK_SIZE) as f32,
+                                (chunk_z * CHUNK_SIZE) as f32
+                            ),
+                            vector3!(1.0, 1.0, 1.0),
+                        ))
+                        .with(RenderMesh::new(&chunk_mesh))
+                        .build();
+                }
+            }
+        }
     }
 }

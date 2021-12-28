@@ -62,11 +62,7 @@ fn process_event(input: &mut Input, ev: Event<()>, control_flow: &mut ControlFlo
 fn main() {
     let (event_loop, display) = init_display();
 
-    let game_world = world::World::new();
-    let world_mesh = game_world.generate_chunk_mesh();
-
     let mut renderer = Renderer::new(display);
-    renderer.register_mesh(&world_mesh).unwrap();
 
     let mut world = specs::World::new();
     world.register::<Transform>();
@@ -76,14 +72,8 @@ fn main() {
     world.insert(DeltaTime(0.0));
     world.insert(ElapsedTime(0.0));
 
-    world
-        .create_entity()
-        .with(Transform::new(
-            vector3!(0.0, 0.0, 25.0),
-            vector3!(1.0, 1.0, 1.0),
-        ))
-        .with(RenderMesh::new(&world_mesh))
-        .build();
+    let game_world = world::World::new();
+    game_world.generate_chunks(&mut renderer, &mut world);
 
     let mut dispatcher: Dispatcher = DispatcherBuilder::new()
         .with_thread_local(RenderingSystem)
