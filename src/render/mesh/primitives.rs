@@ -39,14 +39,14 @@ pub fn cube() -> Mesh {
                 uv: vector2!(0.0, 1.0)
             ),
             vertex!(
-                position: vector3!(0.5, 0.5, -0.5),
-                normal: vector3!(0.0, 0.0, 1.0),
-                uv: vector2!(1.0, 1.0)
-            ),
-            vertex!(
                 position: vector3!(-0.5, -0.5, -0.5),
                 normal: vector3!(0.0, 0.0, 1.0),
                 uv: vector2!(0.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(0.5, 0.5, -0.5),
+                normal: vector3!(0.0, 0.0, 1.0),
+                uv: vector2!(1.0, 1.0)
             ),
             vertex!(
                 position: vector3!(0.5, -0.5, -0.5),
@@ -162,7 +162,7 @@ pub fn cube() -> Mesh {
         vec![
             0, 1, 2, 2, 1, 3, // Front
             4, 5, 6, 6, 5, 7, // Left
-            8, 9, 10, 10, 9, 11, // Left
+            8, 9, 10, 10, 9, 11, // Right
             12, 13, 14, 14, 13, 15, // Back
             16, 17, 18, 18, 17, 19, // Top
             20, 21, 22, 22, 21, 23, // Bottom
