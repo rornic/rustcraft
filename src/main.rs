@@ -3,23 +3,24 @@ extern crate glium;
 use std::time::Instant;
 
 use glium::glutin::event::Event;
+use glium::glutin::event::VirtualKeyCode;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
-use glium::{glutin::event::VirtualKeyCode, Surface};
-use glium::{Display, DrawParameters, Program};
+use glium::Display;
 use input::Input;
-use render::mesh::{Mesh, RenderMesh, Renderer, RenderingSystem, ViewMatrix};
+use render::RenderMesh;
+use render::Renderer;
+use render::RenderingSystem;
+use render::ViewMatrix;
 use specs::WorldExt;
 
 use specs::prelude::*;
-
-use crate::render::mesh::GlobalRenderUniforms;
 
 mod input;
 mod render;
 mod util;
 mod world;
 
-use world::{Transform, Vector3};
+use world::Transform;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
