@@ -3,7 +3,6 @@ extern crate glium;
 use std::time::Instant;
 
 use glium::glutin::event::Event;
-use glium::glutin::event::VirtualKeyCode;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
 use input::Input;
@@ -21,7 +20,8 @@ mod render;
 mod util;
 mod world;
 
-use world::Transform;
+use world::components::Transform;
+use world::systems::CameraSystem;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
@@ -62,11 +62,10 @@ fn process_event(input: &mut Input, ev: Event<()>, control_flow: &mut ControlFlo
 fn main() {
     let (event_loop, display) = init_display();
 
-    let mut renderer = Renderer::new(display);
-
-    let mut game_world = world::World::new();
+    let game_world = world::World::new();
     let world_mesh = game_world.generate_chunk_mesh();
 
+    let mut renderer = Renderer::new(display);
     renderer.register_mesh(&world_mesh).unwrap();
 
     let mut world = specs::World::new();
@@ -86,23 +85,9 @@ fn main() {
         .with(RenderMesh::new(&world_mesh))
         .build();
 
-    let camera = world
-        .create_entity()
-        .with(Transform::new(
-            vector3!(0.0, 0.0, 25.0),
-            vector3!(1.0, 1.0, 1.0),
-        ))
-        .build();
-
     let mut dispatcher: Dispatcher = DispatcherBuilder::new()
         .with_thread_local(RenderingSystem)
-        .with(
-            CameraSystem {
-                camera_entity: camera,
-            },
-            "camera",
-            &[],
-        )
+        .with(CameraSystem::new(&mut world), "camera", &[])
         .build();
     dispatcher.setup(&mut world);
 
@@ -124,58 +109,7 @@ fn main() {
 }
 
 #[derive(Default)]
-struct DeltaTime(f32);
+pub struct DeltaTime(f32);
 
 #[derive(Default)]
-struct ElapsedTime(f32);
-
-/// Runs on a single `Entity` designated as the camera. This entity must have a `Transform` component otherwise the system will fail.
-struct CameraSystem {
-    camera_entity: Entity,
-}
-
-impl<'a> System<'a> for CameraSystem {
-    type SystemData = (
-        WriteStorage<'a, Transform>,
-        Read<'a, Input>,
-        Read<'a, DeltaTime>,
-        Write<'a, ViewMatrix>,
-    );
-
-    fn run(&mut self, (mut transforms, input, delta_time, mut view_matrix): Self::SystemData) {
-        let delta_time = delta_time.0;
-
-        let transform = transforms
-            .get_mut(self.camera_entity)
-            .expect("No transform found on camera entity");
-
-        view_matrix.0 = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [
-                -transform.position.x,
-                -transform.position.y,
-                -transform.position.z,
-                1.0,
-            ],
-        ];
-        if input.keyboard.is_pressed(VirtualKeyCode::A) {
-            transform.position.x -= 3.0 * delta_time;
-        } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
-            transform.position.x += 3.0 * delta_time;
-        }
-
-        if input.keyboard.is_pressed(VirtualKeyCode::Space) {
-            transform.position.y += 3.0 * delta_time;
-        } else if input.keyboard.is_pressed(VirtualKeyCode::LShift) {
-            transform.position.y -= 3.0 * delta_time;
-        }
-
-        if input.keyboard.is_pressed(VirtualKeyCode::W) {
-            transform.position.z += 3.0 * delta_time;
-        } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
-            transform.position.z -= 3.0 * delta_time;
-        }
-    }
-}
+pub struct ElapsedTime(f32);

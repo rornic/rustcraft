@@ -10,14 +10,6 @@ pub struct Input {
     pub keyboard: KeyboardMap,
 }
 
-impl Input {
-    pub fn new() -> Input {
-        Input {
-            keyboard: KeyboardMap::new(),
-        }
-    }
-}
-
 /// Represents the state of the keyboard.
 ///
 /// Maintains a `HashMap` of `VirtualKeyCode` variants and the current `ElementState` they are observed to be in.
@@ -28,12 +20,6 @@ pub struct KeyboardMap {
 }
 
 impl KeyboardMap {
-    pub fn new() -> Self {
-        KeyboardMap {
-            map: HashMap::new(),
-        }
-    }
-
     /// Checks whether a key is currently pressed.
     pub fn is_pressed(&self, virtual_keycode: VirtualKeyCode) -> bool {
         match self.map.get(&virtual_keycode) {

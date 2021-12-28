@@ -10,7 +10,7 @@ use glium::{
 use specs::{Component, Join, ReadStorage, System, VecStorage, World, WorldExt, Write};
 use uuid::Uuid;
 
-use crate::world::Transform;
+use crate::world::components::Transform;
 
 use self::mesh::{Mesh, Vertex};
 
