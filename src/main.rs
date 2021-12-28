@@ -16,6 +16,7 @@ use specs::WorldExt;
 use specs::prelude::*;
 
 mod input;
+mod math;
 mod render;
 mod util;
 mod world;
