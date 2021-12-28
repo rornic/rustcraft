@@ -9,3 +9,5 @@ edition = "2018"
 [dependencies]
 glium = "*"
 image = "*"
+specs = { version = "0.16.1", features = [ "shred-derive" ] }
+uuid = { version = "0.8.2", features = [ "v4" ]}

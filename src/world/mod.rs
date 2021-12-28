@@ -1,10 +1,12 @@
 use std::ops::Add;
 
-use crate::render::mesh::{MeshData, Vertex};
+use specs::{Component, VecStorage};
+
+use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector3, vertex};
 
 /// Represents a 3D position or direction in the world.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct Vector3 {
     pub x: f32,
     pub y: f32,
@@ -31,7 +33,7 @@ macro_rules! vector3 {
 }
 
 /// Represents a 2D position or direction in the world.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Default, Copy, Clone, PartialEq)]
 pub struct Vector2 {
     pub x: f32,
     pub y: f32,
@@ -66,7 +68,7 @@ impl World {
     }
 
     /// Generates a single chunk mesh from the whole world
-    pub fn generate_chunk_mesh(&self) -> MeshData {
+    pub fn generate_chunk_mesh(&self) -> Mesh {
         let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];
 
@@ -98,16 +100,23 @@ impl World {
             }
         }
 
-        MeshData::new(vertices, indices)
+        Mesh::new(vertices, indices)
     }
 }
 
+#[derive(Default)]
 pub struct Transform {
     position: Vector3,
     scale: Vector3,
 }
 
 impl Transform {
+    pub fn new(position: Vector3, scale: Vector3) -> Transform {
+        Transform {
+            position: position,
+            scale: scale,
+        }
+    }
     /// Calculates a model matrix for rendering
     pub fn matrix(&self) -> [[f32; 4]; 4] {
         [
@@ -117,4 +126,8 @@ impl Transform {
             [self.position.x, self.position.y, self.position.z, 1.0],
         ]
     }
+}
+
+impl Component for Transform {
+    type Storage = VecStorage<Self>;
 }

@@ -1,8 +1,8 @@
-use super::{MeshData, Vertex};
+use super::{Mesh, Vertex};
 use crate::{vector2, vector3, vertex};
 
-pub fn square() -> MeshData {
-    MeshData::new(
+pub fn square() -> Mesh {
+    Mesh::new(
         vec![
             vertex!(
                 position: vector3!(-0.5, 0.5, 0.0),
@@ -29,8 +29,8 @@ pub fn square() -> MeshData {
     )
 }
 
-pub fn cube() -> MeshData {
-    MeshData::new(
+pub fn cube() -> Mesh {
+    Mesh::new(
         vec![
             // Front face
             vertex!(
