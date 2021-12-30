@@ -1,7 +1,7 @@
 use specs::{Component, VecStorage};
 
 use crate::vector3;
-use cgmath::{Quaternion, Vector3};
+use cgmath::{Deg, Quaternion, Vector3};
 
 pub struct Transform {
     pub position: Vector3<f32>,

@@ -21,7 +21,7 @@ mod util;
 mod world;
 
 use world::components::Transform;
-use world::systems::CameraSystem;
+use world::systems::{Camera, CameraSystem};
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
@@ -62,6 +62,7 @@ fn main() {
     let mut world = specs::World::new();
     world.register::<Transform>();
     world.register::<RenderMesh>();
+    world.register::<Camera>();
 
     world.insert(ViewMatrix::default());
     world.insert(DeltaTime(0.0));
