@@ -69,7 +69,7 @@ fn main() {
     world.insert(ElapsedTime(0.0));
 
     let game_world = world::World::new();
-    game_world.generate_chunks(&mut renderer, &mut world);
+    game_world.generate_chunk_meshes(&mut renderer, &mut world);
 
     let mut dispatcher: Dispatcher = DispatcherBuilder::new()
         .with_thread_local(RenderingSystem)

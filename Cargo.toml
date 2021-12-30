@@ -12,3 +12,4 @@ image = "*"
 specs = { version = "0.16.1", features = [ "shred-derive" ] }
 uuid = { version = "0.8.2", features = [ "v4" ]}
 cgmath = "0.18.0"
+noise = "0.7"

@@ -1,34 +1,6 @@
 use super::{Mesh, Vertex};
 use crate::{vector2, vector3, vertex};
 
-pub fn square() -> Mesh {
-    Mesh::new(
-        vec![
-            vertex!(
-                position: vector3!(-0.5, 0.5, 0.0),
-                normal: vector3!(0.0, 0.0, -1.0),
-                uv: vector2!(-1.0, 1.0)
-            ),
-            vertex!(
-                position: vector3!(0.5, 0.5, 0.0),
-                normal: vector3!(0.0, 0.0, -1.0),
-                uv: vector2!(1.0, 1.0)
-            ),
-            vertex!(
-                position: vector3!(-0.5, -0.5, 0.0),
-                normal: vector3!(0.0, 0.0, -1.0),
-                uv: vector2!(-1.0, -1.0)
-            ),
-            vertex!(
-                position: vector3!(0.5, -0.5, 0.0),
-                normal: vector3!(0.0, 0.0, -1.0),
-                uv: vector2!(1.0, -1.0)
-            ),
-        ],
-        vec![0, 1, 2, 2, 1, 3],
-    )
-}
-
 pub fn cube() -> Mesh {
     Mesh::new(
         vec![
@@ -76,45 +48,45 @@ pub fn cube() -> Mesh {
             ),
             // Left face
             vertex!(
-                position: vector3!(-0.5, 0.5, -0.5),
+                position: vector3!(-0.5, 0.5, 0.5),
                 normal: vector3!(-1.0, 0.0, 0.0),
                 uv: vector2!(1.0, 0.0)
             ),
             vertex!(
-                position: vector3!(-0.5, -0.5, -0.5),
+                position: vector3!(-0.5, -0.5, 0.5),
                 normal: vector3!(-1.0, 0.0, 0.0),
                 uv: vector2!(1.0, 1.0)
             ),
             vertex!(
-                position: vector3!(-0.5, 0.5, 0.5),
+                position: vector3!(-0.5, 0.5, -0.5),
                 normal: vector3!(-1.0, 0.0, 0.0),
                 uv: vector2!(0.0, 0.0)
             ),
             vertex!(
-                position: vector3!(-0.5, -0.5, 0.5),
+                position: vector3!(-0.5, -0.5, -0.5),
                 normal: vector3!(-1.0, 0.0, 0.0),
                 uv: vector2!(0.0, 1.0)
             ),
             // Back face
-            vertex!(
-                position: vector3!(-0.5, 0.5, 0.5),
-                normal: vector3!(0.0, 0.0, -1.0),
-                uv: vector2!(0.0, 1.0)
-            ),
             vertex!(
                 position: vector3!(0.5, 0.5, 0.5),
                 normal: vector3!(0.0, 0.0, -1.0),
                 uv: vector2!(1.0, 1.0)
             ),
             vertex!(
-                position: vector3!(-0.5, -0.5, 0.5),
+                position: vector3!(0.5, -0.5, 0.5),
+                normal: vector3!(0.0, 0.0, -1.0),
+                uv: vector2!(1.0, 0.0)
+            ),
+            vertex!(
+                position: vector3!(-0.5, 0.5, 0.5),
                 normal: vector3!(0.0, 0.0, -1.0),
                 uv: vector2!(0.0, 0.0)
             ),
             vertex!(
-                position: vector3!(0.5, -0.5, 0.5),
+                position: vector3!(-0.5, -0.5, 0.5),
                 normal: vector3!(0.0, 0.0, -1.0),
-                uv: vector2!(1.0, 0.0)
+                uv: vector2!(0.0, 1.0)
             ),
             // Top face
             vertex!(
@@ -123,12 +95,12 @@ pub fn cube() -> Mesh {
                 uv: vector2!(0.0, 1.0)
             ),
             vertex!(
-                position: vector3!(0.5, 0.5, 0.5),
+                position: vector3!(-0.5, 0.5, -0.5),
                 normal: vector3!(0.0, 1.0, 0.0),
                 uv: vector2!(1.0, 1.0)
             ),
             vertex!(
-                position: vector3!(-0.5, 0.5, -0.5),
+                position: vector3!(0.5, 0.5, 0.5),
                 normal: vector3!(0.0, 1.0, 0.0),
                 uv: vector2!(0.0, 0.0)
             ),
@@ -139,22 +111,22 @@ pub fn cube() -> Mesh {
             ),
             // Bottom face
             vertex!(
-                position: vector3!(-0.5, -0.5, 0.5),
+                position: vector3!(-0.5, -0.5, -0.5),
                 normal: vector3!(0.0, -1.0, 0.0),
                 uv: vector2!(0.0, 1.0)
             ),
             vertex!(
-                position: vector3!(0.5, -0.5, 0.5),
+                position: vector3!(-0.5, -0.5, 0.5),
                 normal: vector3!(0.0, -1.0, 0.0),
                 uv: vector2!(1.0, 1.0)
             ),
             vertex!(
-                position: vector3!(-0.5, -0.5, -0.5),
+                position: vector3!(0.5, -0.5, -0.5),
                 normal: vector3!(0.0, -1.0, 0.0),
                 uv: vector2!(0.0, 0.0)
             ),
             vertex!(
-                position: vector3!(0.5, -0.5, -0.5),
+                position: vector3!(0.5, -0.5, 0.5),
                 normal: vector3!(0.0, -1.0, 0.0),
                 uv: vector2!(1.0, 0.0)
             ),

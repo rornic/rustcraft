@@ -21,7 +21,7 @@ impl CameraSystem {
         let camera_entity = world
             .create_entity()
             .with(Transform::new(
-                vector3!(0.0, 0.0, 25.0),
+                vector3!(0.0, 128.0, 25.0),
                 vector3!(1.0, 1.0, 1.0),
                 Quaternion::one(),
             ))
@@ -71,24 +71,26 @@ impl<'a> System<'a> for CameraSystem {
             .clamp(-camera.max_pitch.0, camera.max_pitch.0);
         camera.yaw.0 += input.mouse.horizontal_motion() * 30.0 * delta_time;
 
+        let move_speed = 10.0;
+
         // Move camera in XYZ space
         let mut movement_vector = Vector3::new(0.0, 0.0, 0.0);
         if input.keyboard.is_pressed(VirtualKeyCode::A) {
-            movement_vector.x = -3.0;
+            movement_vector.x = -move_speed;
         } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
-            movement_vector.x = 3.0;
+            movement_vector.x = move_speed;
         }
 
         if input.keyboard.is_pressed(VirtualKeyCode::W) {
-            movement_vector.z = 3.0;
+            movement_vector.z = move_speed;
         } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
-            movement_vector.z = -3.0;
+            movement_vector.z = -move_speed;
         }
 
         if input.keyboard.is_pressed(VirtualKeyCode::Space) {
-            movement_vector.y = 3.0;
+            movement_vector.y = move_speed;
         } else if input.keyboard.is_pressed(VirtualKeyCode::LShift) {
-            movement_vector.y = -3.0;
+            movement_vector.y = -move_speed;
         }
 
         // Apply Y axis movement separately so we don't rotate the movement to follow the camera
