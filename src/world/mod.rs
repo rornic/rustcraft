@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::thread;
 
-use cgmath::{Quaternion, Vector3};
-use noise::{Multiply, NoiseFn, Perlin, Seedable, Worley};
+use cgmath::Vector3;
+use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
 use specs::{Builder, WorldExt};
 
 use crate::render::mesh::{Mesh, Vertex};
@@ -211,9 +211,9 @@ impl WorldGenerator {
 
         let perlin = Perlin::new().set_seed(1);
         let perlin2 = Perlin::new().set_seed(2);
-        let worley = Worley::new().set_seed(1);
-        let mul = Multiply::new(&perlin, &worley);
-        let noise = Multiply::new(&perlin2, &mul);
+        let simplex = OpenSimplex::new().set_seed(3);
+        let mul = Add::new(&perlin2, &simplex);
+        let noise = Multiply::new(&mul, &perlin);
 
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
@@ -222,7 +222,7 @@ impl WorldGenerator {
                     chunk_pos.y * CHUNK_SIZE as i32,
                     chunk_pos.z * CHUNK_SIZE as i32 + z as i32,
                 );
-                let height = ((0.5 + noise.get([world_x as f64 / 512.0, world_z as f64 / 512.0]))
+                let height = ((0.5 + noise.get([world_x as f64 / 128.0, world_z as f64 / 128.0]))
                     * 128.0)
                     .round() as i32;
                 // println!("{},{},{} {}", world_x, world_y, world_z, height);

@@ -166,7 +166,7 @@ impl Renderer {
     pub fn render(&mut self, world: &mut World) {
         // Start drawing on window
         let mut target: Frame = self.display.draw();
-        target.clear_color_and_depth((0.01, 0.01, 0.01, 1.0), 1.0);
+        target.clear_color_and_depth((0.5294, 0.8078, 0.9216, 1.0), 1.0);
 
         // Set up draw parameters
         let params = glium::DrawParameters {
@@ -221,7 +221,7 @@ impl Renderer {
                         &uniform! {
                             model_matrix: draw_call.model_matrix,
                             tex: Sampler(&self.texture, SamplerBehavior {
-                                minify_filter: MinifySamplerFilter::Nearest,
+                                minify_filter: MinifySamplerFilter::NearestMipmapLinear,
                                 magnify_filter: MagnifySamplerFilter::Nearest,
                                 ..Default::default()
                             }),

@@ -1,8 +1,5 @@
 use cgmath::{Vector2, Vector3};
-use glium::{
-    vertex::{Attribute, AttributeType},
-    Display, IndexBuffer, VertexBuffer,
-};
+use glium::{Display, IndexBuffer, VertexBuffer};
 use uuid::Uuid;
 
 pub mod primitives;

@@ -32,7 +32,8 @@ fn init_display() -> (EventLoop<()>, Display) {
     let wb = glutin::window::WindowBuilder::new();
     let cb = glutin::ContextBuilder::new()
         .with_depth_buffer(24)
-        .with_vsync(true);
+        .with_vsync(true)
+        .with_multisampling(8);
     let display = glium::Display::new(wb, cb, &event_loop).unwrap();
     (event_loop, display)
 }

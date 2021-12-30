@@ -1,6 +1,4 @@
-use std::ops::Add;
-
-use cgmath::{prelude::*, Deg, Euler, Quaternion, Rad, Vector3};
+use cgmath::{prelude::*, Deg, Euler, Quaternion, Vector3};
 use glium::glutin::event::VirtualKeyCode;
 use specs::{
     Builder, Component, Entity, Read, System, VecStorage, World, WorldExt, Write, WriteStorage,
