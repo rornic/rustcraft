@@ -1,3 +1,6 @@
+use std::ops::Add;
+
+use cgmath::{prelude::*, Deg, Quaternion, Rad, Vector3};
 use glium::glutin::event::VirtualKeyCode;
 use specs::{Builder, Entity, Read, System, World, WorldExt, Write, WriteStorage};
 
@@ -17,6 +20,7 @@ impl CameraSystem {
             .with(Transform::new(
                 vector3!(0.0, 0.0, 25.0),
                 vector3!(1.0, 1.0, 1.0),
+                Quaternion::one(),
             ))
             .build();
 
@@ -41,26 +45,39 @@ impl<'a> System<'a> for CameraSystem {
 
         view_matrix.0 = ViewMatrix::new(
             transform.position,
-            vector3!(0.0, 0.5, 1.0),
-            vector3!(0.0, 1.0, 0.0),
+            transform.rotation * vector3!(0.0, 0.0, 1.0),
+            transform.rotation * vector3!(0.0, 1.0, 0.0),
         )
         .0;
+
+        // Rotate camera
+        if input.keyboard.is_pressed(VirtualKeyCode::E) {
+            transform.rotation =
+                transform.rotation * Quaternion::from_angle_y(Deg(90.0 * delta_time));
+        } else if input.keyboard.is_pressed(VirtualKeyCode::Q) {
+            transform.rotation =
+                transform.rotation * Quaternion::from_angle_y(Deg(-90.0 * delta_time));
+        }
+
+        let mut movement_vector = Vector3::new(0.0, 0.0, 0.0);
         if input.keyboard.is_pressed(VirtualKeyCode::A) {
-            transform.position.x -= 3.0 * delta_time;
+            movement_vector.x = -3.0;
         } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
-            transform.position.x += 3.0 * delta_time;
+            movement_vector.x = 3.0;
         }
 
         if input.keyboard.is_pressed(VirtualKeyCode::Space) {
-            transform.position.y += 3.0 * delta_time;
+            movement_vector.y = 3.0;
         } else if input.keyboard.is_pressed(VirtualKeyCode::LShift) {
-            transform.position.y -= 3.0 * delta_time;
+            movement_vector.y = -3.0;
         }
 
         if input.keyboard.is_pressed(VirtualKeyCode::W) {
-            transform.position.z += 3.0 * delta_time;
+            movement_vector.z = 3.0;
         } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
-            transform.position.z -= 3.0 * delta_time;
+            movement_vector.z = -3.0;
         }
+
+        transform.position += transform.rotation * movement_vector * delta_time;
     }
 }

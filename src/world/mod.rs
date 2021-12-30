@@ -1,5 +1,6 @@
 use std::thread;
 
+use cgmath::Quaternion;
 use specs::{Builder, WorldExt};
 
 use crate::render::mesh::{Mesh, Vertex};
@@ -159,6 +160,7 @@ impl World {
                         (chunk_z * CHUNK_SIZE) as f32
                     ),
                     vector3!(1.0, 1.0, 1.0),
+                    Quaternion::new(1.0, 0.0, 0.0, 0.0),
                 ))
                 .with(RenderMesh::new(&chunk_mesh))
                 .build();
