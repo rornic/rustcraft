@@ -39,17 +39,12 @@ impl<'a> System<'a> for CameraSystem {
             .get_mut(self.camera_entity)
             .expect("No transform found on camera entity");
 
-        view_matrix.0 = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [
-                -transform.position.x,
-                -transform.position.y,
-                -transform.position.z,
-                1.0,
-            ],
-        ];
+        view_matrix.0 = ViewMatrix::new(
+            transform.position,
+            vector3!(0.0, 0.5, 1.0),
+            vector3!(0.0, 1.0, 0.0),
+        )
+        .0;
         if input.keyboard.is_pressed(VirtualKeyCode::A) {
             transform.position.x -= 3.0 * delta_time;
         } else if input.keyboard.is_pressed(VirtualKeyCode::D) {

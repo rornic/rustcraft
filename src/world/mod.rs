@@ -100,7 +100,7 @@ impl Chunk {
 }
 
 /// `WORLD_SIZE` determines the size of the world in chunks.
-const WORLD_SIZE: usize = 8;
+const WORLD_SIZE: usize = 4;
 pub struct World {
     chunks: Vec<Vec<Vec<Chunk>>>,
 }

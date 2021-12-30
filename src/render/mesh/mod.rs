@@ -1,32 +1,35 @@
-use glium::vertex::{Attribute, AttributeType};
+use cgmath::{Vector2, Vector3};
+use glium::{
+    vertex::{Attribute, AttributeType},
+    Display, IndexBuffer, VertexBuffer,
+};
 use uuid::Uuid;
-
-use crate::math::{Vector2, Vector3};
 
 pub mod primitives;
 
-/// A `Vertex` is represented by a 3D position.
+/// A `Vertex` is represented by a 3D position, normal and 2D UV position.
 #[derive(Copy, Clone)]
 pub struct Vertex {
-    pub position: Vector3,
-    pub normal: Vector3,
-    pub uv: Vector2,
+    pub position: Vector3<f32>,
+    pub normal: Vector3<f32>,
+    pub uv: Vector2<f32>,
 }
-implement_vertex!(Vertex, position, normal, uv);
 
-/// Implement `Attribute` for `Vector3` so that we can use it as a `Vertex` attribute on the GPU. Maps it to an `F32F32F32` or `vec3` type.
-unsafe impl Attribute for Vector3 {
-    fn get_type() -> glium::vertex::AttributeType {
-        AttributeType::F32F32F32
+/// Uses an internal `GpuVertex` struct to get the type bindings that a `Vertex` will use on the GPU.
+impl glium::Vertex for Vertex {
+    fn build_bindings() -> glium::VertexFormat {
+        GpuVertex::build_bindings()
     }
 }
 
-/// Implement `Attribute` for `Vector2` so that we can use it as a `Vertex` attribute on the GPU. Maps it to an `F32F32` or `vec2` type.
-unsafe impl Attribute for Vector2 {
-    fn get_type() -> glium::vertex::AttributeType {
-        AttributeType::F32F32
-    }
+/// Represents a `Vertex` as it should be laid out on the GPU.
+#[derive(Clone, Copy)]
+struct GpuVertex {
+    position: [f32; 3],
+    normal: [f32; 3],
+    uv: [f32; 2],
 }
+implement_vertex!(GpuVertex, position, normal, uv);
 
 #[macro_export]
 macro_rules! vertex {
@@ -56,5 +59,41 @@ impl Mesh {
             vertices,
             indices,
         }
+    }
+
+    pub fn load(
+        &self,
+        display: &Display,
+    ) -> Result<(VertexBuffer<Vertex>, IndexBuffer<u32>), MeshLoadError> {
+        let mesh_data = (
+            glium::VertexBuffer::new(display, &self.vertices)?,
+            glium::IndexBuffer::new(
+                display,
+                glium::index::PrimitiveType::TrianglesList,
+                &self.indices,
+            )?,
+        );
+
+        Ok(mesh_data)
+    }
+}
+
+/// Represents the errors that can occur when loading `MeshData` onto the GPU.
+#[derive(Debug)]
+pub enum MeshLoadError {
+    VertexBufferCreationError(glium::vertex::BufferCreationError),
+    IndexBufferCreationError(glium::index::BufferCreationError),
+}
+
+/// Conversion traits from `BufferCreationError` types to `MeshLoadError`
+impl From<glium::vertex::BufferCreationError> for MeshLoadError {
+    fn from(err: glium::vertex::BufferCreationError) -> Self {
+        MeshLoadError::VertexBufferCreationError(err)
+    }
+}
+
+impl From<glium::index::BufferCreationError> for MeshLoadError {
+    fn from(err: glium::index::BufferCreationError) -> Self {
+        MeshLoadError::IndexBufferCreationError(err)
     }
 }

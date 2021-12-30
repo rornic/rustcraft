@@ -10,9 +10,10 @@ use glium::{
 use specs::{Component, Join, ReadStorage, System, VecStorage, World, WorldExt, Write};
 use uuid::Uuid;
 
-use crate::world::components::Transform;
+use crate::{vector3, world::components::Transform};
+use cgmath::{prelude::*, Vector3};
 
-use self::mesh::{Mesh, Vertex};
+use self::mesh::{Mesh, MeshLoadError, Vertex};
 
 pub mod mesh;
 pub mod shader;
@@ -49,6 +50,36 @@ impl Component for RenderMesh {
 }
 
 pub struct ViewMatrix(pub [[f32; 4]; 4]);
+
+impl ViewMatrix {
+    pub fn new(position: Vector3<f32>, direction: Vector3<f32>, up: Vector3<f32>) -> ViewMatrix {
+        let direction = direction.normalize();
+        let s = vector3!(
+            up.y * direction.z - up.z * direction.y,
+            up.z * direction.x - up.x * direction.z,
+            up.x * direction.y - up.y * direction.x
+        )
+        .normalize();
+        let u = vector3!(
+            direction.y * s.z - direction.z * s.y,
+            direction.z * s.x - direction.x * s.z,
+            direction.x * s.y - direction.y * s.x
+        );
+
+        let p = vector3!(
+            -position.x * s.x - position.y * s.y - position.z * s.z,
+            -position.x * u.x - position.y * u.y - position.z * u.z,
+            -position.x * direction.x - position.y * direction.y - position.z * direction.z
+        );
+
+        ViewMatrix([
+            [s.x, u.x, direction.x, 0.0],
+            [s.y, u.y, direction.y, 0.0],
+            [s.z, u.z, direction.z, 0.0],
+            [p.x, p.y, p.z, 1.0],
+        ])
+    }
+}
 
 impl Default for ViewMatrix {
     fn default() -> Self {
@@ -125,14 +156,7 @@ impl Renderer {
 
     /// Loads a mesh onto the GPU, mapping its UUID to its `VertexBuffer` and `IndexBuffer`.
     pub fn register_mesh(&mut self, mesh: &Mesh) -> Result<(), MeshLoadError> {
-        let mesh_data = (
-            glium::VertexBuffer::new(&self.display, &mesh.vertices)?,
-            glium::IndexBuffer::new(
-                &self.display,
-                glium::index::PrimitiveType::TrianglesList,
-                &mesh.indices,
-            )?,
-        );
+        let mesh_data = mesh.load(&self.display)?;
 
         self.mesh_register.insert(mesh.mesh_id, mesh_data);
 
@@ -209,25 +233,5 @@ impl Renderer {
         }
 
         target.finish().unwrap();
-    }
-}
-
-/// Represents the errors that can occur when loading `MeshData` onto the GPU.
-#[derive(Debug)]
-pub enum MeshLoadError {
-    VertexBufferCreationError(glium::vertex::BufferCreationError),
-    IndexBufferCreationError(glium::index::BufferCreationError),
-}
-
-/// Conversion traits from `BufferCreationError` types to `MeshLoadError`
-impl From<glium::vertex::BufferCreationError> for MeshLoadError {
-    fn from(err: glium::vertex::BufferCreationError) -> Self {
-        MeshLoadError::VertexBufferCreationError(err)
-    }
-}
-
-impl From<glium::index::BufferCreationError> for MeshLoadError {
-    fn from(err: glium::index::BufferCreationError) -> Self {
-        MeshLoadError::IndexBufferCreationError(err)
     }
 }
