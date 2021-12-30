@@ -55,7 +55,9 @@ impl<'a> System<'a> for CameraSystem {
             .get_mut(self.camera_entity)
             .expect("No camera found on camera entity");
 
-        transform.rotation = Quaternion::from(Euler::new(camera.pitch, camera.yaw, Deg(0.0)));
+        // Apply yaw first, then pitch (YXZ)
+        transform.rotation = Quaternion::from(Euler::new(Deg(0.0), camera.yaw, Deg(0.0)))
+            * Quaternion::from(Euler::new(camera.pitch, Deg(0.0), Deg(0.0)));
 
         view_matrix.0 = ViewMatrix::new(
             transform.position,
@@ -65,7 +67,8 @@ impl<'a> System<'a> for CameraSystem {
         .0;
 
         // Apply changes to camera's pitch and yaw based on mouse movement
-        camera.pitch.0 += input.mouse.vertical_motion() * 30.0 * delta_time;
+        camera.pitch.0 = (camera.pitch.0 + input.mouse.vertical_motion() * 30.0 * delta_time)
+            .clamp(-camera.max_pitch.0, camera.max_pitch.0);
         camera.yaw.0 += input.mouse.horizontal_motion() * 30.0 * delta_time;
 
         // Move camera in XYZ space
@@ -99,6 +102,7 @@ impl<'a> System<'a> for CameraSystem {
 pub struct Camera {
     yaw: Deg<f32>,
     pitch: Deg<f32>,
+    max_pitch: Deg<f32>,
 }
 
 impl Default for Camera {
@@ -106,6 +110,7 @@ impl Default for Camera {
         Self {
             yaw: Deg(0.0),
             pitch: Deg(0.0),
+            max_pitch: Deg(65.0),
         }
     }
 }
