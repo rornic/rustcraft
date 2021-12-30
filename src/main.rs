@@ -49,12 +49,7 @@ fn process_event(input: &mut Input, ev: Event<()>, control_flow: &mut ControlFlo
             }
             _ => (),
         },
-        glutin::event::Event::DeviceEvent { event, .. } => match event {
-            glutin::event::DeviceEvent::Key(ki) => {
-                input.keyboard.process_event(ki);
-            }
-            _ => (),
-        },
+        glutin::event::Event::DeviceEvent { event, .. } => input.process_event(event),
         _ => (),
     };
 }
@@ -93,6 +88,8 @@ fn main() {
             let delta_time = (Instant::now() - frame_start).as_secs_f32();
             world.write_resource::<DeltaTime>().0 = delta_time;
             world.write_resource::<ElapsedTime>().0 += delta_time;
+
+            world.write_resource::<Input>().update();
         }
         ev => process_event(&mut world.write_resource::<Input>(), ev, control_flow),
     });

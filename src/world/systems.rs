@@ -50,14 +50,8 @@ impl<'a> System<'a> for CameraSystem {
         )
         .0;
 
-        // Rotate camera
-        if input.keyboard.is_pressed(VirtualKeyCode::E) {
-            transform.rotation =
-                transform.rotation * Quaternion::from_angle_y(Deg(90.0 * delta_time));
-        } else if input.keyboard.is_pressed(VirtualKeyCode::Q) {
-            transform.rotation =
-                transform.rotation * Quaternion::from_angle_y(Deg(-90.0 * delta_time));
-        }
+        transform.rotation = transform.rotation
+            * Quaternion::from_angle_y(Deg(input.mouse.horizontal_motion() * 30.0 * delta_time));
 
         let mut movement_vector = Vector3::new(0.0, 0.0, 0.0);
         if input.keyboard.is_pressed(VirtualKeyCode::A) {
