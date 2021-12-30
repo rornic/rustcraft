@@ -10,7 +10,7 @@ use glium::{
 use specs::{Component, Join, ReadStorage, System, VecStorage, World, WorldExt, Write};
 use uuid::Uuid;
 
-use crate::{vector3, world::components::Transform};
+use crate::{vector3, world::ecs::Transform};
 use cgmath::{prelude::*, Vector3};
 
 use self::mesh::{Mesh, MeshLoadError, Vertex};

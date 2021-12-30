@@ -6,7 +6,7 @@ use specs::{
 
 use crate::{input::Input, render::ViewMatrix, vector3, DeltaTime};
 
-use super::components::Transform;
+use super::Transform;
 
 /// Runs on a single `Entity` designated as the camera. This entity must have a `Transform` component otherwise the system will fail.
 pub struct CameraSystem {

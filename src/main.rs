@@ -20,8 +20,8 @@ mod render;
 mod util;
 mod world;
 
-use world::components::Transform;
-use world::systems::{Camera, CameraSystem};
+use world::ecs::camera::{Camera, CameraSystem};
+use world::ecs::Transform;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {

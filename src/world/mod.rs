@@ -9,10 +9,9 @@ use crate::render::mesh::{Mesh, Vertex};
 use crate::render::{RenderMesh, Renderer};
 use crate::{vector3, vertex};
 
-use self::components::Transform;
+use self::ecs::Transform;
 
-pub mod components;
-pub mod systems;
+pub mod ecs;
 
 /// Each chunk is a cube of blocks. `CHUNK_SIZE` determines the size of this cube in blocks.
 const CHUNK_SIZE: usize = 16;
