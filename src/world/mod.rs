@@ -1,93 +1,57 @@
 use std::collections::HashMap;
 use std::thread;
 
-use cgmath::Vector3;
+use cgmath::{Vector2, Vector3};
 use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
-use specs::{Builder, WorldExt};
 
 use crate::render::mesh::{Mesh, Vertex};
-use crate::render::{RenderMesh, Renderer};
-use crate::{vector3, vertex};
-
-use self::ecs::Transform;
+use crate::{vector2, vector3, vertex};
 
 pub mod ecs;
 
 /// Each chunk is a cube of blocks. `CHUNK_SIZE` determines the size of this cube in blocks.
-const CHUNK_SIZE: usize = 16;
+pub const CHUNK_SIZE: usize = 16;
+type Chunk = Box<[[[bool; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
-type ChunkBlocks = Box<[[[bool; CHUNK_SIZE]; CHUNK_SIZE]; CHUNK_SIZE]>;
-#[derive(Clone)]
-struct Chunk {
-    blocks: ChunkBlocks,
-}
+const WORLD_HEIGHT: usize = 255;
 
-impl Chunk {}
-
-/// `WORLD_SIZE` determines the size of the world in chunks.
-const WORLD_SIZE: usize = 16;
+#[derive(Default)]
 pub struct World {
-    chunks: HashMap<Vector3<i32>, Chunk>,
+    generator: WorldGenerator,
+    chunks: HashMap<Vector2<i32>, Chunk>,
 }
 
 impl World {
     pub fn new() -> World {
         let world_generator = WorldGenerator {};
 
-        let mut chunk_handles = vec![];
-        for chunk_x in 0..WORLD_SIZE {
-            for chunk_y in 0..WORLD_SIZE {
-                for chunk_z in 0..WORLD_SIZE {
-                    chunk_handles.push(thread::spawn(move || {
-                        let chunk_pos = vector3!(chunk_x as i32, chunk_y as i32, chunk_z as i32);
-                        let chunk = world_generator.generate_chunk(chunk_pos);
-                        (chunk_pos, chunk)
-                    }));
-                }
+        let mut world = World {
+            generator: world_generator,
+            chunks: HashMap::new(),
+        };
+
+        for x in 0..10 {
+            for z in 0..10 {
+                world.generate_chunk(vector2!(x, z));
             }
         }
 
-        let mut world = World {
-            chunks: HashMap::new(),
-        };
-        for handle in chunk_handles {
-            let (pos, chunk) = handle.join().unwrap();
-            world.chunks.insert(pos, chunk);
-        }
-
         world
     }
 
-    pub fn generate_chunk_meshes(&self, renderer: &mut Renderer, world: &mut specs::World) {
-        let mut world_vertices: Vec<Vertex> = vec![];
-        let mut world_indices: Vec<u32> = vec![];
-
-        // Combines meshes for all chunks into a single mesh
-        for (chunk_pos, _) in self.chunks.iter() {
-            let chunk_mesh = self.generate_chunk_mesh(*chunk_pos);
-            world_indices.append(
-                &mut chunk_mesh
-                    .indices
-                    .iter()
-                    .map(|i| *i + world_vertices.len() as u32)
-                    .collect(),
-            );
-            world_vertices.append(&mut chunk_mesh.vertices.iter()
-            .map(|v| vertex!(position: v.position + vector3!(chunk_pos.x as f32 * CHUNK_SIZE as f32, chunk_pos.y as f32 * CHUNK_SIZE as f32, chunk_pos.z as f32 * CHUNK_SIZE as f32), normal: v.normal, uv: v.uv)).collect());
+    /// Generates a chunk at a given chunk coordinate.
+    ///
+    /// Does nothing if this chunk has already been generated.
+    pub fn generate_chunk(&mut self, chunk_position: Vector2<i32>) -> &Chunk {
+        if !self.chunks.contains_key(&chunk_position) {
+            let chunk = self.generator.generate_chunk(chunk_position);
+            self.chunks.insert(chunk_position, chunk);
         }
-
-        let world_mesh = Mesh::new(world_vertices, world_indices);
-        renderer.register_mesh(&world_mesh).unwrap();
-
-        world
-            .create_entity()
-            .with(Transform::default())
-            .with(RenderMesh::new(&world_mesh))
-            .build();
+        self.chunks.get(&chunk_position).unwrap()
     }
 
     /// Generates a `Mesh` for a chunk.
-    fn generate_chunk_mesh(&self, chunk_pos: Vector3<i32>) -> Mesh {
+    fn generate_chunk_mesh(&self, chunk_pos: Vector2<i32>) -> Mesh {
         let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];
 
@@ -126,13 +90,13 @@ impl World {
         ];
 
         for x in 0..CHUNK_SIZE {
-            for y in 0..CHUNK_SIZE {
+            for y in 0..WORLD_HEIGHT {
                 for z in 0..CHUNK_SIZE {
                     let position = vector3!(x as f32, y as f32, z as f32);
                     let world_position = vector3!(
                         (chunk_pos.x * CHUNK_SIZE as i32 + x as i32) as f32,
-                        (chunk_pos.y * CHUNK_SIZE as i32 + y as i32) as f32,
-                        (chunk_pos.z * CHUNK_SIZE as i32 + z as i32) as f32
+                        y as f32,
+                        (chunk_pos.y * CHUNK_SIZE as i32 + z as i32) as f32
                     );
 
                     if !self.block_at(world_position) {
@@ -141,29 +105,29 @@ impl World {
 
                     // Front faces
                     if !self.block_at(world_position + vector3!(0.0, 0.0, -1.0)) {
-                        add_vertices(&mut face_vertices[0].clone(), position);
+                        add_vertices(&mut face_vertices[0].clone(), world_position);
                     }
                     // Back faces
                     if !self.block_at(world_position + vector3!(0.0, 0.0, 1.0)) {
-                        add_vertices(&mut face_vertices[3].clone(), position);
+                        add_vertices(&mut face_vertices[3].clone(), world_position);
                     }
 
                     // Left faces
                     if !self.block_at(world_position + vector3!(-1.0, 0.0, 0.0)) {
-                        add_vertices(&mut face_vertices[2].clone(), position);
+                        add_vertices(&mut face_vertices[2].clone(), world_position);
                     }
                     // Right faces
                     if !self.block_at(world_position + vector3!(1.0, 0.0, 0.0)) {
-                        add_vertices(&mut face_vertices[1].clone(), position);
+                        add_vertices(&mut face_vertices[1].clone(), world_position);
                     }
 
                     // Bottom faces
                     if !self.block_at(world_position + vector3!(0.0, -1.0, 0.0)) {
-                        add_vertices(&mut face_vertices[5].clone(), position);
+                        add_vertices(&mut face_vertices[5].clone(), world_position);
                     }
                     // Top faces
                     if !self.block_at(world_position + vector3!(0.0, 1.0, 0.0)) {
-                        add_vertices(&mut face_vertices[4].clone(), position);
+                        add_vertices(&mut face_vertices[4].clone(), world_position);
                     }
                 }
             }
@@ -174,39 +138,38 @@ impl World {
     fn block_at(&self, position: Vector3<f32>) -> bool {
         let (chunk_pos, block_pos) = self.world_to_block(position);
         if let Some(chunk) = self.chunks.get(&chunk_pos) {
-            chunk.blocks[block_pos.x][block_pos.y][block_pos.z]
+            chunk[block_pos.x][block_pos.y][block_pos.z]
         } else {
             false
         }
     }
 
     /// Takes a position in the world and returns the chunk that it's in.
-    fn world_to_chunk(&self, world_position: Vector3<f32>) -> Vector3<i32> {
-        vector3!(
+    fn world_to_chunk(&self, world_position: Vector3<f32>) -> Vector2<i32> {
+        vector2!(
             (world_position.x / CHUNK_SIZE as f32).floor() as i32,
-            (world_position.y / CHUNK_SIZE as f32).floor() as i32,
             (world_position.z / CHUNK_SIZE as f32).floor() as i32
         )
     }
 
     /// Takes a position in the world and converts it to a position relative to the chunk it's in.
-    fn world_to_block(&self, world_position: Vector3<f32>) -> (Vector3<i32>, Vector3<usize>) {
+    fn world_to_block(&self, world_position: Vector3<f32>) -> (Vector2<i32>, Vector3<usize>) {
         let chunk = self.world_to_chunk(world_position);
         let relative_pos = vector3!(
             (world_position.x - (chunk.x * CHUNK_SIZE as i32) as f32).floor() as usize,
-            (world_position.y - (chunk.y * CHUNK_SIZE as i32) as f32).floor() as usize,
-            (world_position.z - (chunk.z * CHUNK_SIZE as i32) as f32).floor() as usize
+            world_position.y.floor() as usize,
+            (world_position.z - (chunk.y * CHUNK_SIZE as i32) as f32).floor() as usize
         );
         (chunk, relative_pos)
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Default, Copy, Clone)]
 struct WorldGenerator {}
 
 impl WorldGenerator {
-    fn generate_chunk(&self, chunk_pos: Vector3<i32>) -> Chunk {
-        let mut blocks = [[[false; CHUNK_SIZE]; CHUNK_SIZE]; CHUNK_SIZE];
+    fn generate_chunk(&self, chunk_pos: Vector2<i32>) -> Chunk {
+        let mut blocks = [[[false; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE];
 
         let perlin = Perlin::new().set_seed(1);
         let perlin2 = Perlin::new().set_seed(2);
@@ -218,23 +181,18 @@ impl WorldGenerator {
             for z in 0..CHUNK_SIZE {
                 let (world_x, world_y, world_z) = (
                     chunk_pos.x * CHUNK_SIZE as i32 + x as i32,
-                    chunk_pos.y * CHUNK_SIZE as i32,
-                    chunk_pos.z * CHUNK_SIZE as i32 + z as i32,
+                    0,
+                    chunk_pos.y * CHUNK_SIZE as i32 + z as i32,
                 );
                 let height = ((0.5 + noise.get([world_x as f64 / 128.0, world_z as f64 / 128.0]))
                     * 128.0)
-                    .round() as i32;
-                // println!("{},{},{} {}", world_x, world_y, world_z, height);
-                if height > world_y {
-                    let diff = (height - world_y).abs() as usize;
-                    for y in 0..diff.min(CHUNK_SIZE) {
-                        blocks[x][y][z] = true;
-                    }
+                    .round() as usize;
+
+                for y in 0..height {
+                    blocks[x][y][z] = true;
                 }
             }
         }
-        Chunk {
-            blocks: Box::new(blocks),
-        }
+        Box::new(blocks)
     }
 }

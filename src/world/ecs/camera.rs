@@ -19,7 +19,7 @@ impl CameraSystem {
         let camera_entity = world
             .create_entity()
             .with(Transform::new(
-                vector3!(0.0, 128.0, 25.0),
+                vector3!(0.0, 32.0, 25.0),
                 vector3!(1.0, 1.0, 1.0),
                 Quaternion::one(),
             ))

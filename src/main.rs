@@ -21,6 +21,7 @@ mod util;
 mod world;
 
 use world::ecs::camera::{Camera, CameraSystem};
+use world::ecs::chunk_loader::{ChunkGeneratorSystem, ChunkLoaderSystem};
 use world::ecs::Transform;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
@@ -70,11 +71,12 @@ fn main() {
     world.insert(ElapsedTime(0.0));
 
     let game_world = world::World::new();
-    game_world.generate_chunk_meshes(&mut renderer, &mut world);
 
     let mut dispatcher: Dispatcher = DispatcherBuilder::new()
         .with_thread_local(RenderingSystem)
         .with(CameraSystem::new(&mut world), "camera", &[])
+        .with(ChunkLoaderSystem::new(), "chunk_loader", &[])
+        .with(ChunkGeneratorSystem::new(), "chunk_generator", &[])
         .build();
     dispatcher.setup(&mut world);
 

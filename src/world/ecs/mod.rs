@@ -4,6 +4,7 @@ use crate::vector3;
 use cgmath::{One, Quaternion, Vector3};
 
 pub mod camera;
+pub mod chunk_loader;
 
 /// Contains data about an entity's `Transform`. This includes its position, scale and rotation in the world.
 pub struct Transform {

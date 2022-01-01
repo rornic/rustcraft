@@ -57,22 +57,6 @@ impl Mesh {
             indices,
         }
     }
-
-    pub fn load(
-        &self,
-        display: &Display,
-    ) -> Result<(VertexBuffer<Vertex>, IndexBuffer<u32>), MeshLoadError> {
-        let mesh_data = (
-            glium::VertexBuffer::new(display, &self.vertices)?,
-            glium::IndexBuffer::new(
-                display,
-                glium::index::PrimitiveType::TrianglesList,
-                &self.indices,
-            )?,
-        );
-
-        Ok(mesh_data)
-    }
 }
 
 /// Represents the errors that can occur when loading `MeshData` onto the GPU.

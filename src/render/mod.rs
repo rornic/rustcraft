@@ -1,11 +1,17 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+    sync::Arc,
+};
 
 use glium::{
+    index::PrimitiveType,
     texture::SrgbTexture2d,
     uniforms::{
         MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
+        Uniforms,
     },
-    Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
+    Display, DrawParameters, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, World, WorldExt, Write};
 use uuid::Uuid;
@@ -34,14 +40,12 @@ implement_uniform_block!(GlobalRenderUniforms, projection_matrix, view_matrix, l
 ///
 /// Does not store the actual `Mesh` data, but just a reference to a `Mesh` that has been loaded into the `RenderingSystem`.
 pub struct RenderMesh {
-    mesh_id: Uuid,
+    mesh: Arc<Mesh>,
 }
 
 impl RenderMesh {
-    pub fn new(mesh: &Mesh) -> RenderMesh {
-        RenderMesh {
-            mesh_id: mesh.mesh_id,
-        }
+    pub fn new(mesh: Arc<Mesh>) -> RenderMesh {
+        RenderMesh { mesh: mesh }
     }
 }
 
@@ -108,27 +112,86 @@ impl<'a> System<'a> for RenderingSystem {
             let model_matrix = transform.matrix();
 
             draw_calls.push_back(DrawCall {
-                model_matrix: model_matrix,
-                mesh_id: mesh_data.mesh_id,
+                material: Material {
+                    name: "default".to_string(),
+                },
+                mesh: mesh_data.mesh.clone(),
             });
         }
     }
 }
 
+#[derive(Hash, PartialEq, Eq, Clone)]
+pub struct Material {
+    name: String,
+}
+
 pub struct DrawCall {
-    model_matrix: [[f32; 4]; 4],
-    mesh_id: Uuid,
+    material: Material,
+    mesh: Arc<Mesh>,
+}
+
+/// Represents a batch of meshes that can be rendered in a single draw call.
+pub struct Batch {
+    display: Display,
+    meshes: HashMap<Uuid, Arc<Mesh>>,
+    vbo: VertexBuffer<Vertex>,
+    ibo: IndexBuffer<u32>,
+    vbo_index: usize,
+    ibo_index: usize,
+}
+
+impl Batch {
+    pub fn new(display: Display) -> Result<Batch, MeshLoadError> {
+        let vbo = VertexBuffer::empty_dynamic(&display, 1000000)?;
+        let ibo = IndexBuffer::empty_dynamic(&display, PrimitiveType::TrianglesList, 1000000)?;
+        Ok(Batch {
+            display: display,
+            meshes: HashMap::new(),
+            vbo,
+            ibo,
+            vbo_index: 0,
+            ibo_index: 0,
+        })
+    }
+
+    /// Adds a `Mesh` into this batch. Assumes that the mesh vertices are relative to the world origin (0,0,0)
+    pub fn add_mesh(&mut self, mesh: Arc<Mesh>) {
+        // Only add the mesh if we haven't already seen it
+        if !self.meshes.contains_key(&mesh.mesh_id) {
+            let is = mesh
+                .indices
+                .iter()
+                .map(|i| *i + self.vbo_index as u32)
+                .collect::<Vec<u32>>();
+            self.ibo
+                .slice_mut(self.ibo_index..self.ibo_index + mesh.indices.len())
+                .unwrap()
+                .write(&is);
+            self.ibo_index += is.len();
+
+            self.vbo
+                .slice_mut(self.vbo_index..self.vbo_index + mesh.vertices.len())
+                .unwrap()
+                .write(&mesh.vertices);
+            self.vbo_index += mesh.vertices.len();
+
+            println!("{},{}", self.ibo_index, self.vbo_index);
+
+            self.meshes.insert(mesh.mesh_id, mesh);
+        }
+    }
 }
 
 /// The `Renderer` receives `DrawCall` structs and processes each of them into a draw call on the GPU.
 ///
 /// Takes a `Display` to draw to. The `Renderer` keeps track of resources loaded onto the GPU.
 pub struct Renderer {
-    display: Display,
+    pub display: Display,
     global_uniform_buffer: UniformBuffer<GlobalRenderUniforms>,
     shader_program: Program,
     texture: SrgbTexture2d,
-    mesh_register: HashMap<Uuid, (VertexBuffer<Vertex>, IndexBuffer<u32>)>,
+    batches: HashMap<Material, Batch>,
 }
 
 impl Renderer {
@@ -150,23 +213,14 @@ impl Renderer {
             global_uniform_buffer,
             shader_program,
             texture,
-            mesh_register: HashMap::new(),
+            batches: HashMap::new(),
         }
-    }
-
-    /// Loads a mesh onto the GPU, mapping its UUID to its `VertexBuffer` and `IndexBuffer`.
-    pub fn register_mesh(&mut self, mesh: &Mesh) -> Result<(), MeshLoadError> {
-        let mesh_data = mesh.load(&self.display)?;
-
-        self.mesh_register.insert(mesh.mesh_id, mesh_data);
-
-        Ok(())
     }
 
     pub fn render(&mut self, world: &mut World) {
         // Start drawing on window
         let mut target: Frame = self.display.draw();
-        target.clear_color_and_depth((0.5294, 0.8078, 0.9216, 1.0), 1.0);
+        target.clear_color_and_depth((0.5, 0.5, 0.5, 1.0), 1.0);
 
         // Set up draw parameters
         let params = glium::DrawParameters {
@@ -208,29 +262,53 @@ impl Renderer {
         };
         self.global_uniform_buffer.write(&global_render_uniforms);
 
-        // Empty the draw call queue
+        // 1. Group draw calls into batches based on their material.
+        let mut batches: HashMap<Material, Vec<Arc<Mesh>>> = HashMap::new();
         while let Some(draw_call) = world.write_resource::<VecDeque<DrawCall>>().pop_front() {
-            // Perform the draw call if the associated mesh could be found
-            if let Some((vertex_buffer, index_buffer)) = self.mesh_register.get(&draw_call.mesh_id)
-            {
-                target
-                    .draw(
-                        vertex_buffer,
-                        index_buffer,
-                        &self.shader_program,
-                        &uniform! {
-                            model_matrix: draw_call.model_matrix,
-                            tex: Sampler(&self.texture, SamplerBehavior {
-                                minify_filter: MinifySamplerFilter::NearestMipmapLinear,
-                                magnify_filter: MagnifySamplerFilter::Nearest,
-                                ..Default::default()
-                            }),
-                            global_render_uniforms: &self.global_uniform_buffer
-                        },
-                        &params,
-                    )
-                    .unwrap();
+            batches
+                .entry(draw_call.material)
+                .or_insert(vec![])
+                .push(draw_call.mesh);
+        }
+
+        // 2. Add any unseen meshes to the batch for that material.
+        for (mat, meshes) in batches {
+            // Get existing batch or create a new one
+            let batch = self
+                .batches
+                .entry(mat)
+                .or_insert(Batch::new(self.display.clone()).unwrap());
+
+            // Add meshes to the batch
+            for mesh in meshes {
+                batch.add_mesh(mesh);
             }
+        }
+
+        // 3. Draw batches -- one draw call per batch.
+        for (material, batch) in &self.batches {
+            target
+                .draw(
+                    &batch.vbo,
+                    &batch.ibo,
+                    &self.shader_program,
+                    &uniform! {
+                        model_matrix: [
+                            [ 1.0, 0.0, 0.0, 0.0],
+                            [ 0.0, 1.0, 0.0, 0.0],
+                            [ 0.0, 0.0, 1.0, 0.0],
+                            [ 0.0, 0.0, 0.0, 1.0_f32],
+                        ],
+                        tex: Sampler(&self.texture, SamplerBehavior {
+                            minify_filter: MinifySamplerFilter::NearestMipmapLinear,
+                            magnify_filter: MagnifySamplerFilter::Nearest,
+                            ..Default::default()
+                        }),
+                        global_render_uniforms: &self.global_uniform_buffer
+                    },
+                    &params,
+                )
+                .unwrap();
         }
 
         target.finish().unwrap();
