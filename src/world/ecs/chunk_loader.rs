@@ -1,6 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
-use cgmath::{One, Quaternion, Vector2, Vector3, Zero};
+use cgmath::{num_traits::Pow, One, Quaternion, Vector2, Vector3, Zero};
 use specs::prelude::*;
 
 use crate::{render::RenderMesh, vector2, vector3};
@@ -39,9 +39,15 @@ impl<'a> System<'a> for ChunkLoaderSystem {
             let camera_chunk = game_world.world_to_chunk(transform.position);
 
             // Generate all surrounding chunks and then create entities for them.
-            'outer: for x in -5..5 {
-                for z in -5..5 {
-                    let chunk_position = camera_chunk + vector2!(x, z);
+
+            let r = 16;
+            'outer: for x in camera_chunk.x - r..camera_chunk.x + r {
+                for z in camera_chunk.y - r..camera_chunk.y + r {
+                    if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {
+                        continue;
+                    }
+
+                    let chunk_position = vector2!(x, z);
 
                     // Skip any chunks we've already loaded or haven't been generated yet
                     if self.loaded_chunks.contains(&chunk_position) {
