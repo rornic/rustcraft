@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::thread;
 
 use cgmath::{Vector2, Vector3};
 use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
@@ -13,7 +12,7 @@ pub mod ecs;
 pub const CHUNK_SIZE: usize = 16;
 type Chunk = Box<[[[bool; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
-const WORLD_HEIGHT: usize = 255;
+const WORLD_HEIGHT: usize = 128;
 
 #[derive(Default)]
 pub struct World {
@@ -22,32 +21,17 @@ pub struct World {
 }
 
 impl World {
-    pub fn new() -> World {
-        let world_generator = WorldGenerator {};
-
-        let mut world = World {
-            generator: world_generator,
-            chunks: HashMap::new(),
-        };
-
-        for x in 0..10 {
-            for z in 0..10 {
-                world.generate_chunk(vector2!(x, z));
-            }
-        }
-
-        world
-    }
-
-    /// Generates a chunk at a given chunk coordinate.
+    /// Generates a chunk at a given chunk coordinate and returns a reference to it.
     ///
-    /// Does nothing if this chunk has already been generated.
-    pub fn generate_chunk(&mut self, chunk_position: Vector2<i32>) -> &Chunk {
+    /// Returns `None` if this chunk has already been generated.
+    pub fn generate_chunk(&mut self, chunk_position: Vector2<i32>) -> Option<&Chunk> {
         if !self.chunks.contains_key(&chunk_position) {
             let chunk = self.generator.generate_chunk(chunk_position);
             self.chunks.insert(chunk_position, chunk);
+            self.chunks.get(&chunk_position)
+        } else {
+            None
         }
-        self.chunks.get(&chunk_position).unwrap()
     }
 
     /// Generates a `Mesh` for a chunk.
@@ -55,20 +39,15 @@ impl World {
         let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];
 
-        let mut triangle_start: u32 = 0;
         let mut add_vertices = |vs: &[Vertex], position: Vector3<f32>| {
-            vertices.append(
-                &mut vs
-                    .iter()
-                    .map(|v| {
-                        vertex!(
+            let triangle_start: u32 = vertices.len() as u32;
+            vertices.extend(&mut vs.iter().map(|v| {
+                vertex!(
                                     position: v.position + position,
                                     normal: v.normal,
                                     uv: v.uv)
-                    })
-                    .collect(),
-            );
-            indices.append(&mut vec![
+            }));
+            indices.extend(vec![
                 triangle_start,
                 triangle_start + 1,
                 triangle_start + 2,
@@ -76,7 +55,6 @@ impl World {
                 triangle_start + 1,
                 triangle_start + 3,
             ]);
-            triangle_start += 4;
         };
 
         let cube = super::render::mesh::primitives::cube();
@@ -89,45 +67,76 @@ impl World {
             &cube.vertices[20..24], // bottom
         ];
 
+        let chunk = self.chunk(chunk_pos).unwrap();
+        let adjacent_chunks = [
+            self.chunk(chunk_pos + vector2!(0, 1)),
+            self.chunk(chunk_pos + vector2!(0, -1)),
+            self.chunk(chunk_pos + vector2!(1, 0)),
+            self.chunk(chunk_pos + vector2!(-1, 0)),
+        ];
+
         for x in 0..CHUNK_SIZE {
-            for y in 0..WORLD_HEIGHT {
-                for z in 0..CHUNK_SIZE {
-                    let position = vector3!(x as f32, y as f32, z as f32);
+            for z in 0..CHUNK_SIZE {
+                for y in 0..WORLD_HEIGHT {
+                    if !chunk[x][y][z] {
+                        continue;
+                    }
+
                     let world_position = vector3!(
                         (chunk_pos.x * CHUNK_SIZE as i32 + x as i32) as f32,
                         y as f32,
                         (chunk_pos.y * CHUNK_SIZE as i32 + z as i32) as f32
                     );
 
-                    if !self.block_at(world_position) {
-                        continue;
-                    }
+                    let front = z
+                        .checked_sub(1)
+                        .and_then(|z| self.chunk_block(chunk, vector3!(x, y, z)))
+                        .or(adjacent_chunks[1]
+                            .and_then(|c| self.chunk_block(c, vector3!(x, y, CHUNK_SIZE - 1))));
+                    let back =
+                        self.chunk_block(chunk, vector3!(x, y, z + 1))
+                            .or(adjacent_chunks[0]
+                                .and_then(|c| self.chunk_block(c, vector3!(x, y, 0))));
+                    let left = x
+                        .checked_sub(1)
+                        .and_then(|x| self.chunk_block(chunk, vector3!(x, y, z)))
+                        .or(adjacent_chunks[3]
+                            .and_then(|c| self.chunk_block(c, vector3!(CHUNK_SIZE - 1, y, z))));
+                    let right =
+                        self.chunk_block(chunk, vector3!(x + 1, y, z))
+                            .or(adjacent_chunks[2]
+                                .and_then(|c| self.chunk_block(c, vector3!(0, y, z))));
+                    let top = self.chunk_block(chunk, vector3!(x, y + 1, z));
+                    let bottom = y
+                        .checked_sub(1)
+                        .and_then(|y| self.chunk_block(chunk, vector3!(x, y, z)));
 
                     // Front faces
-                    if !self.block_at(world_position + vector3!(0.0, 0.0, -1.0)) {
-                        add_vertices(&mut face_vertices[0].clone(), world_position);
+                    if let Some(false) = front {
+                        add_vertices(&face_vertices[0], world_position);
                     }
+
                     // Back faces
-                    if !self.block_at(world_position + vector3!(0.0, 0.0, 1.0)) {
-                        add_vertices(&mut face_vertices[3].clone(), world_position);
+                    if let Some(false) = back {
+                        add_vertices(face_vertices[3], world_position);
                     }
 
                     // Left faces
-                    if !self.block_at(world_position + vector3!(-1.0, 0.0, 0.0)) {
-                        add_vertices(&mut face_vertices[2].clone(), world_position);
+                    if let Some(false) = left {
+                        add_vertices(face_vertices[2], world_position);
                     }
                     // Right faces
-                    if !self.block_at(world_position + vector3!(1.0, 0.0, 0.0)) {
-                        add_vertices(&mut face_vertices[1].clone(), world_position);
+                    if let Some(false) = right {
+                        add_vertices(face_vertices[1], world_position);
                     }
 
                     // Bottom faces
-                    if !self.block_at(world_position + vector3!(0.0, -1.0, 0.0)) {
-                        add_vertices(&mut face_vertices[5].clone(), world_position);
+                    if let Some(false) = bottom {
+                        add_vertices(face_vertices[5], world_position);
                     }
                     // Top faces
-                    if !self.block_at(world_position + vector3!(0.0, 1.0, 0.0)) {
-                        add_vertices(&mut face_vertices[4].clone(), world_position);
+                    if let Some(false) = top {
+                        add_vertices(face_vertices[4], world_position);
                     }
                 }
             }
@@ -142,6 +151,16 @@ impl World {
         } else {
             false
         }
+    }
+
+    fn chunk(&self, chunk_position: Vector2<i32>) -> Option<&Chunk> {
+        self.chunks.get(&chunk_position)
+    }
+
+    fn chunk_block<'a>(&self, chunk: &'a Chunk, block: Vector3<usize>) -> Option<&'a bool> {
+        chunk
+            .get(block.x)
+            .and_then(|c| c.get(block.y).and_then(|c| c.get(block.z)))
     }
 
     /// Takes a position in the world and returns the chunk that it's in.
@@ -179,15 +198,16 @@ impl WorldGenerator {
 
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
-                let (world_x, world_y, world_z) = (
+                let (world_x, _, world_z) = (
                     chunk_pos.x * CHUNK_SIZE as i32 + x as i32,
                     0,
                     chunk_pos.y * CHUNK_SIZE as i32 + z as i32,
                 );
                 let height = ((0.5 + noise.get([world_x as f64 / 128.0, world_z as f64 / 128.0]))
-                    * 128.0)
+                    * WORLD_HEIGHT as f64)
                     .round() as usize;
 
+                let height = height.min(WORLD_HEIGHT - 1);
                 for y in 0..height {
                     blocks[x][y][z] = true;
                 }

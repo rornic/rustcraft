@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use glium::glutin::event::{DeviceEvent, ElementState, KeyboardInput, VirtualKeyCode};
+use glium::glutin::event::{ElementState, KeyboardInput, VirtualKeyCode};
 
 /// Represents the state of all input peripherals.
 ///
@@ -11,15 +11,20 @@ pub struct Input {
     pub mouse: Mouse,
 }
 
+pub enum InputEvent {
+    Keyboard(KeyboardInput),
+    MouseMotion { delta: (f64, f64) },
+}
+
 impl Input {
     /// Updates the input, resetting any values if they should only be set on a per-frame basis.
     pub fn update(&mut self) {
         self.mouse.motion = (0.0, 0.0);
     }
 
-    pub fn process_event(&mut self, event: DeviceEvent) {
+    pub fn process_event(&mut self, event: InputEvent) {
         match event {
-            DeviceEvent::Key(KeyboardInput {
+            InputEvent::Keyboard(KeyboardInput {
                 virtual_keycode: Some(code),
                 state,
                 ..
@@ -27,7 +32,7 @@ impl Input {
                 ElementState::Pressed => self.keyboard.press(code),
                 ElementState::Released => self.keyboard.release(code),
             },
-            DeviceEvent::MouseMotion { delta: motion } => self.mouse.motion(motion),
+            InputEvent::MouseMotion { delta } => self.mouse.motion(delta),
             _ => (),
         }
     }

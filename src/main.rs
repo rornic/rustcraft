@@ -1,11 +1,12 @@
 #[macro_use]
 extern crate glium;
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
-use input::Input;
+use input::{Input, InputEvent};
 use render::RenderMesh;
 use render::Renderer;
 use render::RenderingSystem;
@@ -39,7 +40,7 @@ fn init_display() -> (EventLoop<()>, Display) {
     (event_loop, display)
 }
 
-fn process_event(input: &mut Input, ev: Event<()>, control_flow: &mut ControlFlow) {
+fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputEvent> {
     use glium::glutin;
 
     // Handle window events
@@ -47,13 +48,19 @@ fn process_event(input: &mut Input, ev: Event<()>, control_flow: &mut ControlFlo
         glutin::event::Event::WindowEvent { event, .. } => match event {
             glutin::event::WindowEvent::CloseRequested => {
                 *control_flow = glutin::event_loop::ControlFlow::Exit;
-                return;
+                None
             }
-            _ => (),
+            _ => None,
         },
-        glutin::event::Event::DeviceEvent { event, .. } => input.process_event(event),
-        _ => (),
-    };
+        glutin::event::Event::DeviceEvent { event, .. } => match event {
+            glutin::event::DeviceEvent::Key(ki) => Some(InputEvent::Keyboard(ki)),
+            glutin::event::DeviceEvent::MouseMotion { delta: d } => {
+                Some(InputEvent::MouseMotion { delta: d })
+            }
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn main() {
@@ -70,32 +77,45 @@ fn main() {
     world.insert(DeltaTime(0.0));
     world.insert(ElapsedTime(0.0));
 
-    let game_world = world::World::new();
-
-    let mut dispatcher: Dispatcher = DispatcherBuilder::new()
-        .with_thread_local(RenderingSystem)
+    let mut dispatcher = DispatcherBuilder::new()
+        .with(RenderingSystem, "rendering", &[])
         .with(CameraSystem::new(&mut world), "camera", &[])
-        .with(ChunkLoaderSystem::new(), "chunk_loader", &[])
         .with(ChunkGeneratorSystem::new(), "chunk_generator", &[])
-        .build();
-    dispatcher.setup(&mut world);
+        .with(
+            ChunkLoaderSystem::new(),
+            "chunk_loader",
+            &["chunk_generator"],
+        )
+        .build_async(world);
+    dispatcher.setup();
+
+    let mut event_buffer = VecDeque::new();
 
     event_loop.run(move |ev, _, control_flow| match ev {
         glium::glutin::event::Event::MainEventsCleared => {
             let frame_start = Instant::now();
 
-            dispatcher.run_now(&world);
-            world.maintain();
+            dispatcher.dispatch();
 
-            renderer.render(&mut world);
+            let world = dispatcher.world_mut();
+            world.write_resource::<Input>().update();
+            while let Some(ie) = event_buffer.pop_front() {
+                world.write_resource::<Input>().process_event(ie);
+            }
+
+            renderer.render(world);
 
             let delta_time = (Instant::now() - frame_start).as_secs_f32();
             world.write_resource::<DeltaTime>().0 = delta_time;
             world.write_resource::<ElapsedTime>().0 += delta_time;
 
-            world.write_resource::<Input>().update();
+            dispatcher.wait();
         }
-        ev => process_event(&mut world.write_resource::<Input>(), ev, control_flow),
+        ev => {
+            if let Some(e) = process_event(ev, control_flow) {
+                event_buffer.push_back(e);
+            }
+        }
     });
 }
 

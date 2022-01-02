@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, VecDeque},
-    rc::Rc,
     sync::Arc,
 };
 
@@ -9,9 +8,8 @@ use glium::{
     texture::SrgbTexture2d,
     uniforms::{
         MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
-        Uniforms,
     },
-    Display, DrawParameters, Frame, IndexBuffer, Program, Surface, VertexBuffer,
+    Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, World, WorldExt, Write};
 use uuid::Uuid;
@@ -133,7 +131,6 @@ pub struct DrawCall {
 
 /// Represents a batch of meshes that can be rendered in a single draw call.
 pub struct Batch {
-    display: Display,
     meshes: HashMap<Uuid, Arc<Mesh>>,
     vbo: VertexBuffer<Vertex>,
     ibo: IndexBuffer<u32>,
@@ -143,10 +140,9 @@ pub struct Batch {
 
 impl Batch {
     pub fn new(display: Display) -> Result<Batch, MeshLoadError> {
-        let vbo = VertexBuffer::empty_dynamic(&display, 1000000)?;
-        let ibo = IndexBuffer::empty_dynamic(&display, PrimitiveType::TrianglesList, 1000000)?;
+        let vbo = VertexBuffer::empty_dynamic(&display, 8000000)?;
+        let ibo = IndexBuffer::empty_dynamic(&display, PrimitiveType::TrianglesList, 8000000)?;
         Ok(Batch {
-            display: display,
             meshes: HashMap::new(),
             vbo,
             ibo,
@@ -175,8 +171,6 @@ impl Batch {
                 .unwrap()
                 .write(&mesh.vertices);
             self.vbo_index += mesh.vertices.len();
-
-            println!("{},{}", self.ibo_index, self.vbo_index);
 
             self.meshes.insert(mesh.mesh_id, mesh);
         }
@@ -286,7 +280,7 @@ impl Renderer {
         }
 
         // 3. Draw batches -- one draw call per batch.
-        for (material, batch) in &self.batches {
+        for (_, batch) in &self.batches {
             target
                 .draw(
                     &batch.vbo,

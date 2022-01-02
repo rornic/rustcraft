@@ -1,5 +1,4 @@
 use cgmath::{Vector2, Vector3};
-use glium::{Display, IndexBuffer, VertexBuffer};
 use uuid::Uuid;
 
 pub mod primitives;

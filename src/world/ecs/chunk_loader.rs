@@ -1,13 +1,9 @@
 use std::{collections::HashSet, sync::Arc};
 
 use cgmath::{One, Quaternion, Vector2, Vector3, Zero};
-use glium::Display;
 use specs::prelude::*;
 
-use crate::{
-    render::{RenderMesh, Renderer},
-    vector2, vector3,
-};
+use crate::{render::RenderMesh, vector2, vector3};
 
 use super::{camera::Camera, Transform};
 
@@ -39,30 +35,28 @@ impl<'a> System<'a> for ChunkLoaderSystem {
     ) {
         let mut new_chunks = vec![];
 
-        for (camera, transform) in (&cameras, &transforms).join() {
+        for (_, transform) in (&cameras, &transforms).join() {
             let camera_chunk = game_world.world_to_chunk(transform.position);
 
             // Generate all surrounding chunks and then create entities for them.
-            let range = [-3, -2, -1, 0, 1, 2, 3];
-            'outer: for x in range {
-                for z in range {
+            'outer: for x in -5..5 {
+                for z in -5..5 {
                     let chunk_position = camera_chunk + vector2!(x, z);
 
                     // Skip any chunks we've already loaded or haven't been generated yet
-                    if self.loaded_chunks.contains(&chunk_position)
-                        || !game_world.chunks.contains_key(&chunk_position)
-                    {
+                    if self.loaded_chunks.contains(&chunk_position) {
                         continue;
                     }
 
-                    // Create a mesh for the chunk
+                    // 1. Ensure this chunk and all its surrounding chunks have been generated.
+                    for [x, z] in [[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0]] {
+                        game_world.generate_chunk(chunk_position + vector2!(x, z));
+                    }
+
+                    // 2. Create a mesh for this chunk.
                     let mesh = game_world.generate_chunk_mesh(chunk_position);
 
-                    let position = {
-                        let p = chunk_position * crate::world::CHUNK_SIZE as i32;
-                        vector3!(p.x as f32, 0.0, p.y as f32)
-                    };
-
+                    // 3. Create a new entity for this chunk.
                     new_chunks.push((
                         Transform::new(Vector3::zero(), vector3!(1.0, 1.0, 1.0), Quaternion::one()),
                         RenderMesh::new(Arc::new(mesh)),
@@ -75,7 +69,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
         }
 
         for (t, r) in new_chunks.into_iter() {
-            let entity = entities
+            entities
                 .build_entity()
                 .with(t, &mut transforms)
                 .with(r, &mut render_meshes)
@@ -93,6 +87,7 @@ impl ChunkGeneratorSystem {
     }
 }
 
+const CHUNKS_PER_FRAME: u32 = 25;
 impl<'a> System<'a> for ChunkGeneratorSystem {
     type SystemData = (
         ReadStorage<'a, Camera>,
@@ -101,17 +96,22 @@ impl<'a> System<'a> for ChunkGeneratorSystem {
     );
 
     fn run(&mut self, (cameras, transforms, mut game_world): Self::SystemData) {
-        for (camera, transform) in (&cameras, &transforms).join() {
+        for (_, transform) in (&cameras, &transforms).join() {
             let camera_chunk = game_world.world_to_chunk(transform.position);
 
-            // Generate all surrounding chunks and then create entities for them.
-            let range = [-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7];
-            for x in range {
-                for z in range {
-                    let chunk_position = camera_chunk + vector2!(x, z);
-                    game_world.generate_chunk(chunk_position);
-                }
-            }
+            // let mut chunk_count = 0;
+            // // Generate all surrounding chunks and then create entities for them.
+            // for x in -50..50 {
+            //     for z in -50..50 {
+            //         let chunk_position = camera_chunk + vector2!(x, z);
+            //         if let Some(_) = game_world.generate_chunk(chunk_position) {
+            //             chunk_count += 1;
+            //             if chunk_count >= CHUNKS_PER_FRAME {
+            //                 return;
+            //             }
+            //         }
+            //     }
+            // }
         }
     }
 }
