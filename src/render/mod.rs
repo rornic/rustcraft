@@ -131,21 +131,28 @@ pub struct DrawCall {
 
 /// Represents a batch of meshes that can be rendered in a single draw call.
 pub struct Batch {
+    display: Display,
     meshes: HashMap<Uuid, Arc<Mesh>>,
-    vbo: VertexBuffer<Vertex>,
-    ibo: IndexBuffer<u32>,
+    vbos: Vec<VertexBuffer<Vertex>>,
+    ibos: Vec<IndexBuffer<u32>>,
     vbo_index: usize,
     ibo_index: usize,
 }
 
+const MAX_BATCH_VERTICES: usize = 1000000;
 impl Batch {
     pub fn new(display: Display) -> Result<Batch, MeshLoadError> {
-        let vbo = VertexBuffer::empty_dynamic(&display, 8000000)?;
-        let ibo = IndexBuffer::empty_dynamic(&display, PrimitiveType::TrianglesList, 8000000)?;
+        let vbo = VertexBuffer::empty_dynamic(&display, MAX_BATCH_VERTICES)?;
+        let ibo = IndexBuffer::empty_dynamic(
+            &display,
+            PrimitiveType::TrianglesList,
+            MAX_BATCH_VERTICES * 3,
+        )?;
         Ok(Batch {
+            display,
             meshes: HashMap::new(),
-            vbo,
-            ibo,
+            vbos: vec![vbo],
+            ibos: vec![ibo],
             vbo_index: 0,
             ibo_index: 0,
         })
@@ -155,24 +162,49 @@ impl Batch {
     pub fn add_mesh(&mut self, mesh: Arc<Mesh>) {
         // Only add the mesh if we haven't already seen it
         if !self.meshes.contains_key(&mesh.mesh_id) {
+            self.resize(mesh.vertices.len());
+
             let is = mesh
                 .indices
                 .iter()
                 .map(|i| *i + self.vbo_index as u32)
                 .collect::<Vec<u32>>();
-            self.ibo
-                .slice_mut(self.ibo_index..self.ibo_index + mesh.indices.len())
+
+            let vbo = self.vbos.last_mut().unwrap();
+            let ibo = self.ibos.last_mut().unwrap();
+
+            ibo.slice_mut(self.ibo_index..self.ibo_index + mesh.indices.len())
                 .unwrap()
                 .write(&is);
             self.ibo_index += is.len();
 
-            self.vbo
-                .slice_mut(self.vbo_index..self.vbo_index + mesh.vertices.len())
+            vbo.slice_mut(self.vbo_index..self.vbo_index + mesh.vertices.len())
                 .unwrap()
                 .write(&mesh.vertices);
             self.vbo_index += mesh.vertices.len();
 
             self.meshes.insert(mesh.mesh_id, mesh);
+        }
+    }
+
+    /// Checks if this `Batch` can fit new vertices, creating new buffers if it cannot.
+    fn resize(&mut self, vs: usize) {
+        let vbo = self.vbos.last().unwrap();
+
+        if (vbo.len() - self.vbo_index) < vs {
+            self.vbos
+                .push(VertexBuffer::empty_dynamic(&self.display, MAX_BATCH_VERTICES).unwrap());
+            self.vbo_index = 0;
+            self.ibos.push(
+                IndexBuffer::empty_dynamic(
+                    &self.display,
+                    PrimitiveType::TrianglesList,
+                    MAX_BATCH_VERTICES * 3,
+                )
+                .unwrap(),
+            );
+            self.ibo_index = 0;
+            println!("New batch");
         }
     }
 }
@@ -281,28 +313,30 @@ impl Renderer {
 
         // 3. Draw batches -- one draw call per batch.
         for (_, batch) in &self.batches {
-            target
-                .draw(
-                    &batch.vbo,
-                    &batch.ibo,
-                    &self.shader_program,
-                    &uniform! {
-                        model_matrix: [
-                            [ 1.0, 0.0, 0.0, 0.0],
-                            [ 0.0, 1.0, 0.0, 0.0],
-                            [ 0.0, 0.0, 1.0, 0.0],
-                            [ 0.0, 0.0, 0.0, 1.0_f32],
-                        ],
-                        tex: Sampler(&self.texture, SamplerBehavior {
-                            minify_filter: MinifySamplerFilter::NearestMipmapLinear,
-                            magnify_filter: MagnifySamplerFilter::Nearest,
-                            ..Default::default()
-                        }),
-                        global_render_uniforms: &self.global_uniform_buffer
-                    },
-                    &params,
-                )
-                .unwrap();
+            for i in 0..batch.vbos.len() {
+                target
+                    .draw(
+                        &batch.vbos[i],
+                        &batch.ibos[i],
+                        &self.shader_program,
+                        &uniform! {
+                            model_matrix: [
+                                [ 1.0, 0.0, 0.0, 0.0],
+                                [ 0.0, 1.0, 0.0, 0.0],
+                                [ 0.0, 0.0, 1.0, 0.0],
+                                [ 0.0, 0.0, 0.0, 1.0_f32],
+                            ],
+                            tex: Sampler(&self.texture, SamplerBehavior {
+                                minify_filter: MinifySamplerFilter::NearestMipmapLinear,
+                                magnify_filter: MagnifySamplerFilter::Nearest,
+                                ..Default::default()
+                            }),
+                            global_render_uniforms: &self.global_uniform_buffer
+                        },
+                        &params,
+                    )
+                    .unwrap();
+            }
         }
 
         target.finish().unwrap();
