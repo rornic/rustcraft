@@ -182,7 +182,6 @@ impl Batch {
                 .unwrap()
                 .write(&mesh.vertices);
             self.vbo_index += mesh.vertices.len();
-
             self.meshes.insert(mesh.mesh_id, mesh);
         }
     }

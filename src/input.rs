@@ -11,6 +11,7 @@ pub struct Input {
     pub mouse: Mouse,
 }
 
+#[derive(Debug)]
 pub enum InputEvent {
     Keyboard(KeyboardInput),
     MouseMotion { delta: (f64, f64) },
@@ -22,17 +23,17 @@ impl Input {
         self.mouse.motion = (0.0, 0.0);
     }
 
-    pub fn process_event(&mut self, event: InputEvent) {
+    pub fn process_event(&mut self, event: &InputEvent) {
         match event {
             InputEvent::Keyboard(KeyboardInput {
                 virtual_keycode: Some(code),
                 state,
                 ..
             }) => match state {
-                ElementState::Pressed => self.keyboard.press(code),
-                ElementState::Released => self.keyboard.release(code),
+                ElementState::Pressed => self.keyboard.press(*code),
+                ElementState::Released => self.keyboard.release(*code),
             },
-            InputEvent::MouseMotion { delta } => self.mouse.motion(delta),
+            InputEvent::MouseMotion { delta } => self.mouse.motion(*delta),
             _ => (),
         }
     }

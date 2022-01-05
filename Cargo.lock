@@ -355,18 +355,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
 
 [[package]]
-name = "cube-test"
-version = "0.1.0"
-dependencies = [
- "cgmath",
- "glium",
- "image",
- "noise",
- "specs",
- "uuid",
-]
-
-[[package]]
 name = "darling"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1222,6 +1210,18 @@ name = "rustc-demangle"
 version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ef03e0a2b150c7a90d01faf6254c9c48a41e95fb2a8c2ac1c6f0d2b9aefc342"
+
+[[package]]
+name = "rustcraft"
+version = "0.1.0"
+dependencies = [
+ "cgmath",
+ "glium",
+ "image",
+ "noise",
+ "specs",
+ "uuid",
+]
 
 [[package]]
 name = "scoped-tls"

@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate glium;
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
@@ -34,7 +34,6 @@ fn init_display() -> (EventLoop<()>, Display) {
     let wb = glutin::window::WindowBuilder::new();
     let cb = glutin::ContextBuilder::new()
         .with_depth_buffer(24)
-        .with_vsync(true)
         .with_multisampling(8);
     let display = glium::Display::new(wb, cb, &event_loop).unwrap();
     (event_loop, display)
@@ -86,36 +85,33 @@ fn main() {
             "chunk_loader",
             &["chunk_generator"],
         )
-        .build_async(world);
-    dispatcher.setup();
+        .build();
+    dispatcher.setup(&mut world);
 
-    let mut event_buffer = VecDeque::new();
+    // let mut event_buffer = VecDeque::new();
 
-    event_loop.run(move |ev, _, control_flow| match ev {
-        glium::glutin::event::Event::MainEventsCleared => {
-            let frame_start = Instant::now();
+    let mut last_frame = Instant::now();
+    event_loop.run(move |ev, _, control_flow| {
+        *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(
+            last_frame + std::time::Duration::from_nanos(16_666_667),
+        );
+        match ev {
+            glium::glutin::event::Event::MainEventsCleared => {
+                renderer.render(&mut world);
 
-            dispatcher.dispatch();
-
-            let world = dispatcher.world_mut();
-            world.write_resource::<Input>().update();
-            while let Some(ie) = event_buffer.pop_front() {
-                world.write_resource::<Input>().process_event(ie);
+                let delta_time = (Instant::now() - last_frame).as_secs_f32();
+                last_frame = Instant::now();
+                world.write_resource::<DeltaTime>().0 = delta_time;
+                world.write_resource::<ElapsedTime>().0 += delta_time;
+                dispatcher.dispatch(&mut world);
+                world.write_resource::<Input>().update();
             }
-
-            renderer.render(world);
-
-            let delta_time = (Instant::now() - frame_start).as_secs_f32();
-            world.write_resource::<DeltaTime>().0 = delta_time;
-            world.write_resource::<ElapsedTime>().0 += delta_time;
-
-            dispatcher.wait();
-        }
-        ev => {
-            if let Some(e) = process_event(ev, control_flow) {
-                event_buffer.push_back(e);
+            ev => {
+                if let Some(e) = process_event(ev, control_flow) {
+                    world.write_resource::<Input>().process_event(&e);
+                }
             }
-        }
+        };
     });
 }
 

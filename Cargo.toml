@@ -1,5 +1,5 @@
 [package]
-name = "cube-test"
+name = "rustcraft"
 version = "0.1.0"
 authors = ["Rory N <rorynickolls@gmail.com>"]
 edition = "2018"

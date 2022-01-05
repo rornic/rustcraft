@@ -40,7 +40,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
 
             // Generate all surrounding chunks and then create entities for them.
 
-            let r = 16;
+            let r = 8;
             'outer: for x in camera_chunk.x - r..camera_chunk.x + r {
                 for z in camera_chunk.y - r..camera_chunk.y + r {
                     if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {
