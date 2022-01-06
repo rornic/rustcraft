@@ -107,7 +107,7 @@ impl<'a> System<'a> for RenderingSystem {
     /// Produce a `DrawCall` for every entity with both a `Transform` and `RenderMesh` component. TODO: Batch entities using the same mesh into a single `DrawCall`.
     fn run(&mut self, (transforms, render_meshes, mut draw_calls): Self::SystemData) {
         for (transform, mesh_data) in (&transforms, &render_meshes).join() {
-            let model_matrix = transform.matrix();
+            let _ = transform.matrix();
 
             draw_calls.push_back(DrawCall {
                 material: Material {
@@ -160,6 +160,10 @@ impl Batch {
 
     /// Adds a `Mesh` into this batch. Assumes that the mesh vertices are relative to the world origin (0,0,0)
     pub fn add_mesh(&mut self, mesh: Arc<Mesh>) {
+        if mesh.vertices.len() == 0 || mesh.indices.len() == 0 {
+            return;
+        }
+
         // Only add the mesh if we haven't already seen it
         if !self.meshes.contains_key(&mesh.mesh_id) {
             self.resize(mesh.vertices.len());
@@ -203,7 +207,6 @@ impl Batch {
                 .unwrap(),
             );
             self.ibo_index = 0;
-            println!("New batch");
         }
     }
 }

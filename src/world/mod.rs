@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use cgmath::{Vector2, Vector3};
 use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
@@ -18,6 +19,7 @@ const WORLD_HEIGHT: usize = 128;
 pub struct World {
     generator: WorldGenerator,
     chunks: HashMap<Vector2<i32>, Chunk>,
+    chunk_meshes: HashMap<Vector2<i32>, Arc<Mesh>>,
 }
 
 impl World {
@@ -32,6 +34,16 @@ impl World {
         } else {
             None
         }
+    }
+
+    pub fn is_chunk_generated(&self, chunk_position: Vector2<i32>) -> bool {
+        self.chunks.get(&chunk_position).is_some()
+    }
+
+    pub fn chunk_mesh(&mut self, chunk_position: Vector2<i32>) -> Arc<Mesh> {
+        let mesh = self.generate_chunk_mesh(chunk_position);
+        self.chunk_meshes.insert(chunk_position, Arc::new(mesh));
+        self.chunk_meshes.get(&chunk_position).unwrap().clone()
     }
 
     /// Generates a `Mesh` for a chunk.
@@ -193,7 +205,7 @@ impl WorldGenerator {
         let perlin = Perlin::new().set_seed(1);
         let perlin2 = Perlin::new().set_seed(2);
         let simplex = OpenSimplex::new().set_seed(3);
-        let mul = Add::new(&perlin2, &simplex);
+        let mul = Multiply::new(&perlin2, &simplex);
         let noise = Multiply::new(&mul, &perlin);
 
         for x in 0..CHUNK_SIZE {
@@ -203,11 +215,16 @@ impl WorldGenerator {
                     0,
                     chunk_pos.y * CHUNK_SIZE as i32 + z as i32,
                 );
-                let height = ((0.5 + noise.get([world_x as f64 / 128.0, world_z as f64 / 128.0]))
+                let height = ((0.5
+                    + noise.get([
+                        world_x as f64 / WORLD_HEIGHT as f64 / 2.0,
+                        world_z as f64 / WORLD_HEIGHT as f64 / 2.0,
+                    ]))
                     * WORLD_HEIGHT as f64)
                     .round() as usize;
 
-                let height = height.min(WORLD_HEIGHT - 1);
+                // Height must be at least 1!
+                let height = height.min(WORLD_HEIGHT - 1).max(1);
                 for y in 0..height {
                     blocks[x][y][z] = true;
                 }

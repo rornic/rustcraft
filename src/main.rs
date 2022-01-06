@@ -1,7 +1,6 @@
 #[macro_use]
 extern crate glium;
-use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
@@ -22,7 +21,7 @@ mod util;
 mod world;
 
 use world::ecs::camera::{Camera, CameraSystem};
-use world::ecs::chunk_loader::{ChunkGeneratorSystem, ChunkLoaderSystem};
+use world::ecs::chunk_loader::ChunkLoaderSystem;
 use world::ecs::Transform;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
@@ -34,6 +33,7 @@ fn init_display() -> (EventLoop<()>, Display) {
     let wb = glutin::window::WindowBuilder::new();
     let cb = glutin::ContextBuilder::new()
         .with_depth_buffer(24)
+        .with_vsync(true)
         .with_multisampling(8);
     let display = glium::Display::new(wb, cb, &event_loop).unwrap();
     (event_loop, display)
@@ -79,12 +79,7 @@ fn main() {
     let mut dispatcher = DispatcherBuilder::new()
         .with(RenderingSystem, "rendering", &[])
         .with(CameraSystem::new(&mut world), "camera", &[])
-        .with(ChunkGeneratorSystem::new(), "chunk_generator", &[])
-        .with(
-            ChunkLoaderSystem::new(),
-            "chunk_loader",
-            &["chunk_generator"],
-        )
+        .with(ChunkLoaderSystem::new(), "chunk_loader", &[])
         .build();
     dispatcher.setup(&mut world);
 
