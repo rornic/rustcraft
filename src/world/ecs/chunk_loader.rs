@@ -42,7 +42,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
 
             let r = 16;
             'outer: for x in camera_chunk.x - r..camera_chunk.x + r {
-                for z in camera_chunk.y - r..camera_chunk.y + r {
+                'inner: for z in camera_chunk.y - r..camera_chunk.y + r {
                     if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {
                         continue;
                     }
@@ -71,7 +71,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
                     ));
 
                     self.loaded_chunks.insert(chunk_position);
-                    break 'outer;
+                    break 'inner;
                 }
             }
         }

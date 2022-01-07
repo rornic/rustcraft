@@ -41,8 +41,10 @@ impl World {
     }
 
     pub fn chunk_mesh(&mut self, chunk_position: Vector2<i32>) -> Arc<Mesh> {
-        let mesh = self.generate_chunk_mesh(chunk_position);
-        self.chunk_meshes.insert(chunk_position, Arc::new(mesh));
+        if !self.chunk_meshes.contains_key(&chunk_position) {
+            let mesh = self.generate_chunk_mesh(chunk_position);
+            self.chunk_meshes.insert(chunk_position, Arc::new(mesh));
+        }
         self.chunk_meshes.get(&chunk_position).unwrap().clone()
     }
 

@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{vector3, world::ecs::Transform};
 use cgmath::{prelude::*, Vector3};
 
-use self::mesh::{Mesh, MeshLoadError, Vertex};
+use self::mesh::{Mesh, MeshBuffer, MeshBufferError, Vertex};
 
 pub mod mesh;
 pub mod shader;
@@ -107,13 +107,14 @@ impl<'a> System<'a> for RenderingSystem {
     /// Produce a `DrawCall` for every entity with both a `Transform` and `RenderMesh` component. TODO: Batch entities using the same mesh into a single `DrawCall`.
     fn run(&mut self, (transforms, render_meshes, mut draw_calls): Self::SystemData) {
         for (transform, mesh_data) in (&transforms, &render_meshes).join() {
-            let _ = transform.matrix();
+            let model_matrix = transform.matrix();
 
             draw_calls.push_back(DrawCall {
                 material: Material {
                     name: "default".to_string(),
                 },
                 mesh: mesh_data.mesh.clone(),
+                model_matrix: model_matrix,
             });
         }
     }
@@ -127,34 +128,20 @@ pub struct Material {
 pub struct DrawCall {
     material: Material,
     mesh: Arc<Mesh>,
+    model_matrix: [[f32; 4]; 4],
 }
 
 /// Represents a batch of meshes that can be rendered in a single draw call.
 pub struct Batch {
     display: Display,
-    meshes: HashMap<Uuid, Arc<Mesh>>,
-    vbos: Vec<VertexBuffer<Vertex>>,
-    ibos: Vec<IndexBuffer<u32>>,
-    vbo_index: usize,
-    ibo_index: usize,
+    mesh_buffers: Vec<MeshBuffer>,
 }
 
-const MAX_BATCH_VERTICES: usize = 1000000;
 impl Batch {
-    pub fn new(display: Display) -> Result<Batch, MeshLoadError> {
-        let vbo = VertexBuffer::empty_dynamic(&display, MAX_BATCH_VERTICES)?;
-        let ibo = IndexBuffer::empty_dynamic(
-            &display,
-            PrimitiveType::TrianglesList,
-            MAX_BATCH_VERTICES * 3,
-        )?;
+    pub fn new(display: Display) -> Result<Batch, MeshBufferError> {
         Ok(Batch {
-            display,
-            meshes: HashMap::new(),
-            vbos: vec![vbo],
-            ibos: vec![ibo],
-            vbo_index: 0,
-            ibo_index: 0,
+            display: display.clone(),
+            mesh_buffers: vec![],
         })
     }
 
@@ -164,49 +151,24 @@ impl Batch {
             return;
         }
 
-        // Only add the mesh if we haven't already seen it
-        if !self.meshes.contains_key(&mesh.mesh_id) {
-            self.resize(mesh.vertices.len());
-
-            let is = mesh
-                .indices
-                .iter()
-                .map(|i| *i + self.vbo_index as u32)
-                .collect::<Vec<u32>>();
-
-            let vbo = self.vbos.last_mut().unwrap();
-            let ibo = self.ibos.last_mut().unwrap();
-
-            ibo.slice_mut(self.ibo_index..self.ibo_index + mesh.indices.len())
-                .unwrap()
-                .write(&is);
-            self.ibo_index += is.len();
-
-            vbo.slice_mut(self.vbo_index..self.vbo_index + mesh.vertices.len())
-                .unwrap()
-                .write(&mesh.vertices);
-            self.vbo_index += mesh.vertices.len();
-            self.meshes.insert(mesh.mesh_id, mesh);
+        // Try to fit this mesh into an existing mesh buffer
+        let mut success = false;
+        for buffer in &mut self.mesh_buffers {
+            match buffer.add_mesh(mesh.clone()) {
+                Ok(_) | Err(MeshBufferError::MeshAlreadyPresent) => {
+                    success = true;
+                    break;
+                }
+                Err(MeshBufferError::OutOfMemory) => continue,
+                Err(e) => panic!("Error adding mesh to MeshBuffer: {:?}", e),
+            }
         }
-    }
 
-    /// Checks if this `Batch` can fit new vertices, creating new buffers if it cannot.
-    fn resize(&mut self, vs: usize) {
-        let vbo = self.vbos.last().unwrap();
-
-        if (vbo.len() - self.vbo_index) < vs {
-            self.vbos
-                .push(VertexBuffer::empty_dynamic(&self.display, MAX_BATCH_VERTICES).unwrap());
-            self.vbo_index = 0;
-            self.ibos.push(
-                IndexBuffer::empty_dynamic(
-                    &self.display,
-                    PrimitiveType::TrianglesList,
-                    MAX_BATCH_VERTICES * 3,
-                )
-                .unwrap(),
-            );
-            self.ibo_index = 0;
+        // If no buffer had enough memory to add this mesh, create a new one.
+        if !success {
+            let mut buffer = MeshBuffer::new(self.display.clone()).unwrap();
+            buffer.add_mesh(mesh.clone()).unwrap();
+            self.mesh_buffers.push(buffer);
         }
     }
 }
@@ -315,11 +277,15 @@ impl Renderer {
 
         // 3. Draw batches -- one draw call per batch.
         for (_, batch) in &self.batches {
-            for i in 0..batch.vbos.len() {
+            for i in 0..batch.mesh_buffers.len() {
+                let (vbo, ibo) = (
+                    batch.mesh_buffers[i].vertex_buffer(),
+                    batch.mesh_buffers[i].index_buffer(),
+                );
                 target
                     .draw(
-                        &batch.vbos[i],
-                        &batch.ibos[i],
+                        vbo,
+                        ibo,
                         &self.shader_program,
                         &uniform! {
                             model_matrix: [
