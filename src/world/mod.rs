@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cgmath::{Vector2, Vector3};
-use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
+use noise::{Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3, vertex};

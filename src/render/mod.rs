@@ -4,20 +4,18 @@ use std::{
 };
 
 use glium::{
-    index::PrimitiveType,
     texture::SrgbTexture2d,
     uniforms::{
         MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
     },
-    Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
+    Display, Frame, Program, Surface,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, World, WorldExt, Write};
-use uuid::Uuid;
 
 use crate::{vector3, world::ecs::Transform};
 use cgmath::{prelude::*, Vector3};
 
-use self::mesh::{Mesh, MeshBuffer, MeshBufferError, Vertex};
+use self::mesh::{Mesh, MeshBuffer, MeshBufferError};
 
 pub mod mesh;
 pub mod shader;
