@@ -11,6 +11,7 @@ use glium::{
     Display, Frame, Program, Surface,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, World, WorldExt, Write};
+use uuid::Uuid;
 
 use crate::{vector3, world::ecs::Transform};
 use cgmath::{prelude::*, Vector3};
@@ -133,6 +134,10 @@ pub struct DrawCall {
 pub struct Batch {
     display: Display,
     mesh_buffers: Vec<MeshBuffer>,
+
+    /// Keeps track of how many times each `Mesh` has been added to this batch since the last tidy up.
+    /// If the count is 0, a mesh will be cleared up on the next tidy up.
+    mesh_seen_counts: HashMap<Uuid, u32>,
 }
 
 impl Batch {
@@ -140,6 +145,7 @@ impl Batch {
         Ok(Batch {
             display: display.clone(),
             mesh_buffers: vec![],
+            mesh_seen_counts: HashMap::new(),
         })
     }
 
@@ -167,6 +173,32 @@ impl Batch {
             let mut buffer = MeshBuffer::new(self.display.clone()).unwrap();
             buffer.add_mesh(mesh.clone()).unwrap();
             self.mesh_buffers.push(buffer);
+        }
+
+        *self.mesh_seen_counts.entry(mesh.mesh_id).or_insert(0) += 1;
+    }
+
+    /// Removes a `Mesh` with a given `Uuid` from the buffer it appears in.
+    fn remove_mesh(&mut self, mesh_id: &Uuid) {
+        for buffer in &mut self.mesh_buffers {
+            if let Ok(()) = buffer.remove_mesh(mesh_id) {
+                break;
+            }
+        }
+    }
+
+    pub fn clear_unused_meshes(&mut self) {
+        let mut ids_to_remove: Vec<Uuid> = vec![];
+        for (id, count) in &mut self.mesh_seen_counts {
+            if *count == 0 {
+                ids_to_remove.push(*id);
+            } else {
+                *count = 0;
+            }
+        }
+
+        for id in ids_to_remove {
+            self.remove_mesh(&id);
         }
     }
 }
@@ -259,7 +291,7 @@ impl Renderer {
                 .push(draw_call.mesh);
         }
 
-        // 2. Add any unseen meshes to the batch for that material.
+        // 2. Add meshes to the batches.
         for (mat, meshes) in batches {
             // Get existing batch or create a new one
             let batch = self
@@ -306,5 +338,10 @@ impl Renderer {
         }
 
         target.finish().unwrap();
+
+        // 4. Tidy up all our batches to make sure we're not keeping any stale meshes.
+        for (_, batch) in &mut self.batches {
+            batch.clear_unused_meshes();
+        }
     }
 }

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use cgmath::{Vector2, Vector3};
 use glium::{index::PrimitiveType, Display, IndexBuffer, VertexBuffer};
@@ -66,6 +69,8 @@ impl Mesh {
 pub enum MeshBufferError {
     OutOfMemory,
     MeshAlreadyPresent,
+    MeshNotPresent,
+    WriteError,
     VertexBufferCreationError(glium::vertex::BufferCreationError),
     IndexBufferCreationError(glium::index::BufferCreationError),
 }
@@ -87,9 +92,8 @@ const MESH_BUFFER_SIZE: usize = 65535;
 pub struct MeshBuffer {
     vbo: VertexBuffer<Vertex>,
     ibo: IndexBuffer<u32>,
-    vbo_start: usize,
-    ibo_start: usize,
-    meshes: HashMap<Uuid, (Arc<Mesh>, usize, usize)>,
+    meshes: Vec<Arc<Mesh>>,
+    mesh_positions: HashMap<Uuid, (usize, usize)>,
 }
 
 impl MeshBuffer {
@@ -98,58 +102,80 @@ impl MeshBuffer {
         Ok(MeshBuffer {
             vbo,
             ibo,
-            vbo_start: 0,
-            ibo_start: 0,
-            meshes: HashMap::new(),
+            meshes: Vec::new(),
+            mesh_positions: HashMap::new(),
         })
     }
 
     /// Adds a mesh to this buffer
     pub fn add_mesh(&mut self, mesh: Arc<Mesh>) -> Result<(), MeshBufferError> {
         // Don't add meshes we already have
-        if self.meshes.contains_key(&mesh.mesh_id) {
+        if self.mesh_positions.contains_key(&mesh.mesh_id) {
             return Err(MeshBufferError::MeshAlreadyPresent);
         }
 
-        // Not enough room for this mesh. TODO: resize or error.
-        if self.vbo.len() - self.vbo_start < mesh.vertices.len() {
+        // Either start at the end of the last mesh, or the start of the buffer
+        let last_mesh = self.meshes.last();
+        let (vbo_start, ibo_start) = if let Some(mesh) = last_mesh {
+            let pos = self.mesh_positions.get(&mesh.mesh_id).unwrap();
+            (pos.0 + mesh.vertices.len(), pos.1 + mesh.indices.len())
+        } else {
+            (0, 0)
+        };
+
+        // Not enough room for this mesh.
+        if self.vbo.len() - vbo_start < mesh.vertices.len() {
             return Err(MeshBufferError::OutOfMemory);
         }
 
-        let (vbo_start, ibo_start) = (self.vbo_start, self.ibo_start);
+        self.write_data(&mesh.vertices, &mesh.indices, vbo_start, ibo_start)?;
 
-        // Write vertices to vbo
-        if let Some(slice) = self
-            .vbo
-            .slice_mut(vbo_start..vbo_start + mesh.vertices.len())
-        {
-            slice.write(&mesh.vertices);
-            self.vbo_start += mesh.vertices.len();
-        }
-
-        // Write indices to ibo
-        if let Some(slice) = self
-            .ibo
-            .slice_mut(ibo_start..ibo_start + mesh.indices.len())
-        {
-            slice.write(
-                &mesh
-                    .indices
-                    .iter()
-                    .map(|i| *i + vbo_start as u32)
-                    .collect::<Vec<u32>>(),
-            );
-            self.ibo_start += mesh.indices.len();
-        }
-
-        self.meshes
-            .insert(mesh.mesh_id, (mesh, vbo_start, ibo_start));
+        self.mesh_positions
+            .insert(mesh.mesh_id, (vbo_start, ibo_start));
+        self.meshes.push(mesh);
 
         Ok(())
     }
 
     /// Removes a mesh from this buffer
-    pub fn remove_mesh(&mut self) {}
+    pub fn remove_mesh(&mut self, mesh_id: &Uuid) -> Result<(), MeshBufferError> {
+        // Find index of mesh we're going to remove, so we know which meshes come after it
+        let remove_index = self
+            .meshes
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.mesh_id == *mesh_id)
+            .ok_or(MeshBufferError::MeshNotPresent)?
+            .0;
+
+        // Find the vbo_start and ibo_start positions of the mesh we're removing. We will overwrite data from here with any subsequent meshes.
+        let (mut vbo_start, mut ibo_start) = *self.mesh_positions.get(mesh_id).unwrap();
+
+        // TODO: Probably want to clear out any data from vbo/ibo start to end of buffer here
+
+        // Remove the mesh, shift other meshes back in the buffers.
+        let mut new_meshes: Vec<Arc<Mesh>> = vec![];
+        for (i, mesh) in self.meshes.clone().into_iter().enumerate() {
+            if i == remove_index {
+                continue;
+            }
+
+            // Any mesh after remove_index needs to be shifted back in the buffers.
+            if i > remove_index {
+                self.write_data(&mesh.vertices, &mesh.indices, vbo_start, ibo_start)?;
+                self.mesh_positions
+                    .insert(mesh.mesh_id, (vbo_start, ibo_start));
+                vbo_start += mesh.vertices.len();
+                ibo_start += mesh.indices.len();
+            }
+            new_meshes.push(mesh);
+        }
+
+        self.meshes = new_meshes;
+        self.mesh_positions.remove(mesh_id);
+
+        Ok(())
+    }
 
     /// Creates a new pair of buffers, inserting them to the `buffers` vec and returning a reference.
     fn create_buffers(
@@ -165,6 +191,34 @@ impl MeshBuffer {
         );
 
         Ok(new_buffers)
+    }
+
+    fn write_data(
+        &mut self,
+        vs: &[Vertex],
+        is: &[u32],
+        vbo_start: usize,
+        ibo_start: usize,
+    ) -> Result<(), MeshBufferError> {
+        // Write vertices to vbo
+        if let Some(slice) = self.vbo.slice_mut(vbo_start..vbo_start + vs.len()) {
+            slice.write(vs);
+        } else {
+            return Err(MeshBufferError::WriteError);
+        }
+
+        // Write indices to ibo
+        if let Some(slice) = self.ibo.slice_mut(ibo_start..ibo_start + is.len()) {
+            slice.write(
+                &is.iter()
+                    .map(|i| *i + vbo_start as u32)
+                    .collect::<Vec<u32>>(),
+            );
+        } else {
+            return Err(MeshBufferError::WriteError);
+        }
+
+        Ok(())
     }
 
     pub fn vertex_buffer(&self) -> &VertexBuffer<Vertex> {
