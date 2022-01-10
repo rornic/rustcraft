@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use cgmath::{Vector2, Vector3};
 use glium::{index::PrimitiveType, Display, IndexBuffer, VertexBuffer};
