@@ -7,6 +7,8 @@ use cgmath::{Vector2, Vector3};
 use glium::{index::PrimitiveType, Display, IndexBuffer, VertexBuffer};
 use uuid::Uuid;
 
+use crate::{vector2, vector3};
+
 pub mod primitives;
 
 /// A `Vertex` is represented by a 3D position, normal and 2D UV position.
@@ -15,6 +17,16 @@ pub struct Vertex {
     pub position: Vector3<f32>,
     pub normal: Vector3<f32>,
     pub uv: Vector2<f32>,
+}
+
+impl Default for Vertex {
+    fn default() -> Self {
+        Self {
+            position: vector3!(0.0, 0.0, 0.0),
+            normal: vector3!(0.0, 0.0, 0.0),
+            uv: vector2!(0.0, 0.0),
+        }
+    }
 }
 
 /// Uses an internal `GpuVertex` struct to get the type bindings that a `Vertex` will use on the GPU.
@@ -88,7 +100,7 @@ impl From<glium::index::BufferCreationError> for MeshBufferError {
     }
 }
 
-const MESH_BUFFER_SIZE: usize = 65535;
+const MESH_BUFFER_SIZE: usize = 4000000 / 32;
 pub struct MeshBuffer {
     vbo: VertexBuffer<Vertex>,
     ibo: IndexBuffer<u32>,
@@ -138,6 +150,7 @@ impl MeshBuffer {
     }
 
     /// Removes a mesh from this buffer
+    /// This could do with some optimisations to avoid amount of data we have to upload to the GPU.
     pub fn remove_mesh(&mut self, mesh_id: &Uuid) -> Result<(), MeshBufferError> {
         // Find index of mesh we're going to remove, so we know which meshes come after it
         let remove_index = self
@@ -151,7 +164,14 @@ impl MeshBuffer {
         // Find the vbo_start and ibo_start positions of the mesh we're removing. We will overwrite data from here with any subsequent meshes.
         let (mut vbo_start, mut ibo_start) = *self.mesh_positions.get(mesh_id).unwrap();
 
-        // TODO: Probably want to clear out any data from vbo/ibo start to end of buffer here
+        // Overwrite old data
+        if let Some(slice) = self.vbo.slice_mut(vbo_start..) {
+            slice.map().fill(Vertex::default());
+        }
+
+        if let Some(slice) = self.ibo.slice_mut(ibo_start..) {
+            slice.map().fill(0);
+        }
 
         // Remove the mesh, shift other meshes back in the buffers.
         let mut new_meshes: Vec<Arc<Mesh>> = vec![];
