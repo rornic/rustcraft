@@ -161,11 +161,7 @@ impl MeshBuffer {
         // Find the vbo_start and ibo_start positions of the mesh we're removing. We will overwrite data from here with any subsequent meshes.
         let (mut vbo_start, mut ibo_start) = *self.mesh_positions.get(mesh_id).unwrap();
 
-        // Overwrite old data
-        if let Some(slice) = self.vbo.slice_mut(vbo_start..) {
-            slice.map().fill(Vertex::default());
-        }
-
+        // Overwrite old data - we only actually have to remove the triangle indices here as the vertices will just be overwritten on the next write.
         if let Some(slice) = self.ibo.slice_mut(ibo_start..) {
             slice.map().fill(0);
         }
