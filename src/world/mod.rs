@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cgmath::{Vector2, Vector3};
-use noise::{Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
+use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3, vertex};
@@ -13,7 +13,7 @@ pub mod ecs;
 pub const CHUNK_SIZE: usize = 16;
 type Chunk = Box<[[[bool; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
-const WORLD_HEIGHT: usize = 128;
+const WORLD_HEIGHT: usize = 256;
 
 #[derive(Default)]
 pub struct World {
@@ -207,7 +207,7 @@ impl WorldGenerator {
         let perlin = Perlin::new().set_seed(1);
         let perlin2 = Perlin::new().set_seed(2);
         let simplex = OpenSimplex::new().set_seed(3);
-        let mul = Multiply::new(&perlin2, &simplex);
+        let mul = Add::new(&perlin2, &simplex);
         let noise = Multiply::new(&mul, &perlin);
 
         for x in 0..CHUNK_SIZE {
@@ -217,7 +217,7 @@ impl WorldGenerator {
                     0,
                     chunk_pos.y * CHUNK_SIZE as i32 + z as i32,
                 );
-                let height = ((0.5
+                let height = ((0.1
                     + noise.get([
                         world_x as f64 / WORLD_HEIGHT as f64 / 2.0,
                         world_z as f64 / WORLD_HEIGHT as f64 / 2.0,
