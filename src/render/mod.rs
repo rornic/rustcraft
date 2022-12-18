@@ -283,6 +283,9 @@ impl Renderer {
         self.global_uniform_buffer.write(&global_render_uniforms);
 
         // 1. Group draw calls into batches based on their material.
+        //
+        // TODO: combining meshes (1 & 2) is causing significant performance issues
+        // as number of meshes grows -- this needs optimisation.
         let mut batches: HashMap<Material, Vec<Arc<Mesh>>> = HashMap::new();
         while let Some(draw_call) = world.write_resource::<VecDeque<DrawCall>>().pop_front() {
             batches
