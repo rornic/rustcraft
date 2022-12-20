@@ -83,24 +83,27 @@ fn main() {
         .build();
     dispatcher.setup(&mut world);
 
-    // let mut event_buffer = VecDeque::new();
-
     let mut last_frame = Instant::now();
     event_loop.run(move |ev, _, control_flow| {
         *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(
             last_frame + std::time::Duration::from_nanos(16_666_667),
         );
+
         match ev {
             glium::glutin::event::Event::MainEventsCleared => {
-                renderer.render(&mut world);
+                let frame_start = Instant::now();
+                let delta_time = (frame_start - last_frame).as_secs_f32();
+                last_frame = frame_start;
 
-                let delta_time = (Instant::now() - last_frame).as_secs_f32();
-                last_frame = Instant::now();
                 world.write_resource::<DeltaTime>().0 = delta_time;
                 world.write_resource::<ElapsedTime>().0 += delta_time;
+
                 dispatcher.dispatch(&mut world);
                 world.maintain();
+                
                 world.write_resource::<Input>().update();
+
+                renderer.render(&mut world);
             }
             ev => {
                 if let Some(e) = process_event(ev, control_flow) {
