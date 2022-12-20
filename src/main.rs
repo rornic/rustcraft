@@ -6,11 +6,7 @@ use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
 use input::{Input, InputEvent};
-use render::v2::renderer::view_matrix;
-use render::RenderMesh;
-use render::Renderer;
-use render::RenderingSystem;
-use render::ViewMatrix;
+use render::renderer::{DrawCall, RenderMesh, RenderingSystem, ViewMatrix};
 use specs::WorldExt;
 
 use specs::prelude::*;
@@ -66,7 +62,7 @@ fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputE
 fn main() {
     let (event_loop, display) = init_display();
 
-    let mut renderer = crate::render::v2::renderer::Renderer::new(display);
+    let mut renderer = crate::render::renderer::Renderer::new(display);
 
     let mut world = specs::World::new();
     world.register::<Transform>();
@@ -76,6 +72,7 @@ fn main() {
     world.insert(ViewMatrix::default());
     world.insert(DeltaTime(0.0));
     world.insert(ElapsedTime(0.0));
+    world.insert(DrawCalls(vec![]));
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(RenderingSystem, "rendering", &[])
@@ -104,7 +101,10 @@ fn main() {
 
                 world.write_resource::<Input>().update();
 
-                renderer.render(vec![], world.read_resource::<ViewMatrix>().0);
+                renderer.render(
+                    &world.read_resource::<DrawCalls>().0,
+                    world.read_resource::<ViewMatrix>().0,
+                );
             }
             ev => {
                 if let Some(e) = process_event(ev, control_flow) {
@@ -120,3 +120,6 @@ pub struct DeltaTime(f32);
 
 #[derive(Default)]
 pub struct ElapsedTime(f32);
+
+#[derive(Default)]
+pub struct DrawCalls(Vec<DrawCall>);

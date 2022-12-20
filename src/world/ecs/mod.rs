@@ -7,6 +7,7 @@ pub mod camera;
 pub mod chunk_loader;
 
 /// Contains data about an entity's `Transform`. This includes its position, scale and rotation in the world.
+#[derive(Clone)]
 pub struct Transform {
     pub position: Vector3<f32>,
     pub scale: Vector3<f32>,

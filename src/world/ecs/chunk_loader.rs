@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use cgmath::{One, Quaternion, Vector2, Vector3, Zero};
 use specs::prelude::*;
 
-use crate::{render::RenderMesh, vector2, vector3};
+use crate::{render::renderer::RenderMesh, vector2, vector3};
 
 use super::{camera::Camera, Transform};
 

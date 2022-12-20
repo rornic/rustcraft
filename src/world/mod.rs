@@ -5,7 +5,7 @@ use cgmath::{Vector2, Vector3};
 use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
 
 use crate::render::mesh::{Mesh, Vertex};
-use crate::{vector2, vector3, vertex};
+use crate::{vector2, vector3};
 
 pub mod ecs;
 
@@ -55,11 +55,10 @@ impl World {
 
         let mut add_vertices = |vs: &[Vertex], position: Vector3<f32>| {
             let triangle_start: u32 = vertices.len() as u32;
-            vertices.extend(&mut vs.iter().map(|v| {
-                vertex!(
-                                    position: v.position + position,
-                                    normal: v.normal,
-                                    uv: v.uv)
+            vertices.extend(&mut vs.iter().map(|v| Vertex {
+                position: (Vector3::from(v.position) + position).into(),
+                normal: v.normal,
+                uv: v.uv,
             }));
             indices.extend(vec![
                 triangle_start,
@@ -71,7 +70,7 @@ impl World {
             ]);
         };
 
-        let cube = super::render::mesh::primitives::cube();
+        let cube = super::render::primitives::cube();
         let face_vertices = [
             &cube.vertices[0..4],   // front
             &cube.vertices[4..8],   // right

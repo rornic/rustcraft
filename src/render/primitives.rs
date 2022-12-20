@@ -1,8 +1,11 @@
-use crate::render::v2::mesh::Mesh;
-use crate::render::v2::mesh::Vertex;
+use uuid::Uuid;
+
+use crate::render::mesh::Mesh;
+use crate::render::mesh::Vertex;
 
 pub fn cube() -> Mesh {
-    Mesh::new(
+    Mesh::new_with_id(
+        Uuid::default(),
         vec![
             // Front face
             Vertex {
@@ -71,12 +74,12 @@ pub fn cube() -> Mesh {
             Vertex {
                 position: [0.5, 0.5, 0.5],
                 normal: [0.0, 0.0, -1.0],
-                uv: [1.0, 1.0],
+                uv: [1.0, 0.0],
             },
             Vertex {
                 position: [0.5, -0.5, 0.5],
                 normal: [0.0, 0.0, -1.0],
-                uv: [1.0, 0.0],
+                uv: [1.0, 1.0],
             },
             Vertex {
                 position: [-0.5, 0.5, 0.5],

@@ -4,7 +4,11 @@ use specs::{
     Builder, Component, Entity, Read, System, VecStorage, World, WorldExt, Write, WriteStorage,
 };
 
-use crate::{input::Input, render::ViewMatrix, vector3, DeltaTime};
+use crate::{
+    input::Input,
+    render::renderer::{view_matrix, ViewMatrix},
+    vector3, DeltaTime,
+};
 
 use super::Transform;
 
@@ -57,7 +61,7 @@ impl<'a> System<'a> for CameraSystem {
         transform.rotation = Quaternion::from(Euler::new(Deg(0.0), camera.yaw, Deg(0.0)))
             * Quaternion::from(Euler::new(camera.pitch, Deg(0.0), Deg(0.0)));
 
-        view_matrix.0 = ViewMatrix::new(
+        view_matrix.0 = crate::render::renderer::view_matrix(
             transform.position,
             transform.rotation * vector3!(0.0, 0.0, 1.0),
             vector3!(0.0, 1.0, 0.0),
