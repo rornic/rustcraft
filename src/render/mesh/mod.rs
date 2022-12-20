@@ -45,7 +45,7 @@ implement_vertex!(GpuVertex, position, normal, uv);
 #[macro_export]
 macro_rules! vertex {
     ( position: $position:expr, normal: $normal:expr, uv: $uv:expr) => {
-        Vertex {
+        crate::render::mesh::Vertex {
             position: $position,
             normal: $normal,
             uv: $uv,

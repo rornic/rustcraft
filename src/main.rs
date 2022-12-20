@@ -6,6 +6,7 @@ use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
 use input::{Input, InputEvent};
+use render::v2::renderer::view_matrix;
 use render::RenderMesh;
 use render::Renderer;
 use render::RenderingSystem;
@@ -65,7 +66,7 @@ fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputE
 fn main() {
     let (event_loop, display) = init_display();
 
-    let mut renderer = Renderer::new(display);
+    let mut renderer = crate::render::v2::renderer::Renderer::new(display);
 
     let mut world = specs::World::new();
     world.register::<Transform>();
@@ -100,10 +101,10 @@ fn main() {
 
                 dispatcher.dispatch(&mut world);
                 world.maintain();
-                
+
                 world.write_resource::<Input>().update();
 
-                renderer.render(&mut world);
+                renderer.render(vec![], world.read_resource::<ViewMatrix>().0);
             }
             ev => {
                 if let Some(e) = process_event(ev, control_flow) {

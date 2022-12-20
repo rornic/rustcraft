@@ -21,6 +21,7 @@ use self::mesh::{Mesh, MeshBuffer, MeshBufferError};
 pub mod mesh;
 pub mod shader;
 pub mod texture;
+pub mod v2;
 
 /// Represents uniforms that are global across all shaders and should be present for every render.
 ///

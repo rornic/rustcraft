@@ -1,4 +1,4 @@
-use super::{Mesh, Vertex};
+use super::Mesh;
 use crate::{vector2, vector3, vertex};
 
 pub fn cube() -> Mesh {
