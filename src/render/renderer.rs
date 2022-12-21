@@ -117,7 +117,7 @@ impl Renderer {
         view_matrix: [[f32; 4]; 4],
     ) {
         let mut target: Frame = self.display.draw();
-        target.clear_color_and_depth((0.5, 0.5, 0.5, 1.0), 1.0);
+        target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
 
         let draw_params = glium::DrawParameters {
             depth: glium::Depth {
