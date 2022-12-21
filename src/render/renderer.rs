@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use cgmath::{InnerSpace, Vector3, Zero};
 use glium::{
@@ -225,10 +228,13 @@ struct GlobalUniforms {
 }
 implement_uniform_block!(GlobalUniforms, projection_matrix, view_matrix, light);
 
+const MAX_VBO_SIZE: usize = 65536;
+const MAX_BUFFERS: usize = 128;
+
 struct MeshBuffer {
-    vbos: Vec<VertexBuffer<Vertex>>,
+    vbos: VecDeque<VertexBuffer<Vertex>>,
     vbo_index: usize,
-    ibos: Vec<IndexBuffer<u32>>,
+    ibos: VecDeque<IndexBuffer<u32>>,
     ibo_index: usize,
     mesh_locator: HashMap<Uuid, (usize, usize, usize)>,
 }
@@ -236,9 +242,9 @@ struct MeshBuffer {
 impl MeshBuffer {
     pub fn new(display: &Display) -> MeshBuffer {
         let mut mesh_buffer = Self {
-            vbos: vec![],
+            vbos: VecDeque::new(),
             vbo_index: 0,
-            ibos: vec![],
+            ibos: VecDeque::new(),
             ibo_index: 0,
             mesh_locator: HashMap::new(),
         };
@@ -302,11 +308,21 @@ impl MeshBuffer {
     }
 
     fn allocate_buffers(&mut self, display: &Display) {
-        let vbo = VertexBuffer::empty_dynamic(display, 4096).unwrap();
-        let ibo =
-            IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, 4096 * 3).unwrap();
-        self.vbos.push(vbo);
-        self.ibos.push(ibo);
+        let (vbo, ibo) = if self.vbos.len() == MAX_BUFFERS {
+            (
+                self.vbos.pop_front().unwrap(),
+                self.ibos.pop_front().unwrap(),
+            )
+        } else {
+            (
+                VertexBuffer::empty_dynamic(display, MAX_VBO_SIZE).unwrap(),
+                IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, MAX_VBO_SIZE * 3)
+                    .unwrap(),
+            )
+        };
+
+        self.vbos.push_back(vbo);
+        self.ibos.push_back(ibo);
         self.vbo_index = 0;
         self.ibo_index = 0;
     }
