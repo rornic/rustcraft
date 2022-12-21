@@ -40,7 +40,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
 
             // Get a list of all chunk positions in a circle with radius r around the camera
             let mut chunks_to_load: HashSet<Vector2<i32>> = HashSet::new();
-            let r = 16;
+            let r = 32;
             for x in camera_chunk.x - r..camera_chunk.x + r {
                 for z in camera_chunk.y - r..camera_chunk.y + r {
                     if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {
@@ -65,7 +65,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
             }
 
             // Load any chunks in the circle we've not already loaded
-            for chunk_position in chunks_to_load {
+            for chunk_position in chunks_to_load.into_iter().take(4) {
                 // Skip any chunks we've already loaded or haven't been generated yet
                 if self.loaded_chunks.contains_key(&chunk_position) {
                     continue;
@@ -88,9 +88,6 @@ impl<'a> System<'a> for ChunkLoaderSystem {
                     Transform::new(Vector3::zero(), vector3!(1.0, 1.0, 1.0), Quaternion::one()),
                     RenderMesh::new(mesh),
                 ));
-
-                // 4. Exit early so we produce all the chunks over multiple frames rather than all in one.
-                break;
             }
         }
 

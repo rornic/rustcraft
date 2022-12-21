@@ -229,7 +229,7 @@ struct GlobalUniforms {
 implement_uniform_block!(GlobalUniforms, projection_matrix, view_matrix, light);
 
 const MAX_VBO_SIZE: usize = 65536;
-const MAX_BUFFERS: usize = 128;
+const MAX_BUFFERS: usize = 512;
 
 struct MeshBuffer {
     vbos: VecDeque<VertexBuffer<Vertex>>,
