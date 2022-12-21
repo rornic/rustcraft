@@ -2,18 +2,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cgmath::{Vector2, Vector3};
-use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, Seedable};
+use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, RidgedMulti, Seedable};
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3};
 
 pub mod ecs;
+mod generator;
 
 /// Each chunk is a cube of blocks. `CHUNK_SIZE` determines the size of this cube in blocks.
 pub const CHUNK_SIZE: usize = 16;
 type Chunk = Box<[[[bool; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
-const WORLD_HEIGHT: usize = 256;
+const WORLD_HEIGHT: usize = 512;
 
 #[derive(Default)]
 pub struct World {
@@ -199,11 +200,7 @@ impl WorldGenerator {
     fn generate_chunk(&self, chunk_pos: Vector2<i32>) -> Chunk {
         let mut blocks = [[[false; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE];
 
-        let perlin = Perlin::new().set_seed(1);
-        let perlin2 = Perlin::new().set_seed(2);
-        let simplex = OpenSimplex::new().set_seed(3);
-        let mul = Add::new(&perlin2, &simplex);
-        let noise = Multiply::new(&mul, &perlin);
+        let noise = generator::noise_generator();
 
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
@@ -212,13 +209,8 @@ impl WorldGenerator {
                     0,
                     chunk_pos.y * CHUNK_SIZE as i32 + z as i32,
                 );
-                let height = ((0.1
-                    + noise.get([
-                        world_x as f64 / WORLD_HEIGHT as f64 / 2.0,
-                        world_z as f64 / WORLD_HEIGHT as f64 / 2.0,
-                    ]))
-                    * WORLD_HEIGHT as f64)
-                    .round() as usize;
+                let noise_val = noise.get([world_x as f64, world_z as f64]);
+                let height = (noise_val * WORLD_HEIGHT as f64).round() as usize;
 
                 // Height must be at least 1!
                 let height = height.min(WORLD_HEIGHT - 1).max(1);

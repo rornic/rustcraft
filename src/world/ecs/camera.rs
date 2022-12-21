@@ -58,7 +58,7 @@ impl<'a> System<'a> for CameraSystem {
             .clamp(-camera.max_pitch.0, camera.max_pitch.0);
         camera.yaw.0 += input.mouse.horizontal_motion() * 30.0 * delta_time;
 
-        let move_speed = 10.0;
+        let move_speed = 30.0;
 
         // Move camera in XYZ space
         let mut movement_vector = Vector3::new(0.0, 0.0, 0.0);
