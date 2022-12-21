@@ -1,11 +1,9 @@
-use core::num;
 use std::{
     collections::{HashMap, VecDeque},
-    f32::consts::PI,
     sync::Arc,
 };
 
-use cgmath::{InnerSpace, Vector3, Zero};
+use cgmath::{InnerSpace, Vector3};
 use glium::{
     index::{IndexBufferSlice, PrimitiveType},
     texture::SrgbTexture2d,
