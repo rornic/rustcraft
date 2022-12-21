@@ -18,6 +18,7 @@ mod render;
 mod util;
 mod world;
 
+use world::ecs::bounds::Bounds;
 use world::ecs::camera::{Camera, CameraSystem};
 use world::ecs::chunk_loader::ChunkLoaderSystem;
 use world::ecs::Transform;
@@ -68,6 +69,7 @@ fn main() {
     let mut world = specs::World::new();
     world.register::<Transform>();
     world.register::<RenderMesh>();
+    world.register::<Bounds>();
     world.register::<Camera>();
 
     world.insert(ViewMatrix::default());

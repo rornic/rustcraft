@@ -9,7 +9,7 @@ use crate::{
     world::{CHUNK_SIZE, WORLD_HEIGHT},
 };
 
-use super::{camera::Camera, Transform};
+use super::{bounds::Bounds, camera::Camera, Transform};
 
 /// A system that continously generates and loads chunks around the camera.
 pub struct ChunkLoaderSystem {
@@ -29,13 +29,14 @@ impl<'a> System<'a> for ChunkLoaderSystem {
         ReadStorage<'a, Camera>,
         WriteStorage<'a, Transform>,
         WriteStorage<'a, RenderMesh>,
+        WriteStorage<'a, Bounds>,
         Write<'a, crate::world::World>,
         Entities<'a>,
     );
 
     fn run(
         &mut self,
-        (cameras, mut transforms, mut render_meshes, mut game_world, entities): Self::SystemData,
+        (cameras, mut transforms, mut render_meshes, mut bounds, mut game_world, entities): Self::SystemData,
     ) {
         let mut new_chunks = vec![];
 
@@ -44,7 +45,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
 
             // Get a list of all chunk positions in a circle with radius r around the camera
             let mut chunks_to_load: HashSet<Vector2<i32>> = HashSet::new();
-            let r = 32;
+            let r = 16;
             for x in camera_chunk.x - r..camera_chunk.x + r {
                 for z in camera_chunk.y - r..camera_chunk.y + r {
                     if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {
@@ -96,15 +97,24 @@ impl<'a> System<'a> for ChunkLoaderSystem {
                     chunk_position,
                     Transform::new(chunk_world_pos, vector3!(1.0, 1.0, 1.0), Quaternion::one()),
                     RenderMesh::new(mesh),
+                    Bounds::new(
+                        vector3!(
+                            CHUNK_SIZE as f32 / 2.0,
+                            WORLD_HEIGHT as f32 / 2.0,
+                            CHUNK_SIZE as f32 / 2.0
+                        ),
+                        vector3!(CHUNK_SIZE as f32, WORLD_HEIGHT as f32, CHUNK_SIZE as f32),
+                    ),
                 ));
             }
         }
 
-        for (pos, t, r) in new_chunks.into_iter() {
+        for (pos, t, r, b) in new_chunks.into_iter() {
             let entity = entities
                 .build_entity()
                 .with(t, &mut transforms)
                 .with(r, &mut render_meshes)
+                .with(b, &mut bounds)
                 .build();
             self.loaded_chunks.insert(pos, entity);
         }

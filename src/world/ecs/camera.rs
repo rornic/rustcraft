@@ -4,7 +4,7 @@ use specs::{Component, Entity, Read, System, VecStorage, Write, WriteStorage};
 
 use crate::{input::Input, vector3, DeltaTime, ViewMatrix};
 
-use super::Transform;
+use super::{bounds::Bounds, Transform};
 
 /// Runs on a single `Entity` designated as the camera. This entity must have a `Transform` component otherwise the system will fail.
 pub struct CameraSystem {
@@ -169,5 +169,41 @@ impl Camera {
             [s.z, u.z, direction.z, 0.0],
             [p.x, p.y, p.z, 1.0],
         ])
+    }
+
+    pub fn is_point_visible(&self, transform: &Transform, point: Vector3<f32>) -> bool {
+        let v = point - transform.position;
+
+        let pcz = v.dot(transform.rotation * vector3!(0.0, 0.0, 1.0));
+        if pcz < self.near_dist || pcz > self.far_dist {
+            return false;
+        }
+
+        let h = pcz * 2.0 * f32::tan(135.0_f32.to_radians() / 2.0);
+        let pcy = v.dot(transform.rotation * vector3!(0.0, 1.0, 0.0));
+        if -h / 2.0 > pcy || pcy > h / 2.0 {
+            return false;
+        }
+
+        let pcx = v.dot(transform.rotation * vector3!(1.0, 0.0, 0.0));
+        let w = h * self.aspect_ratio;
+        if -w / 2.0 > pcx || pcx > w / 2.0 {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn are_bounds_visible(
+        &self,
+        transform: &Transform,
+        position: Vector3<f32>,
+        bounds: &Bounds,
+    ) -> bool {
+        bounds
+            .to_world(position)
+            .vertices()
+            .iter()
+            .any(|v| self.is_point_visible(transform, *v))
     }
 }

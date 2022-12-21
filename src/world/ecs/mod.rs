@@ -3,6 +3,7 @@ use specs::{Component, VecStorage};
 use crate::vector3;
 use cgmath::{One, Quaternion, Vector3};
 
+pub mod bounds;
 pub mod camera;
 pub mod chunk_loader;
 

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::{
     vector3,
-    world::ecs::{camera::Camera, Transform},
+    world::ecs::{bounds::Bounds, camera::Camera, Transform},
     DrawCalls,
 };
 
@@ -55,15 +55,19 @@ impl<'a> System<'a> for RenderingSystem {
         ReadStorage<'a, Camera>,
         ReadStorage<'a, Transform>,
         ReadStorage<'a, RenderMesh>,
+        ReadStorage<'a, Bounds>,
         Write<'a, DrawCalls>,
     );
 
-    fn run(&mut self, (cameras, transforms, render_meshes, mut draw_calls): Self::SystemData) {
+    fn run(
+        &mut self,
+        (cameras, transforms, render_meshes, bounds, mut draw_calls): Self::SystemData,
+    ) {
         let (camera, camera_transform) = (&cameras, &transforms).join().next().unwrap();
 
         draw_calls.0.clear();
-        for (transform, mesh_data) in (&transforms, &render_meshes).join() {
-            if !is_point_in_view(camera, camera_transform, transform.position) {
+        for (transform, mesh_data, bounds) in (&transforms, &render_meshes, &bounds).join() {
+            if !camera.are_bounds_visible(camera_transform, transform.position, bounds) {
                 continue;
             }
 
@@ -76,29 +80,6 @@ impl<'a> System<'a> for RenderingSystem {
             });
         }
     }
-}
-
-fn is_point_in_view(camera: &Camera, camera_transform: &Transform, point: Vector3<f32>) -> bool {
-    let v = point - camera_transform.position;
-
-    let pcz = v.dot(camera_transform.rotation * vector3!(0.0, 0.0, 1.0));
-    if pcz < camera.near_dist || pcz > camera.far_dist {
-        return false;
-    }
-
-    let h = pcz * 2.0 * f32::tan(135.0_f32.to_radians() / 2.0);
-    let pcy = v.dot(camera_transform.rotation * vector3!(0.0, 1.0, 0.0));
-    if -h / 2.0 > pcy || pcy > h / 2.0 {
-        return false;
-    }
-
-    let pcx = v.dot(camera_transform.rotation * vector3!(1.0, 0.0, 0.0));
-    let w = h * camera.aspect_ratio;
-    if -w / 2.0 > pcx || pcx > w / 2.0 {
-        return false;
-    }
-
-    true
 }
 
 pub struct Renderer {
