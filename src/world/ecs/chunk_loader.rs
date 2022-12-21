@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use cgmath::{One, Quaternion, Vector2, Vector3, Zero};
+use cgmath::{One, Quaternion, Vector2};
 use specs::prelude::*;
 
-use crate::{render::renderer::RenderMesh, vector2, vector3};
+use crate::{render::renderer::RenderMesh, vector2, vector3, world::CHUNK_SIZE};
 
 use super::{camera::Camera, Transform};
 
@@ -65,7 +65,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
             }
 
             // Load any chunks in the circle we've not already loaded
-            for chunk_position in chunks_to_load.into_iter().take(4) {
+            for chunk_position in chunks_to_load.into_iter().take(16) {
                 // Skip any chunks we've already loaded or haven't been generated yet
                 if self.loaded_chunks.contains_key(&chunk_position) {
                     continue;
@@ -81,11 +81,15 @@ impl<'a> System<'a> for ChunkLoaderSystem {
 
                 // 2. Compute the mesh for this chunk.
                 let mesh = game_world.chunk_mesh(chunk_position);
+                let chunk_world_pos = vector3!(
+                    (chunk_position.x * CHUNK_SIZE as i32) as f32,
+                    0.0,
+                    (chunk_position.y * CHUNK_SIZE as i32) as f32
+                );
 
-                // 3. Create a new entity for this chunk.
                 new_chunks.push((
                     chunk_position,
-                    Transform::new(Vector3::zero(), vector3!(1.0, 1.0, 1.0), Quaternion::one()),
+                    Transform::new(chunk_world_pos, vector3!(1.0, 1.0, 1.0), Quaternion::one()),
                     RenderMesh::new(mesh),
                 ));
             }

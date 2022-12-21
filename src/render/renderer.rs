@@ -1,5 +1,7 @@
+use core::num;
 use std::{
     collections::{HashMap, VecDeque},
+    f32::consts::PI,
     sync::Arc,
 };
 
@@ -16,7 +18,11 @@ use glium::{
 use specs::{Component, Join, ReadStorage, System, VecStorage, Write};
 use uuid::Uuid;
 
-use crate::{vector3, world::ecs::Transform, DrawCalls};
+use crate::{
+    vector3,
+    world::ecs::{camera::Camera, Transform},
+    DrawCalls,
+};
 
 use super::{
     material::{load_shader, load_texture, Material},
@@ -48,15 +54,21 @@ pub struct RenderingSystem;
 
 impl<'a> System<'a> for RenderingSystem {
     type SystemData = (
+        ReadStorage<'a, Camera>,
         ReadStorage<'a, Transform>,
         ReadStorage<'a, RenderMesh>,
         Write<'a, DrawCalls>,
     );
 
-    /// Produce a `DrawCall` for every entity with both a `Transform` and `RenderMesh` component. TODO: Batch entities using the same mesh into a single `DrawCall`.
-    fn run(&mut self, (transforms, render_meshes, mut draw_calls): Self::SystemData) {
+    fn run(&mut self, (cameras, transforms, render_meshes, mut draw_calls): Self::SystemData) {
+        let (camera, camera_transform) = (&cameras, &transforms).join().next().unwrap();
+
         draw_calls.0.clear();
         for (transform, mesh_data) in (&transforms, &render_meshes).join() {
+            if !is_point_in_view(camera, camera_transform, transform.position) {
+                continue;
+            }
+
             draw_calls.0.push(DrawCall {
                 material: Material {
                     name: "default".to_string(),
@@ -66,6 +78,25 @@ impl<'a> System<'a> for RenderingSystem {
             });
         }
     }
+}
+
+fn is_point_in_view(camera: &Camera, camera_transform: &Transform, point: Vector3<f32>) -> bool {
+    let v = point - camera_transform.position;
+
+    let pcz = v.dot(camera_transform.rotation * vector3!(0.0, 0.0, 1.0));
+    if pcz < camera.near_dist || pcz > camera.far_dist {
+        return false;
+    }
+
+    let h = pcz * 2.0 * 1.0;
+
+    let pcx = v.dot(camera_transform.rotation * vector3!(1.0, 0.0, 0.0));
+    let w = h * camera.aspect_ratio;
+    if -w / 2.0 > pcx || pcx > w / 2.0 {
+        return false;
+    }
+
+    true
 }
 
 pub struct Renderer {
@@ -85,7 +116,7 @@ impl Renderer {
         let shader = load_shader(&display, "default").unwrap();
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
-        let mut mesh_buffer = MeshBuffer::new(&display);
+        let mesh_buffer = MeshBuffer::new(&display);
 
         Self {
             display,
@@ -96,7 +127,12 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, draw_calls: &Vec<DrawCall>, view_matrix: [[f32; 4]; 4]) {
+    pub fn render(
+        &mut self,
+        camera: &mut Camera,
+        draw_calls: &Vec<DrawCall>,
+        view_matrix: [[f32; 4]; 4],
+    ) {
         let mut target: Frame = self.display.draw();
         target.clear_color_and_depth((0.5, 0.5, 0.5, 1.0), 1.0);
 
@@ -111,10 +147,10 @@ impl Renderer {
         };
 
         let (width, height) = target.get_dimensions();
-        let projection_matrix = projection_matrix(width, height);
+        camera.aspect_ratio = width as f32 / height as f32;
 
         let global_uniforms = GlobalUniforms {
-            projection_matrix: projection_matrix,
+            projection_matrix: camera.projection_matrix(),
             view_matrix: view_matrix,
             light: [-1.0, 0.4, 0.9f32],
         };
@@ -137,12 +173,7 @@ impl Renderer {
                     ibo,
                     &self.shader,
                     &uniform! {
-                        model_matrix: [
-                            [ 1.0, 0.0, 0.0, 0.0],
-                            [ 0.0, 1.0, 0.0, 0.0],
-                            [ 0.0, 0.0, 1.0, 0.0],
-                            [ 0.0, 0.0, 0.0, 1.0_f32],
-                        ],
+                        model_matrix: draw_call.transform.matrix(),
                         tex: Sampler(&self.texture, SamplerBehavior {
                             minify_filter: MinifySamplerFilter::NearestMipmapLinear,
                             magnify_filter: MagnifySamplerFilter::Nearest,
@@ -157,67 +188,6 @@ impl Renderer {
 
         target.finish().unwrap();
     }
-}
-
-fn projection_matrix(width: u32, height: u32) -> [[f32; 4]; 4] {
-    let aspect_ratio = height as f32 / width as f32;
-
-    let fov: f32 = 3.141592 / 3.0;
-    let zfar = 1024.0;
-    let znear = 0.1;
-
-    let f = 1.0 / (fov / 2.0).tan();
-
-    [
-        [f * aspect_ratio, 0.0, 0.0, 0.0],
-        [0.0, f, 0.0, 0.0],
-        [0.0, 0.0, (zfar + znear) / (zfar - znear), 1.0],
-        [0.0, 0.0, -(2.0 * zfar * znear) / (zfar - znear), 0.0],
-    ]
-}
-
-pub struct ViewMatrix(pub [[f32; 4]; 4]);
-
-impl Default for ViewMatrix {
-    fn default() -> Self {
-        view_matrix(
-            Vector3::zero(),
-            vector3!(0.0, 0.0, 1.0),
-            vector3!(0.0, 1.0, 0.0),
-        )
-    }
-}
-
-pub fn view_matrix(
-    position: Vector3<f32>,
-    direction: Vector3<f32>,
-    up: Vector3<f32>,
-) -> ViewMatrix {
-    let direction = direction.normalize();
-    let s = vector3!(
-        up.y * direction.z - up.z * direction.y,
-        up.z * direction.x - up.x * direction.z,
-        up.x * direction.y - up.y * direction.x
-    )
-    .normalize();
-    let u = vector3!(
-        direction.y * s.z - direction.z * s.y,
-        direction.z * s.x - direction.x * s.z,
-        direction.x * s.y - direction.y * s.x
-    );
-
-    let p = vector3!(
-        -position.x * s.x - position.y * s.y - position.z * s.z,
-        -position.x * u.x - position.y * u.y - position.z * u.z,
-        -position.x * direction.x - position.y * direction.y - position.z * direction.z
-    );
-
-    ViewMatrix([
-        [s.x, u.x, direction.x, 0.0],
-        [s.y, u.y, direction.y, 0.0],
-        [s.z, u.z, direction.z, 0.0],
-        [p.x, p.y, p.z, 1.0],
-    ])
 }
 
 #[derive(Clone, Copy)]

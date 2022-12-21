@@ -95,11 +95,7 @@ impl World {
                         continue;
                     }
 
-                    let world_position = vector3!(
-                        (chunk_pos.x * CHUNK_SIZE as i32 + x as i32) as f32,
-                        y as f32,
-                        (chunk_pos.y * CHUNK_SIZE as i32 + z as i32) as f32
-                    );
+                    let world_position = vector3!(x as f32, y as f32, z as f32);
 
                     let front = z
                         .checked_sub(1)
