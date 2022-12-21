@@ -1,6 +1,6 @@
 # rustcraft
 
-A clone of the popular game Minecraft, written in Rust on an OpenGL backend.
+A clone of the popular game Minecraft, using ECS and a hand-written (i.e. poorly optimised and feature incomplete) OpenGL renderer.
 
 # Usage
 

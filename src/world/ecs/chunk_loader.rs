@@ -3,7 +3,11 @@ use std::collections::{HashMap, HashSet};
 use cgmath::{One, Quaternion, Vector2};
 use specs::prelude::*;
 
-use crate::{render::renderer::RenderMesh, vector2, vector3, world::CHUNK_SIZE};
+use crate::{
+    render::renderer::RenderMesh,
+    vector2, vector3,
+    world::{CHUNK_SIZE, WORLD_HEIGHT},
+};
 
 use super::{camera::Camera, Transform};
 
@@ -46,6 +50,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
                     if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {
                         continue;
                     }
+
                     chunks_to_load.insert(vector2!(x, z));
                 }
             }
@@ -65,7 +70,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
             }
 
             // Load any chunks in the circle we've not already loaded
-            for chunk_position in chunks_to_load.into_iter().take(16) {
+            for chunk_position in chunks_to_load.into_iter() {
                 // Skip any chunks we've already loaded or haven't been generated yet
                 if self.loaded_chunks.contains_key(&chunk_position) {
                     continue;

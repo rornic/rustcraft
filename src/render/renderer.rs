@@ -86,7 +86,11 @@ fn is_point_in_view(camera: &Camera, camera_transform: &Transform, point: Vector
         return false;
     }
 
-    let h = pcz * 2.0 * 1.0;
+    let h = pcz * 2.0 * f32::tan(135.0_f32.to_radians() / 2.0);
+    let pcy = v.dot(camera_transform.rotation * vector3!(0.0, 1.0, 0.0));
+    if -h / 2.0 > pcy || pcy > h / 2.0 {
+        return false;
+    }
 
     let pcx = v.dot(camera_transform.rotation * vector3!(1.0, 0.0, 0.0));
     let w = h * camera.aspect_ratio;
