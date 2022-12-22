@@ -1,29 +1,17 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    option::{IntoIter, Iter},
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashMap, sync::Arc};
 
-use cgmath::{InnerSpace, Vector3};
 use glium::{
-    buffer::BufferAnySlice,
-    index::{
-        DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, IndicesSource,
-        PrimitiveType,
-    },
+    index::{DrawCommandsIndicesBuffer, PrimitiveType},
     texture::SrgbTexture2d,
     uniforms::{
         MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
     },
-    vertex::{MultiVerticesSource, VertexBufferAny, VertexBufferSlice, VerticesSource},
     Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, Write};
 use uuid::Uuid;
 
 use crate::{
-    vector3,
     world::ecs::{bounds::Bounds, camera::Camera, Transform},
     DrawCalls,
 };
@@ -94,7 +82,6 @@ pub struct Renderer {
     shader: Program,
     texture: SrgbTexture2d,
     mesh_buffer_manager: MeshBufferManager,
-    command_buffer: DrawCommandsIndicesBuffer,
 }
 
 impl Renderer {
@@ -107,7 +94,6 @@ impl Renderer {
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
         let mesh_buffer_manager = MeshBufferManager::new();
-        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 4096).unwrap();
 
         Self {
             display,
@@ -115,7 +101,6 @@ impl Renderer {
             shader,
             texture,
             mesh_buffer_manager,
-            command_buffer,
         }
     }
 
@@ -135,9 +120,7 @@ impl Renderer {
             ..Default::default()
         };
 
-        let mut commands: Vec<DrawCommandIndices> = Vec::new();
-        let mut total_verts = 0;
-        for (i, draw_call) in draw_calls.iter().enumerate() {
+        for draw_call in draw_calls.iter() {
             if !self
                 .mesh_buffer_manager
                 .mesh_locator
@@ -146,29 +129,7 @@ impl Renderer {
                 self.mesh_buffer_manager
                     .load_mesh(&self.display, &draw_call.mesh);
             }
-            // let handle = self
-            //     .mesh_buffer_manager
-            //     .get_handle(&draw_call.mesh)
-            //     .unwrap();
-
-            total_verts += draw_call.mesh.vertices.len();
-
-            // commands.push(DrawCommandIndices {
-            //     count: handle.ibo_len as u32,
-            //     instance_count: 1,
-            //     first_index: handle.ibo_start as u32,
-            //     base_vertex: handle.vbo_start as u32,
-            //     base_instance: 0,
-            // });
         }
-
-        // if commands.len() == 0 {
-        // return;
-        // }
-
-        // self.command_buffer.invalidate();
-        // let cb_slice = self.command_buffer.slice_mut(0..commands.len()).unwrap();
-        // cb_slice.write(&commands);
 
         let mut target: Frame = self.display.draw();
         target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
@@ -263,64 +224,6 @@ struct MeshBufferHandle {
     ibo_start: usize,
     vbo_len: usize,
     ibo_len: usize,
-}
-
-struct MeshBufferAllocator {
-    vbo: VertexBuffer<Vertex>,
-    vbo_pos: usize,
-    ibo: IndexBuffer<u32>,
-    ibo_pos: usize,
-}
-
-impl MeshBufferAllocator {
-    fn new(display: &Display) -> Self {
-        let size = 65536 * 128;
-        let vbo = VertexBuffer::empty_dynamic(display, size).unwrap();
-        let ibo =
-            IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, size * 3).unwrap();
-
-        Self {
-            vbo,
-            vbo_pos: 0,
-            ibo,
-            ibo_pos: 0,
-        }
-    }
-
-    fn allocate_mesh<'a>(&mut self, mesh: &Mesh) -> MeshBufferHandle {
-        if self.vbo_pos + mesh.vertices.len() >= self.vbo.len()
-            || self.ibo_pos + mesh.triangles.len() >= self.ibo.len()
-        {
-            panic!("out of mesh buffer memory");
-        }
-
-        let vbo_start = self.vbo_pos;
-        self.vbo_pos += mesh.vertices.len();
-
-        let ibo_start = self.ibo_pos;
-        self.ibo_pos += mesh.triangles.len();
-
-        MeshBufferHandle {
-            vbo_start,
-            ibo_start,
-            vbo_len: mesh.vertices.len(),
-            ibo_len: mesh.triangles.len(),
-        }
-    }
-
-    fn slice<'a>(
-        &'a self,
-        handle: &MeshBufferHandle,
-    ) -> (VertexBufferSlice<'a, Vertex>, IndexBufferSlice<'a, u32>) {
-        (
-            self.vbo
-                .slice(handle.vbo_start..handle.vbo_start + handle.vbo_len)
-                .unwrap(),
-            self.ibo
-                .slice(handle.ibo_start..handle.ibo_start + handle.ibo_len)
-                .unwrap(),
-        )
-    }
 }
 
 const MAX_VBO_SIZE: usize = 65536 * 4;
