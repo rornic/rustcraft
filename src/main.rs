@@ -109,12 +109,10 @@ fn main() {
                 world.write_resource::<DeltaTime>().0 = delta_time;
                 world.write_resource::<ElapsedTime>().0 += delta_time;
 
-                let now = Instant::now();
                 dispatcher.dispatch(&mut world);
                 world.maintain();
 
                 world.write_resource::<Input>().update();
-                print!("update {}ms ", (Instant::now() - now).as_millis());
 
                 let now = Instant::now();
                 renderer.render(

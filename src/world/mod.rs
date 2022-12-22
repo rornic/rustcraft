@@ -14,7 +14,7 @@ mod generator;
 pub const CHUNK_SIZE: usize = 16;
 type Chunk = Box<[[[bool; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
-const WORLD_HEIGHT: usize = 512;
+const WORLD_HEIGHT: usize = 128;
 
 #[derive(Default)]
 pub struct World {

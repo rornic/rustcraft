@@ -106,8 +106,8 @@ impl Renderer {
         let shader = load_shader(&display, "default").unwrap();
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
-        let mesh_buffer_manager = MeshBufferManager::new(&display);
-        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 8192).unwrap();
+        let mesh_buffer_manager = MeshBufferManager::new();
+        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 4096).unwrap();
 
         Self {
             display,
@@ -136,31 +136,39 @@ impl Renderer {
         };
 
         let mut commands: Vec<DrawCommandIndices> = Vec::new();
+        let mut total_verts = 0;
         for (i, draw_call) in draw_calls.iter().enumerate() {
-            if let None = self.mesh_buffer_manager.get_handle(&draw_call.mesh) {
-                self.mesh_buffer_manager.load_mesh(&draw_call.mesh);
-            }
-            let handle = self
+            if !self
                 .mesh_buffer_manager
-                .get_handle(&draw_call.mesh)
-                .unwrap();
+                .mesh_locator
+                .contains_key(&draw_call.mesh.id)
+            {
+                self.mesh_buffer_manager
+                    .load_mesh(&self.display, &draw_call.mesh);
+            }
+            // let handle = self
+            //     .mesh_buffer_manager
+            //     .get_handle(&draw_call.mesh)
+            //     .unwrap();
 
-            commands.push(DrawCommandIndices {
-                count: handle.ibo_len as u32,
-                instance_count: 1,
-                first_index: handle.ibo_start as u32,
-                base_vertex: handle.vbo_start as u32,
-                base_instance: 0,
-            });
+            total_verts += draw_call.mesh.vertices.len();
+
+            // commands.push(DrawCommandIndices {
+            //     count: handle.ibo_len as u32,
+            //     instance_count: 1,
+            //     first_index: handle.ibo_start as u32,
+            //     base_vertex: handle.vbo_start as u32,
+            //     base_instance: 0,
+            // });
         }
 
-        if commands.len() == 0 {
-            return;
-        }
+        // if commands.len() == 0 {
+        // return;
+        // }
 
-        self.command_buffer.invalidate();
-        let cb_slice = self.command_buffer.slice_mut(0..commands.len()).unwrap();
-        cb_slice.write(&commands);
+        // self.command_buffer.invalidate();
+        // let cb_slice = self.command_buffer.slice_mut(0..commands.len()).unwrap();
+        // cb_slice.write(&commands);
 
         let mut target: Frame = self.display.draw();
         target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
@@ -175,33 +183,30 @@ impl Renderer {
         };
         self.global_uniform_buffer.write(&global_uniforms);
 
-        target
-            .draw(
-                self.mesh_buffer_manager
-                    .allocator
-                    .vbo
-                    .slice(0..self.mesh_buffer_manager.allocator.vbo_pos)
-                    .unwrap(),
-                self.command_buffer
-                    .with_index_buffer(&self.mesh_buffer_manager.allocator.ibo),
-                &self.shader,
-                &uniform! {
-                    model_matrix: [
-                                [ 1.0, 0.0, 0.0, 0.0],
-                                [ 0.0, 1.0, 0.0, 0.0],
-                                [ 0.0, 0.0, 1.0, 0.0],
-                                [ 0.0, 0.0, 0.0, 1.0_f32],
-                    ],
-                    tex: Sampler(&self.texture, SamplerBehavior {
-                        minify_filter: MinifySamplerFilter::NearestMipmapLinear,
-                        magnify_filter: MagnifySamplerFilter::Nearest,
-                        ..Default::default()
-                    }),
-                    global_render_uniforms: &self.global_uniform_buffer
-                },
-                &draw_params,
-            )
-            .unwrap();
+        for mesh_buffer in &self.mesh_buffer_manager.mesh_buffers {
+            target
+                .draw(
+                    mesh_buffer.vbo.slice(0..mesh_buffer.vbo_pos).unwrap(),
+                    mesh_buffer.ibo.slice(0..mesh_buffer.ibo_pos).unwrap(),
+                    &self.shader,
+                    &uniform! {
+                        model_matrix: [
+                                    [ 1.0, 0.0, 0.0, 0.0],
+                                    [ 0.0, 1.0, 0.0, 0.0],
+                                    [ 0.0, 0.0, 1.0, 0.0],
+                                    [ 0.0, 0.0, 0.0, 1.0_f32],
+                        ],
+                        tex: Sampler(&self.texture, SamplerBehavior {
+                            minify_filter: MinifySamplerFilter::NearestMipmapLinear,
+                            magnify_filter: MagnifySamplerFilter::Nearest,
+                            ..Default::default()
+                        }),
+                        global_render_uniforms: &self.global_uniform_buffer
+                    },
+                    &draw_params,
+                )
+                .unwrap();
+        }
 
         target.finish().unwrap();
     }
@@ -216,31 +221,40 @@ struct GlobalUniforms {
 implement_uniform_block!(GlobalUniforms, projection_matrix, view_matrix, light);
 
 struct MeshBufferManager {
-    allocator: MeshBufferAllocator,
-    mesh_handles: HashMap<Uuid, MeshBufferHandle>,
+    mesh_buffers: Vec<MeshBuffer>,
+    mesh_locator: HashMap<Uuid, usize>,
 }
 
 impl MeshBufferManager {
-    fn new(display: &Display) -> Self {
-        let allocator = MeshBufferAllocator::new(display);
+    fn new() -> Self {
         Self {
-            allocator,
-            mesh_handles: HashMap::new(),
+            mesh_buffers: Vec::new(),
+            mesh_locator: HashMap::new(),
         }
     }
 
-    fn load_mesh(&mut self, mesh: &Mesh) {
-        let handle = self.allocator.allocate_mesh(mesh);
+    fn load_mesh(&mut self, display: &Display, mesh: &Mesh) {
+        if self.mesh_buffers.len() == 0 {
+            self.add_buffer(display);
+        }
 
-        let (vbo, ibo) = self.allocator.slice(&handle);
-        vbo.write(&mesh.vertices);
-        ibo.write(&mesh.triangles);
+        let buffer = self.mesh_buffers.last_mut().unwrap();
+        match buffer.load_mesh(mesh) {
+            Some(_) => {}
+            None => {
+                let buf = self.add_buffer(display);
+                buf.load_mesh(mesh).unwrap();
+            }
+        };
 
-        self.mesh_handles.insert(mesh.id, handle);
+        self.mesh_locator
+            .insert(mesh.id, self.mesh_buffers.len() - 1);
     }
 
-    fn get_handle<'a>(&'a self, mesh: &Mesh) -> Option<&'a MeshBufferHandle> {
-        self.mesh_handles.get(&mesh.id)
+    fn add_buffer<'a>(&'a mut self, display: &Display) -> &'a mut MeshBuffer {
+        let buffer = MeshBuffer::new(display);
+        self.mesh_buffers.push(buffer);
+        self.mesh_buffers.last_mut().unwrap()
     }
 }
 
@@ -284,7 +298,7 @@ impl MeshBufferAllocator {
         self.vbo_pos += mesh.vertices.len();
 
         let ibo_start = self.ibo_pos;
-        self.ibo_pos += 3 * mesh.vertices.len();
+        self.ibo_pos += mesh.triangles.len();
 
         MeshBufferHandle {
             vbo_start,
@@ -309,102 +323,68 @@ impl MeshBufferAllocator {
     }
 }
 
-const MAX_VBO_SIZE: usize = 65536;
-const MAX_BUFFERS: usize = 128;
-
+const MAX_VBO_SIZE: usize = 65536 * 4;
 struct MeshBuffer {
-    vbos: VecDeque<VertexBuffer<Vertex>>,
-    vbo_index: usize,
-    ibos: VecDeque<IndexBuffer<u32>>,
-    ibo_index: usize,
-    mesh_locator: HashMap<Uuid, (usize, usize, usize)>,
+    vbo: VertexBuffer<Vertex>,
+    vbo_pos: usize,
+    ibo: IndexBuffer<u32>,
+    ibo_pos: usize,
+    mesh_handles: HashMap<Uuid, MeshBufferHandle>,
 }
 
 impl MeshBuffer {
-    pub fn new(display: &Display) -> MeshBuffer {
-        let mut mesh_buffer = Self {
-            vbos: VecDeque::new(),
-            vbo_index: 0,
-            ibos: VecDeque::new(),
-            ibo_index: 0,
-            mesh_locator: HashMap::new(),
-        };
-        mesh_buffer.allocate_buffers(display);
-        mesh_buffer
+    fn new(display: &Display) -> Self {
+        let vbo = VertexBuffer::empty_dynamic(display, MAX_VBO_SIZE).unwrap();
+        let ibo =
+            IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, MAX_VBO_SIZE * 3)
+                .unwrap();
+
+        Self {
+            vbo,
+            vbo_pos: 0,
+            ibo,
+            ibo_pos: 0,
+            mesh_handles: HashMap::new(),
+        }
     }
 
-    pub fn load_mesh(&mut self, display: &Display, mesh: &Mesh) {
-        let (vbo, ibo) = self.last_buffers();
-        let (vbo_start, vbo_end) = (self.vbo_index, self.vbo_index + mesh.vertices.len());
-        let (ibo_start, ibo_end) = (self.ibo_index, self.ibo_index + mesh.triangles.len());
-
-        // If the current buffer is out of space, we need to allocate a new one
-        if vbo_end >= vbo.len() || ibo_end >= ibo.len() {
-            self.allocate_buffers(display);
-            self.load_mesh(display, mesh);
-            return;
+    fn load_mesh<'a>(&mut self, mesh: &Mesh) -> Option<&MeshBufferHandle> {
+        if self.vbo_pos + mesh.vertices.len() >= MAX_VBO_SIZE
+            || self.ibo_pos + mesh.triangles.len() >= MAX_VBO_SIZE * 3
+        {
+            return None;
         }
 
-        let (vbo, ibo) = self.last_buffers_mut();
-        vbo.slice_mut(vbo_start..vbo_end)
-            .unwrap()
-            .write(&mesh.vertices);
-        ibo.slice_mut(ibo_start..ibo_end)
-            .unwrap()
-            .write(&mesh.triangles);
+        let vbo_start = self.vbo_pos;
+        let ibo_start = self.ibo_pos;
 
-        self.mesh_locator.insert(
-            mesh.id,
-            (self.vbos.len() - 1, self.vbo_index, self.ibo_index),
+        let (vbo, ibo) = (
+            self.vbo
+                .slice_mut(vbo_start..vbo_start + mesh.vertices.len())
+                .unwrap(),
+            self.ibo
+                .slice_mut(ibo_start..ibo_start + mesh.triangles.len())
+                .unwrap(),
         );
-        self.vbo_index += mesh.vertices.len();
-        self.ibo_index += mesh.triangles.len();
-    }
+        vbo.write(&mesh.vertices);
 
-    pub fn mesh_buffer_slice<'a>(
-        &'a self,
-        mesh: &Mesh,
-    ) -> Option<(VertexBufferSlice<'a, Vertex>, IndexBufferSlice<'a, u32>)> {
-        let (buffer, vbo_start, ibo_start) = self.mesh_locator.get(&mesh.id)?.to_owned();
-        Some((
-            self.vbos[buffer]
-                .slice(vbo_start..vbo_start + mesh.vertices.len())
-                .unwrap(),
-            self.ibos[buffer]
-                .slice(ibo_start..ibo_start + mesh.triangles.len())
-                .unwrap(),
-        ))
-    }
+        let shifted_tris: Vec<u32> = mesh
+            .triangles
+            .iter()
+            .map(|i| *i + vbo_start as u32)
+            .collect();
+        ibo.write(&shifted_tris);
 
-    fn last_buffers_mut<'a>(
-        &'a mut self,
-    ) -> (&'a mut VertexBuffer<Vertex>, &'a mut IndexBuffer<u32>) {
-        let (vbo_pos, ibo_pos) = (self.vbos.len() - 1, self.ibos.len() - 1);
-        (&mut self.vbos[vbo_pos], &mut self.ibos[ibo_pos])
-    }
+        self.vbo_pos += mesh.vertices.len();
+        self.ibo_pos += mesh.triangles.len();
 
-    fn last_buffers<'a>(&'a self) -> (&'a VertexBuffer<Vertex>, &'a IndexBuffer<u32>) {
-        let (vbo_pos, ibo_pos) = (self.vbos.len() - 1, self.ibos.len() - 1);
-        (&self.vbos[vbo_pos], &self.ibos[ibo_pos])
-    }
-
-    fn allocate_buffers(&mut self, display: &Display) {
-        let (vbo, ibo) = if self.vbos.len() == MAX_BUFFERS {
-            (
-                self.vbos.pop_front().unwrap(),
-                self.ibos.pop_front().unwrap(),
-            )
-        } else {
-            (
-                VertexBuffer::empty_dynamic(display, MAX_VBO_SIZE).unwrap(),
-                IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, MAX_VBO_SIZE * 3)
-                    .unwrap(),
-            )
+        let handle = MeshBufferHandle {
+            vbo_start,
+            ibo_start,
+            vbo_len: mesh.vertices.len(),
+            ibo_len: mesh.triangles.len(),
         };
-
-        self.vbos.push_back(vbo);
-        self.ibos.push_back(ibo);
-        self.vbo_index = 0;
-        self.ibo_index = 0;
+        self.mesh_handles.insert(mesh.id, handle);
+        self.mesh_handles.get(&mesh.id)
     }
 }
