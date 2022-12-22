@@ -1,16 +1,22 @@
 use std::{
     collections::{HashMap, VecDeque},
+    option::{IntoIter, Iter},
     sync::Arc,
+    time::Instant,
 };
 
 use cgmath::{InnerSpace, Vector3};
 use glium::{
-    index::{IndexBufferSlice, PrimitiveType},
+    buffer::BufferAnySlice,
+    index::{
+        DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, IndicesSource,
+        PrimitiveType,
+    },
     texture::SrgbTexture2d,
     uniforms::{
         MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
     },
-    vertex::VertexBufferSlice,
+    vertex::{MultiVerticesSource, VertexBufferAny, VertexBufferSlice, VerticesSource},
     Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, Write};
@@ -87,7 +93,8 @@ pub struct Renderer {
     global_uniform_buffer: UniformBuffer<GlobalUniforms>,
     shader: Program,
     texture: SrgbTexture2d,
-    mesh_buffer: MeshBuffer,
+    mesh_buffer_manager: MeshBufferManager,
+    command_buffer: DrawCommandsIndicesBuffer,
 }
 
 impl Renderer {
@@ -99,14 +106,16 @@ impl Renderer {
         let shader = load_shader(&display, "default").unwrap();
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
-        let mesh_buffer = MeshBuffer::new(&display);
+        let mesh_buffer_manager = MeshBufferManager::new(&display);
+        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 8192).unwrap();
 
         Self {
             display,
             global_uniform_buffer,
             shader,
             texture,
-            mesh_buffer,
+            mesh_buffer_manager,
+            command_buffer,
         }
     }
 
@@ -116,9 +125,6 @@ impl Renderer {
         draw_calls: &Vec<DrawCall>,
         view_matrix: [[f32; 4]; 4],
     ) {
-        let mut target: Frame = self.display.draw();
-        target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
-
         let draw_params = glium::DrawParameters {
             depth: glium::Depth {
                 test: glium::draw_parameters::DepthTest::IfLess,
@@ -128,6 +134,36 @@ impl Renderer {
             backface_culling: glium::BackfaceCullingMode::CullClockwise,
             ..Default::default()
         };
+
+        let mut commands: Vec<DrawCommandIndices> = Vec::new();
+        for (i, draw_call) in draw_calls.iter().enumerate() {
+            if let None = self.mesh_buffer_manager.get_handle(&draw_call.mesh) {
+                self.mesh_buffer_manager.load_mesh(&draw_call.mesh);
+            }
+            let handle = self
+                .mesh_buffer_manager
+                .get_handle(&draw_call.mesh)
+                .unwrap();
+
+            commands.push(DrawCommandIndices {
+                count: handle.ibo_len as u32,
+                instance_count: 1,
+                first_index: handle.ibo_start as u32,
+                base_vertex: handle.vbo_start as u32,
+                base_instance: 0,
+            });
+        }
+
+        if commands.len() == 0 {
+            return;
+        }
+
+        self.command_buffer.invalidate();
+        let cb_slice = self.command_buffer.slice_mut(0..commands.len()).unwrap();
+        cb_slice.write(&commands);
+
+        let mut target: Frame = self.display.draw();
+        target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
 
         let (width, height) = target.get_dimensions();
         camera.aspect_ratio = width as f32 / height as f32;
@@ -139,35 +175,33 @@ impl Renderer {
         };
         self.global_uniform_buffer.write(&global_uniforms);
 
-        for draw_call in draw_calls {
-            if !self
-                .mesh_buffer
-                .mesh_locator
-                .contains_key(&draw_call.mesh.id)
-            {
-                self.mesh_buffer.load_mesh(&self.display, &draw_call.mesh);
-            }
-
-            let (vbo, ibo) = self.mesh_buffer.mesh_buffer_slice(&draw_call.mesh).unwrap();
-
-            target
-                .draw(
-                    vbo,
-                    ibo,
-                    &self.shader,
-                    &uniform! {
-                        model_matrix: draw_call.transform.matrix(),
-                        tex: Sampler(&self.texture, SamplerBehavior {
-                            minify_filter: MinifySamplerFilter::NearestMipmapLinear,
-                            magnify_filter: MagnifySamplerFilter::Nearest,
-                            ..Default::default()
-                        }),
-                        global_render_uniforms: &self.global_uniform_buffer
-                    },
-                    &draw_params,
-                )
-                .unwrap();
-        }
+        target
+            .draw(
+                self.mesh_buffer_manager
+                    .allocator
+                    .vbo
+                    .slice(0..self.mesh_buffer_manager.allocator.vbo_pos)
+                    .unwrap(),
+                self.command_buffer
+                    .with_index_buffer(&self.mesh_buffer_manager.allocator.ibo),
+                &self.shader,
+                &uniform! {
+                    model_matrix: [
+                                [ 1.0, 0.0, 0.0, 0.0],
+                                [ 0.0, 1.0, 0.0, 0.0],
+                                [ 0.0, 0.0, 1.0, 0.0],
+                                [ 0.0, 0.0, 0.0, 1.0_f32],
+                    ],
+                    tex: Sampler(&self.texture, SamplerBehavior {
+                        minify_filter: MinifySamplerFilter::NearestMipmapLinear,
+                        magnify_filter: MagnifySamplerFilter::Nearest,
+                        ..Default::default()
+                    }),
+                    global_render_uniforms: &self.global_uniform_buffer
+                },
+                &draw_params,
+            )
+            .unwrap();
 
         target.finish().unwrap();
     }
@@ -181,8 +215,102 @@ struct GlobalUniforms {
 }
 implement_uniform_block!(GlobalUniforms, projection_matrix, view_matrix, light);
 
+struct MeshBufferManager {
+    allocator: MeshBufferAllocator,
+    mesh_handles: HashMap<Uuid, MeshBufferHandle>,
+}
+
+impl MeshBufferManager {
+    fn new(display: &Display) -> Self {
+        let allocator = MeshBufferAllocator::new(display);
+        Self {
+            allocator,
+            mesh_handles: HashMap::new(),
+        }
+    }
+
+    fn load_mesh(&mut self, mesh: &Mesh) {
+        let handle = self.allocator.allocate_mesh(mesh);
+
+        let (vbo, ibo) = self.allocator.slice(&handle);
+        vbo.write(&mesh.vertices);
+        ibo.write(&mesh.triangles);
+
+        self.mesh_handles.insert(mesh.id, handle);
+    }
+
+    fn get_handle<'a>(&'a self, mesh: &Mesh) -> Option<&'a MeshBufferHandle> {
+        self.mesh_handles.get(&mesh.id)
+    }
+}
+
+struct MeshBufferHandle {
+    vbo_start: usize,
+    ibo_start: usize,
+    vbo_len: usize,
+    ibo_len: usize,
+}
+
+struct MeshBufferAllocator {
+    vbo: VertexBuffer<Vertex>,
+    vbo_pos: usize,
+    ibo: IndexBuffer<u32>,
+    ibo_pos: usize,
+}
+
+impl MeshBufferAllocator {
+    fn new(display: &Display) -> Self {
+        let size = 65536 * 128;
+        let vbo = VertexBuffer::empty_dynamic(display, size).unwrap();
+        let ibo =
+            IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, size * 3).unwrap();
+
+        Self {
+            vbo,
+            vbo_pos: 0,
+            ibo,
+            ibo_pos: 0,
+        }
+    }
+
+    fn allocate_mesh<'a>(&mut self, mesh: &Mesh) -> MeshBufferHandle {
+        if self.vbo_pos + mesh.vertices.len() >= self.vbo.len()
+            || self.ibo_pos + mesh.triangles.len() >= self.ibo.len()
+        {
+            panic!("out of mesh buffer memory");
+        }
+
+        let vbo_start = self.vbo_pos;
+        self.vbo_pos += mesh.vertices.len();
+
+        let ibo_start = self.ibo_pos;
+        self.ibo_pos += 3 * mesh.vertices.len();
+
+        MeshBufferHandle {
+            vbo_start,
+            ibo_start,
+            vbo_len: mesh.vertices.len(),
+            ibo_len: mesh.triangles.len(),
+        }
+    }
+
+    fn slice<'a>(
+        &'a self,
+        handle: &MeshBufferHandle,
+    ) -> (VertexBufferSlice<'a, Vertex>, IndexBufferSlice<'a, u32>) {
+        (
+            self.vbo
+                .slice(handle.vbo_start..handle.vbo_start + handle.vbo_len)
+                .unwrap(),
+            self.ibo
+                .slice(handle.ibo_start..handle.ibo_start + handle.ibo_len)
+                .unwrap(),
+        )
+    }
+}
+
 const MAX_VBO_SIZE: usize = 65536;
-const MAX_BUFFERS: usize = 512;
+const MAX_BUFFERS: usize = 128;
 
 struct MeshBuffer {
     vbos: VecDeque<VertexBuffer<Vertex>>,

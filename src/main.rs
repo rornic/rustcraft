@@ -109,16 +109,20 @@ fn main() {
                 world.write_resource::<DeltaTime>().0 = delta_time;
                 world.write_resource::<ElapsedTime>().0 += delta_time;
 
+                let now = Instant::now();
                 dispatcher.dispatch(&mut world);
                 world.maintain();
 
                 world.write_resource::<Input>().update();
+                print!("update {}ms ", (Instant::now() - now).as_millis());
 
+                let now = Instant::now();
                 renderer.render(
                     world.write_storage::<Camera>().get_mut(camera).unwrap(),
                     &world.read_resource::<DrawCalls>().0,
                     world.read_resource::<ViewMatrix>().0,
                 );
+                println!("render {}ms", (Instant::now() - now).as_millis());
             }
             ev => {
                 if let Some(e) = process_event(ev, control_flow) {
