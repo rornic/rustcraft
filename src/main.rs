@@ -7,7 +7,7 @@ use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
 use input::{Input, InputEvent};
-use render::renderer::{DrawCall, RenderMesh, RenderingSystem};
+use render::renderer::{RenderMesh, RenderingSystem};
 use specs::WorldExt;
 
 use specs::prelude::*;
@@ -22,6 +22,8 @@ use world::ecs::bounds::Bounds;
 use world::ecs::camera::{Camera, CameraSystem};
 use world::ecs::chunk_loader::ChunkLoaderSystem;
 use world::ecs::Transform;
+
+use crate::render::renderer::RenderJob;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
@@ -75,7 +77,7 @@ fn main() {
     world.insert(ViewMatrix::default());
     world.insert(DeltaTime(0.0));
     world.insert(ElapsedTime(0.0));
-    world.insert(DrawCalls(vec![]));
+    world.insert(RenderJob::default());
 
     let camera = world
         .create_entity()
@@ -88,9 +90,9 @@ fn main() {
         .build();
 
     let mut dispatcher = DispatcherBuilder::new()
-        .with(RenderingSystem, "rendering", &[])
         .with(CameraSystem::new(camera), "camera", &[])
         .with(ChunkLoaderSystem::new(), "chunk_loader", &[])
+        .with(RenderingSystem, "rendering", &["chunk_loader"])
         .build();
     dispatcher.setup(&mut world);
 
@@ -117,7 +119,7 @@ fn main() {
                 let now = Instant::now();
                 renderer.render(
                     world.write_storage::<Camera>().get_mut(camera).unwrap(),
-                    &world.read_resource::<DrawCalls>().0,
+                    &world.read_resource::<RenderJob>(),
                     world.read_resource::<ViewMatrix>().0,
                 );
                 println!("render {}ms", (Instant::now() - now).as_millis());
@@ -136,9 +138,6 @@ pub struct DeltaTime(f32);
 
 #[derive(Default)]
 pub struct ElapsedTime(f32);
-
-#[derive(Default)]
-pub struct DrawCalls(Vec<DrawCall>);
 
 #[derive(Default)]
 pub struct ViewMatrix(pub [[f32; 4]; 4]);

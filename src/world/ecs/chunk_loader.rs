@@ -45,7 +45,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
 
             // Get a list of all chunk positions in a circle with radius r around the camera
             let mut chunks_to_load: HashSet<Vector2<i32>> = HashSet::new();
-            let r = 16;
+            let r = 8;
             for x in camera_chunk.x - r..camera_chunk.x + r {
                 for z in camera_chunk.y - r..camera_chunk.y + r {
                     if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {
@@ -66,6 +66,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
             for chunk_position in keys {
                 if !chunks_to_load.contains(&chunk_position) {
                     let e = self.loaded_chunks.remove(&chunk_position).unwrap();
+                    game_world.chunk_meshes.remove(&chunk_position).unwrap();
                     entities.delete(e).unwrap();
                 }
             }
