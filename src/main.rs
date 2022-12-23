@@ -5,6 +5,7 @@ use std::time::Instant;
 use cgmath::{One, Quaternion};
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
+use glium::glutin::GlRequest;
 use glium::Display;
 use input::{Input, InputEvent};
 use render::renderer::{RenderMesh, RenderingSystem};
@@ -116,13 +117,11 @@ fn main() {
 
                 world.write_resource::<Input>().update();
 
-                let now = Instant::now();
                 renderer.render(
                     world.write_storage::<Camera>().get_mut(camera).unwrap(),
                     &world.read_resource::<RenderJob>(),
                     world.read_resource::<ViewMatrix>().0,
                 );
-                println!("render {}ms", (Instant::now() - now).as_millis());
             }
             ev => {
                 if let Some(e) = process_event(ev, control_flow) {

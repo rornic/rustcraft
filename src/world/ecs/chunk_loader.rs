@@ -1,10 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use cgmath::{One, Quaternion, Vector2};
 use specs::prelude::*;
 
 use crate::{
-    render::renderer::RenderMesh,
+    render::{mesh::Mesh, renderer::RenderMesh},
     vector2, vector3,
     world::{CHUNK_SIZE, WORLD_HEIGHT},
 };

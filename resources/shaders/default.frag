@@ -3,15 +3,15 @@
 in vec3 v_normal;
 in vec2 v_uv;
 
-uniform sampler2D tex;
-
 out vec4 color;
 
-uniform global_render_uniforms {
+uniform GlobalUniforms {
+    mat4 model_matrix;
     mat4 projection_matrix;
     mat4 view_matrix;
     vec3 light;
 };
+uniform sampler2D tex;
 
 
 void main() {
