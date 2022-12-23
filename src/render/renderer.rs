@@ -1,11 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use glium::{
-    index::{DrawCommandsIndicesBuffer, PrimitiveType},
+    index::{DrawCommandsIndicesBuffer, IndexBufferSlice, PrimitiveType},
     texture::SrgbTexture2d,
     uniforms::{
         MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
     },
+    vertex::VertexBufferSlice,
     Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, Write};
@@ -230,8 +231,10 @@ const MAX_VBO_SIZE: usize = 65536 * 4;
 struct MeshBuffer {
     vbo: VertexBuffer<Vertex>,
     vbo_pos: usize,
+    vbo_free_space: Vec<MemoryBlock>,
     ibo: IndexBuffer<u32>,
     ibo_pos: usize,
+    ibo_free_space: Vec<MemoryBlock>,
     mesh_handles: HashMap<Uuid, MeshBufferHandle>,
 }
 
@@ -245,10 +248,59 @@ impl MeshBuffer {
         Self {
             vbo,
             vbo_pos: 0,
+            vbo_free_space: Vec::new(),
             ibo,
             ibo_pos: 0,
+            ibo_free_space: Vec::new(),
             mesh_handles: HashMap::new(),
         }
+    }
+
+    fn allocate(&mut self, mesh: &Mesh) -> Option<MeshLocator> {
+        if self.vbo_pos + mesh.vertices.len() >= MAX_VBO_SIZE
+            || self.ibo_pos + mesh.triangles.len() >= MAX_VBO_SIZE * 3
+        {
+            return None;
+        }
+
+        let mesh_locator = MeshLocator {
+            vertices: MemoryBlock {
+                start: self.vbo_pos,
+                size: mesh.vertices.len(),
+            },
+            triangles: MemoryBlock {
+                start: self.ibo_pos,
+                size: mesh.triangles.len(),
+            },
+        };
+
+        self.vbo_pos += mesh.vertices.len();
+        self.ibo_pos += mesh.triangles.len();
+
+        Some(mesh_locator)
+    }
+
+    fn free(&mut self, locator: &MeshLocator) {
+        self.free_vbo(locator.vertices);
+        self.free_ibo(locator.triangles);
+    }
+
+    fn free_vbo(&mut self, mem: MemoryBlock) {
+        self.slice_vbo(mem).invalidate();
+        self.vbo_free_space.push(mem);
+    }
+
+    fn free_ibo(&mut self, mem: MemoryBlock) {
+        self.slice_ibo(mem).invalidate();
+        self.ibo_free_space.push(mem);
+    }
+
+    fn slice_vbo<'a>(&'a self, mem: MemoryBlock) -> VertexBufferSlice<'a, Vertex> {
+        self.vbo.slice(mem.start..mem.start + mem.size).unwrap()
+    }
+
+    fn slice_ibo<'a>(&'a self, mem: MemoryBlock) -> IndexBufferSlice<'a, u32> {
+        self.ibo.slice(mem.start..mem.start + mem.size).unwrap()
     }
 
     fn load_mesh<'a>(&mut self, mesh: &Mesh) -> Option<&MeshBufferHandle> {
@@ -289,5 +341,40 @@ impl MeshBuffer {
         };
         self.mesh_handles.insert(mesh.id, handle);
         self.mesh_handles.get(&mesh.id)
+    }
+}
+
+struct MeshLocator {
+    vertices: MemoryBlock,
+    triangles: MemoryBlock,
+}
+
+#[derive(Clone, Copy)]
+struct MemoryBlock {
+    start: usize,
+    size: usize,
+}
+
+struct MeshHeap {
+    mesh_buffers: Vec<MeshBuffer>,
+}
+
+impl MeshHeap {
+    fn load_mesh(&mut self, mesh: &Mesh) {}
+
+    fn allocate(&mut self, display: &Display, mesh: &Mesh) -> MeshLocator {
+        for buffer in self.mesh_buffers.iter().rev() {
+            if let Some(locator) = buffer.allocate(mesh) {
+                return locator;
+            }
+        }
+
+        self.new_buffer(display).allocate(mesh).unwrap()
+    }
+
+    fn new_buffer(&mut self, display: &Display) -> &mut MeshBuffer {
+        let buffer = MeshBuffer::new(display);
+        self.mesh_buffers.push(buffer);
+        self.mesh_buffers.last_mut().unwrap()
     }
 }
