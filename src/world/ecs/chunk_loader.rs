@@ -1,13 +1,10 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
 
 use cgmath::{One, Quaternion, Vector2};
 use specs::prelude::*;
 
 use crate::{
-    render::{mesh::Mesh, renderer::RenderMesh},
+    render::renderer::{self, RenderMesh},
     vector2, vector3,
     world::{CHUNK_SIZE, WORLD_HEIGHT},
 };
@@ -48,7 +45,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
 
             // Get a list of all chunk positions in a circle with radius r around the camera
             let mut chunks_to_load: HashSet<Vector2<i32>> = HashSet::new();
-            let r = 8;
+            let r = renderer::RENDER_DISTANCE as i32;
             for x in camera_chunk.x - r..camera_chunk.x + r {
                 for z in camera_chunk.y - r..camera_chunk.y + r {
                     if (x - camera_chunk.x).pow(2) + (z - camera_chunk.y).pow(2) >= r.pow(2) {

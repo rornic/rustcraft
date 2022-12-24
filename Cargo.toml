@@ -13,3 +13,7 @@ specs = { version = "0.16.1", features = [ "shred-derive", "parallel" ] }
 uuid = { version = "0.8.2", features = [ "v4" ]}
 cgmath = "0.18.0"
 noise = "0.8.2"
+
+[profile.release-debug]
+inherits = "release"
+debug = true

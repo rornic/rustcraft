@@ -1,12 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    sync::Weak,
-    time::Instant,
-};
+use std::{collections::HashMap, sync::Arc, sync::Weak};
 
 use glium::{
-    index::{DrawCommandsIndicesBuffer, IndexBufferSlice, PrimitiveType},
+    index::{DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, PrimitiveType},
     texture::SrgbTexture2d,
     uniforms::{
         MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
@@ -14,9 +9,7 @@ use glium::{
     vertex::VertexBufferSlice,
     Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
-use specs::{
-    world::EntitiesRes, Component, Entities, Join, Read, ReadStorage, System, VecStorage, Write,
-};
+use specs::{Component, Join, ReadStorage, System, VecStorage, Write};
 use uuid::Uuid;
 
 use crate::world::ecs::{bounds::Bounds, camera::Camera, Transform};
@@ -92,7 +85,9 @@ pub struct Renderer {
     global_uniform_buffer: UniformBuffer<GlobalUniforms>,
     shader: Program,
     texture: SrgbTexture2d,
-    mesh_heap: MeshHeap,
+    // mesh_heap: MeshHeap,
+    world_mesh: WorldMesh,
+    command_buffer: DrawCommandsIndicesBuffer,
 }
 
 impl Renderer {
@@ -104,14 +99,17 @@ impl Renderer {
         let shader = load_shader(&display, "default").unwrap();
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
-        let mesh_heap = MeshHeap::new();
+        // let mesh_heap = MeshHeap::new();
+        let world_mesh = WorldMesh::new(&display);
+        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 512).unwrap();
 
         Self {
             display,
             global_uniform_buffer,
             shader,
             texture,
-            mesh_heap,
+            world_mesh,
+            command_buffer,
         }
     }
 
@@ -133,12 +131,11 @@ impl Renderer {
 
         for draw_call in render_job.draw_calls.iter() {
             if !self
-                .mesh_heap
+                .world_mesh
                 .loaded_meshes
                 .contains_key(&draw_call.mesh.id)
             {
-                self.mesh_heap
-                    .load_mesh(&self.display, draw_call.mesh.clone());
+                self.world_mesh.load_mesh(draw_call.mesh.clone());
             }
         }
 
@@ -161,11 +158,36 @@ impl Renderer {
         };
         self.global_uniform_buffer.write(&global_uniforms);
 
-        for mesh_buffer in &self.mesh_heap.mesh_buffers {
+        if render_job.draw_calls.len() > 0 {
+            let commands = render_job
+                .draw_calls
+                .iter()
+                .map(|draw_call| {
+                    let (_, vbo, ibo) = self
+                        .world_mesh
+                        .loaded_meshes
+                        .get(&draw_call.mesh.id)
+                        .unwrap();
+                    DrawCommandIndices {
+                        count: (ibo.count * DynamicIndexBuffer::BLOCK_SIZE) as u32,
+                        instance_count: 1,
+                        first_index: ibo.start as u32,
+                        base_vertex: vbo.start as u32,
+                        base_instance: 0,
+                    }
+                })
+                .collect::<Vec<DrawCommandIndices>>();
+            let command_buffer =
+                DrawCommandsIndicesBuffer::empty_dynamic(&self.display, commands.len()).unwrap();
+            command_buffer
+                .slice(0..commands.len())
+                .unwrap()
+                .write(&commands);
+
             target
                 .draw(
-                    mesh_buffer.vbo.slice(0..mesh_buffer.vbo_pos).unwrap(),
-                    mesh_buffer.ibo.slice(0..mesh_buffer.ibo_pos).unwrap(),
+                    &self.world_mesh.vbo.buffer.vbo,
+                    command_buffer.with_index_buffer(&self.world_mesh.ibo.buffer.ibo),
                     &self.shader,
                     &uniform! {
                                 GlobalUniforms: &self.global_uniform_buffer,
@@ -181,16 +203,8 @@ impl Renderer {
                     &draw_params,
                 )
                 .unwrap();
-        }
-        target.finish().unwrap();
-
-        self.mesh_heap.unload_dropped_meshes();
-
-        for buf in self.mesh_heap.mesh_buffers.iter_mut() {
-            let unusable_space = buf.vbo_free_space.iter().map(|m| m.size).sum::<usize>();
-            if unusable_space >= MAX_VBO_SIZE / 8 {
-                buf.compact(&self.display);
-            }
+            target.finish().unwrap();
+            self.world_mesh.garbage_collect();
         }
     }
 }
@@ -210,312 +224,211 @@ implement_uniform_block!(
     light
 );
 
-const MAX_VBO_SIZE: usize = 65536 * 8;
-struct MeshBuffer {
-    vbo: VertexBuffer<Vertex>,
-    vbo_pos: usize,
-    vbo_free_space: Vec<MemoryBlock>,
-    vbo_allocated: Vec<MemoryBlock>,
-    ibo: IndexBuffer<u32>,
-    ibo_pos: usize,
-    ibo_free_space: Vec<MemoryBlock>,
-    ibo_allocated: Vec<MemoryBlock>,
+#[derive(Clone, Copy)]
+struct MemoryAllocation {
+    start: usize,
+    count: usize,
 }
 
-impl MeshBuffer {
-    fn new(display: &Display, size: usize) -> Self {
-        let vbo = VertexBuffer::empty_dynamic(display, size).unwrap();
-        let ibo =
-            IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, size * 3)
-                .unwrap();
+pub const RENDER_DISTANCE: usize = 16;
 
-        Self {
-            vbo,
-            vbo_pos: 0,
-            vbo_free_space: Vec::new(),
-            vbo_allocated: Vec::new(),
-            ibo,
-            ibo_pos: 0,
-            ibo_free_space: Vec::new(),
-            ibo_allocated: Vec::new(),
-        }
+trait Buffer<'a> {
+    const BLOCK_SIZE: usize;
+    const BLOCK_COUNT: usize;
+    type Slice;
+
+    fn new(display: &Display) -> Self;
+    fn slice(&'a self, block: MemoryAllocation) -> Self::Slice;
+    fn clear(&self, block: MemoryAllocation);
+    fn block_size(&self) -> usize {
+        Self::BLOCK_SIZE
+    }
+}
+
+struct DynamicVertexBuffer {
+    vbo: VertexBuffer<Vertex>,
+}
+
+impl<'a> Buffer<'a> for DynamicVertexBuffer {
+    const BLOCK_SIZE: usize = 4096;
+    const BLOCK_COUNT: usize = 8 * RENDER_DISTANCE.pow(2);
+    type Slice = VertexBufferSlice<'a, Vertex>;
+
+    fn slice(&'a self, block: MemoryAllocation) -> Self::Slice {
+        self.vbo
+            .slice(block.start..block.start + block.count * Self::BLOCK_SIZE)
+            .unwrap()
     }
 
-    fn allocate(&mut self, size: usize) -> Option<MeshLocator> {
-        if let Some(mesh_locator) = self.allocate_from_free_space(size) {
-            return Some(mesh_locator);
-        }
+    fn new(display: &Display) -> Self {
+        let vbo =
+            VertexBuffer::empty_dynamic(display, Self::BLOCK_SIZE * Self::BLOCK_COUNT).unwrap();
+        Self { vbo }
+    }
 
-        if self.vbo_pos + size >= MAX_VBO_SIZE
-            || self.ibo_pos + 3*size >= MAX_VBO_SIZE * 3
-        {
+    fn clear(&self, block: MemoryAllocation) {
+        self.slice(block)
+            .write(&vec![Vertex::default()].repeat(block.count * Self::BLOCK_SIZE));
+    }
+}
+
+struct DynamicIndexBuffer {
+    ibo: IndexBuffer<u32>,
+}
+
+impl<'a> Buffer<'a> for DynamicIndexBuffer {
+    const BLOCK_SIZE: usize = DynamicVertexBuffer::BLOCK_SIZE * 3;
+    const BLOCK_COUNT: usize = DynamicVertexBuffer::BLOCK_COUNT;
+    type Slice = IndexBufferSlice<'a, u32>;
+
+    fn slice(&'a self, block: MemoryAllocation) -> Self::Slice {
+        self.ibo
+            .slice(block.start..block.start + block.count * Self::BLOCK_SIZE)
+            .unwrap()
+    }
+
+    fn new(display: &Display) -> Self {
+        let ibo = IndexBuffer::empty_dynamic(
+            display,
+            PrimitiveType::TrianglesList,
+            Self::BLOCK_SIZE * Self::BLOCK_COUNT,
+        )
+        .unwrap();
+        Self { ibo }
+    }
+
+    fn clear(&self, block: MemoryAllocation) {
+        self.slice(block)
+            .write(&vec![0].repeat(block.count * Self::BLOCK_SIZE));
+    }
+}
+
+struct AllocatedBuffer<T> {
+    buffer: T,
+    free_blocks: Vec<MemoryAllocation>,
+}
+
+impl<'a, T: Buffer<'a>> AllocatedBuffer<T> {
+    fn new(buffer: T) -> Self {
+        let initial_block = MemoryAllocation {
+            start: 0,
+            count: buffer.block_size(),
+        };
+        Self {
+            buffer,
+            free_blocks: vec![initial_block],
+        }
+    }
+}
+
+impl<'a, T: Buffer<'a>> AllocatedBuffer<T> {
+    fn allocate(&'a mut self, size: usize) -> Option<MemoryAllocation> {
+        let block_size = self.buffer.block_size();
+        let free_blocks = self.free_blocks_mut();
+        if free_blocks.is_empty() {
             return None;
         }
 
-        let mesh_locator = MeshLocator {
-            vertices: MemoryBlock {
-                start: self.vbo_pos,
-                size: size,
-            },
-            triangles: MemoryBlock {
-                start: self.ibo_pos,
-                size: 3*size,
-            },
-        };
-        self.vbo_allocated.push(mesh_locator.vertices);
-        self.ibo_allocated.push(mesh_locator.triangles);
-
-        self.vbo_pos += size;
-        self.ibo_pos += 3*size;
-
-        Some(mesh_locator)
-    }
-
-    fn allocate_from_free_space(&mut self, size: usize) -> Option<MeshLocator> {
-        let vbo_block = self.closest_block_fit(size, &self.vbo_free_space);
-        let ibo_block = self.closest_block_fit(3*size, &self.ibo_free_space);
-        if vbo_block.is_some() && ibo_block.is_some() {
-            let old_block = self.vbo_free_space.remove(vbo_block.unwrap());
-            let vbo = MemoryBlock {
-                start: old_block.start,
-                size: size,
-            };
-            self.vbo_free_space.push(MemoryBlock {
-                start: vbo.start + vbo.size,
-                size: old_block.size - vbo.size,
-            });
-
-            let old_block = self.ibo_free_space.remove(ibo_block.unwrap());
-            let ibo = MemoryBlock {
-                start: old_block.start,
-                size: 3*size,
-            };
-
-            self.ibo_free_space.push(MemoryBlock {
-                start: ibo.start + ibo.size,
-                size: old_block.size - ibo.size,
-            });
-
-            self.vbo_allocated.push(vbo);
-            self.ibo_allocated.push(ibo);
-            return Some(MeshLocator {
-                vertices: vbo,
-                triangles: ibo,
-            });
-        }
-
-        None
-    }
-
-    fn free(&mut self, locator: &MeshLocator) {
-        self.free_vbo(locator.vertices);
-        self.free_ibo(locator.triangles);
-    }
-
-    fn free_vbo(&mut self, mem: MemoryBlock) {
-        self.slice_vbo(mem).invalidate();
-        self.slice_vbo(mem).write(
-            &(0..mem.size as u32)
-                .map(|_| Vertex {
-                    position: [0.0, 0.0, 0.0],
-                    normal: [0.0, 0.0, 0.0],
-                    uv: [0.0, 0.0],
-                })
-                .collect::<Vec<Vertex>>(),
-        );
-        self.vbo_free_space.push(mem);
-    }
-
-    fn free_ibo(&mut self, mem: MemoryBlock) {
-        self.slice_ibo(mem).invalidate();
-        self.slice_ibo(mem)
-            .write(&(0..mem.size as u32).collect::<Vec<u32>>());
-        self.ibo_free_space.push(mem);
-    }
-
-    fn slice_vbo<'a>(&'a self, mem: MemoryBlock) -> VertexBufferSlice<'a, Vertex> {
-        self.vbo.slice(mem.start..mem.start + mem.size).unwrap()
-    }
-
-    fn slice_ibo<'a>(&'a self, mem: MemoryBlock) -> IndexBufferSlice<'a, u32> {
-        self.ibo.slice(mem.start..mem.start + mem.size).unwrap()
-    }
-
-    fn closest_block_fit(&self, size: usize, blocks: &[MemoryBlock]) -> Option<usize> {
-        let mut valid_blocks: Vec<(usize, usize)> = blocks
+        let desired_blocks = 1 + (size / block_size);
+        let (i, block) = free_blocks
             .iter()
+            .cloned()
             .enumerate()
-            .filter(|(_, b)| b.size >= size)
-            .map(|(i, b)| (b.size - size, i))
-            .collect();
-        valid_blocks.sort();
-        valid_blocks.get(0).map(|(_, i)| *i)
-    }
+            .find(|(_, block)| block.count >= desired_blocks)
+            .expect("could not find a fitting free block");
+        free_blocks.remove(i);
 
-    fn compact(&mut self, display: &Display) {
-        let vbo: VertexBuffer<Vertex> = VertexBuffer::empty_dynamic(display, MAX_VBO_SIZE).unwrap();
-        let mut new_blocks = vec![];
-        let mut pos = 0;
-        for block in self.vbo_allocated.iter() {
-            self.slice_vbo(*block)
-                .copy_to(vbo.slice(pos..pos + block.size).unwrap())
-                .unwrap();
-            new_blocks.push(MemoryBlock {
-                start: pos,
-                size: block.size,
+        if block.count > desired_blocks {
+            let split = MemoryAllocation {
+                start: block.start + desired_blocks * block_size,
+                count: block.count - desired_blocks,
+            };
+            free_blocks.push(split);
+            return Some(MemoryAllocation {
+                start: block.start,
+                count: desired_blocks,
             });
-            pos += block.size;
         }
-        println!("compacted vbo: old {}, new {}", self.vbo_pos, pos);
-        vbo.copy_to(&self.vbo).unwrap();
-        self.vbo_allocated = new_blocks;
-        self.vbo_pos = pos;
-        self.vbo_free_space.clear();
 
-        let ibo: IndexBuffer<u32> =
-            IndexBuffer::empty_dynamic(display, PrimitiveType::TrianglesList, MAX_VBO_SIZE * 3)
-                .unwrap();
-        let mut new_blocks = vec![];
-        let mut pos = 0;
-        for block in self.ibo_allocated.iter() {
-            let triangles = self.slice_ibo(*block).read().unwrap().iter().map(f)
-
-                ibo.slice(pos..pos + block.size).unwrap();
-            new_blocks.push(MemoryBlock {
-                start: pos,
-                size: block.size,
-            });
-            pos += block.size;
-        }
-        ibo.copy_to(&self.ibo).unwrap();
-        self.ibo_allocated = new_blocks;
-        self.ibo_pos = pos;
-        self.ibo_free_space.clear();
+        Some(block)
     }
 
-    fn allocated(&self) -> usize {
-        self.vbo_allocated.iter().map(|b|b.size).sum()
+    fn free_blocks_mut(&'a mut self) -> &'a mut Vec<MemoryAllocation> {
+        &mut self.free_blocks
+    }
+
+    fn free(&mut self, block: MemoryAllocation) {
+        self.buffer.clear(block);
+        self.free_blocks.push(block);
     }
 }
 
-#[derive(Clone, Copy)]
-struct MeshLocator {
-    vertices: MemoryBlock,
-    triangles: MemoryBlock,
+type AllocatedMesh = (Weak<Mesh>, MemoryAllocation, MemoryAllocation);
+struct WorldMesh {
+    vbo: AllocatedBuffer<DynamicVertexBuffer>,
+    ibo: AllocatedBuffer<DynamicIndexBuffer>,
+    loaded_meshes: HashMap<Uuid, AllocatedMesh>,
 }
 
-#[derive(Clone, Copy)]
-struct MemoryBlock {
-    start: usize,
-    size: usize,
-}
-
-struct MeshHeap {
-    mesh_buffers: Vec<MeshBuffer>,
-    loaded_meshes: HashMap<Uuid, (usize, MeshLocator)>,
-    mesh_refs: HashMap<Uuid, Weak<Mesh>>,
-}
-
-impl MeshHeap {
-    fn new() -> MeshHeap {
-        MeshHeap {
-            mesh_buffers: vec![],
+impl WorldMesh {
+    fn new(display: &Display) -> Self {
+        let (vbo, ibo) = (
+            DynamicVertexBuffer::new(display),
+            DynamicIndexBuffer::new(display),
+        );
+        let (vbo, ibo) = (AllocatedBuffer::new(vbo), AllocatedBuffer::new(ibo));
+        Self {
+            vbo,
+            ibo,
             loaded_meshes: HashMap::new(),
-            mesh_refs: HashMap::new(),
         }
     }
 
-    fn load_mesh(&mut self, display: &Display, mesh: Arc<Mesh>) {
-        let (buf, locator) = self.allocate(display, &mesh);
-        self.write_mesh(&mesh, buf, locator);
+    fn load_mesh(&mut self, mesh: Arc<Mesh>) {
+        let vbo_alloc = self
+            .vbo
+            .allocate(mesh.vertices.len())
+            .expect("could not allocate vbo memory");
+        let ibo_alloc = self
+            .ibo
+            .allocate(mesh.triangles.len())
+            .expect("could not allocate ibo memory");
 
-        self.loaded_meshes.insert(mesh.id, (buf, locator));
-        self.mesh_refs.insert(mesh.id, Arc::downgrade(&mesh));
-    }
+        self.vbo
+            .buffer
+            .slice(vbo_alloc)
+            .slice(0..mesh.vertices.len())
+            .unwrap()
+            .write(&mesh.vertices);
 
-    fn write_mesh(&self, mesh: &Mesh, buf: usize, locator: MeshLocator) {
-        let (vbo, ibo) = self.slice_mesh(buf, locator);
+        self.ibo
+            .buffer
+            .slice(ibo_alloc)
+            .slice(0..mesh.triangles.len())
+            .unwrap()
+            .write(&mesh.triangles);
 
-        vbo.write(&mesh.vertices);
-
-        let shifted_tris: Vec<u32> = mesh
-            .triangles
-            .iter()
-            .map(|i| *i + locator.vertices.start as u32)
-            .collect();
-        ibo.write(&shifted_tris);
+        self.loaded_meshes
+            .insert(mesh.id, (Arc::downgrade(&mesh), vbo_alloc, ibo_alloc));
     }
 
     fn unload_mesh(&mut self, id: Uuid) {
-        if !self.loaded_meshes.contains_key(&id) {
-            return;
-        }
-        let (buf, locator) = self.loaded_meshes.get(&id).unwrap();
-        self.mesh_buffers[*buf].free(locator);
-        self.loaded_meshes.remove(&id);
-        self.mesh_refs.remove(&id);
+        let (_, vbo_alloc, ibo_alloc) = self.loaded_meshes.remove(&id).unwrap();
+        self.vbo.free(vbo_alloc);
+        self.ibo.free(ibo_alloc);
     }
 
-    fn unload_dropped_meshes(&mut self) {
+    fn garbage_collect(&mut self) {
         let to_unload: Vec<Uuid> = self
-            .mesh_refs
+            .loaded_meshes
             .iter()
-            .filter(|(_, mesh_ref)| mesh_ref.upgrade().is_none())
+            .filter(|(_, (mesh_ref, _, _))| mesh_ref.upgrade().is_none())
+            .take(16)
             .map(|(id, _)| *id)
             .collect();
 
         for id in to_unload {
             self.unload_mesh(id);
         }
-    }
-
-    fn compact(&mut self, display: &Display) {
-        let total: usize = self.mesh_buffers.iter().map(|buf| buf.allocated()).sum();
-
-        let new_buf = MeshBuffer::new(display, total);
-        for (id, (buf, loc)) in self.loaded_meshes.iter_mut() {
-            let new_locator = new_buf.allocate(loc.vertices.size).unwrap();
-            let (old_vbo, old_ibo) = self.slice_mesh(*buf, *loc);
-            old_vbo.copy_to(new_buf.slice_vbo(new_locator.vertices));
-            old_ibo.copy_to(new_buf.slice_ibo(new_locator.triangles));
-            *buf = 0;
-            *loc = new_locator;
-        }
-
-        for buf in self.mesh_buffers {
-            buf.vbo.invalidate();
-            buf.ibo.invalidate();
-        }
-
-        self.mesh_buffers = vec![new_buf];
-
-    }
-
-    fn allocate(&mut self, display: &Display, mesh: &Mesh) -> (usize, MeshLocator) {
-        for (i, buffer) in self.mesh_buffers.iter_mut().enumerate().rev() {
-            if let Some(locator) = buffer.allocate(mesh) {
-                return (i, locator);
-            }
-        }
-
-        let locator = self.new_buffer(display).allocate(mesh).unwrap();
-        (self.mesh_buffers.len() - 1, locator)
-    }
-
-    fn slice_mesh<'a>(
-        &'a self,
-        buf: usize,
-        locator: MeshLocator,
-    ) -> (VertexBufferSlice<'a, Vertex>, IndexBufferSlice<'a, u32>) {
-        (
-            self.mesh_buffers[buf].slice_vbo(locator.vertices),
-            self.mesh_buffers[buf].slice_ibo(locator.triangles),
-        )
-    }
-
-    fn new_buffer(&mut self, display: &Display) -> &mut MeshBuffer {
-        let buffer = MeshBuffer::new(display, MAX_VBO_SIZE);
-        self.mesh_buffers.push(buffer);
-        self.mesh_buffers.last_mut().unwrap()
     }
 }
