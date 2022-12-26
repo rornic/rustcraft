@@ -87,7 +87,6 @@ pub struct Renderer {
     texture: SrgbTexture2d,
     // mesh_heap: MeshHeap,
     world_mesh: WorldMesh,
-    command_buffer: DrawCommandsIndicesBuffer,
 }
 
 impl Renderer {
@@ -99,9 +98,7 @@ impl Renderer {
         let shader = load_shader(&display, "default").unwrap();
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
-        // let mesh_heap = MeshHeap::new();
         let world_mesh = WorldMesh::new(&display);
-        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 512).unwrap();
 
         Self {
             display,
@@ -109,7 +106,6 @@ impl Renderer {
             shader,
             texture,
             world_mesh,
-            command_buffer,
         }
     }
 
@@ -139,26 +135,26 @@ impl Renderer {
             }
         }
 
-        let mut target: Frame = self.display.draw();
-        target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
-
-        let (width, height) = target.get_dimensions();
-        camera.aspect_ratio = width as f32 / height as f32;
-
-        let global_uniforms = GlobalUniforms {
-            projection_matrix: camera.projection_matrix(),
-            view_matrix: view_matrix,
-            light: [-0.2, 0.7, 0.2f32],
-            model_matrix: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0_f32],
-            ],
-        };
-        self.global_uniform_buffer.write(&global_uniforms);
-
         if render_job.draw_calls.len() > 0 {
+            let mut target: Frame = self.display.draw();
+            target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
+
+            let (width, height) = target.get_dimensions();
+            camera.aspect_ratio = width as f32 / height as f32;
+
+            let global_uniforms = GlobalUniforms {
+                projection_matrix: camera.projection_matrix(),
+                view_matrix: view_matrix,
+                light: [-0.2, 0.7, 0.2f32],
+                model_matrix: [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0_f32],
+                ],
+            };
+            self.global_uniform_buffer.write(&global_uniforms);
+
             let commands = render_job
                 .draw_calls
                 .iter()
@@ -250,8 +246,8 @@ struct DynamicVertexBuffer {
 }
 
 impl<'a> Buffer<'a> for DynamicVertexBuffer {
-    const BLOCK_SIZE: usize = 2048;
-    const BLOCK_COUNT: usize = 8 * RENDER_DISTANCE.pow(2);
+    const BLOCK_SIZE: usize = 4096;
+    const BLOCK_COUNT: usize = 4096;
     type Slice = VertexBufferSlice<'a, Vertex>;
 
     fn slice(&'a self, block: MemoryAllocation) -> Self::Slice {
@@ -303,6 +299,8 @@ impl<'a> Buffer<'a> for DynamicIndexBuffer {
     }
 }
 
+// TODO: store free blocks in a linkedlist so consecutive 'small' blocks can be combined for bigger chunks instead of relying on the block size always
+// being big enough. especially important with high frequency terrain
 struct AllocatedBuffer<T> {
     buffer: T,
     free_blocks: Vec<MemoryAllocation>,
