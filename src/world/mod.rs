@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
@@ -12,7 +11,19 @@ mod generator;
 
 /// Each chunk is a cube of blocks. `CHUNK_SIZE` determines the size of this cube in blocks.
 pub const CHUNK_SIZE: usize = 16;
-type Chunk = Box<[[[bool; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
+
+#[derive(PartialEq, Eq, Copy, Clone)]
+pub enum BlockType {
+    Air,
+    Stone,
+    Grass,
+    Sand,
+    Water,
+    Snow,
+}
+const BLOCK_COUNT: usize = 6;
+
+type Chunk = Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
 const WORLD_HEIGHT: usize = 256;
 
@@ -20,7 +31,6 @@ const WORLD_HEIGHT: usize = 256;
 pub struct World {
     generator: WorldGenerator,
     chunks: HashMap<Vector2<i32>, Chunk>,
-    chunk_meshes: HashMap<Vector2<i32>, Arc<Mesh>>,
 }
 
 impl World {
@@ -41,25 +51,23 @@ impl World {
         self.chunks.get(&chunk_position).is_some()
     }
 
-    pub fn chunk_mesh(&mut self, chunk_position: Vector2<i32>) -> Arc<Mesh> {
-        if !self.chunk_meshes.contains_key(&chunk_position) {
-            let mesh = self.generate_chunk_mesh(chunk_position);
-            self.chunk_meshes.insert(chunk_position, Arc::new(mesh));
-        }
-        self.chunk_meshes.get(&chunk_position).unwrap().clone()
-    }
-
-    /// Generates a `Mesh` for a chunk.
     fn generate_chunk_mesh(&self, chunk_pos: Vector2<i32>) -> Mesh {
         let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];
 
-        let mut add_vertices = |vs: &[Vertex], position: Vector3<f32>| {
+        let mut add_vertices = |vs: &[Vertex], position: Vector3<f32>, block_type: BlockType| {
+            let uv_scale = 1.0 / (BLOCK_COUNT - 1) as f32;
+            let uv_padding = 0.01;
+
             let triangle_start: u32 = vertices.len() as u32;
             vertices.extend(&mut vs.iter().map(|v| Vertex {
                 position: (Vector3::from(v.position) + position).into(),
                 normal: v.normal,
-                uv: v.uv,
+                uv: [
+                    (v.uv[0] + uv_padding) * uv_scale
+                        + ((block_type as usize - 1) as f32 - uv_padding) * uv_scale,
+                    v.uv[1],
+                ],
             }));
             indices.extend(vec![
                 triangle_start,
@@ -92,7 +100,7 @@ impl World {
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
                 for y in 0..WORLD_HEIGHT {
-                    if !chunk[x][y][z] {
+                    if chunk[x][y][z] == BlockType::Air {
                         continue;
                     }
 
@@ -125,32 +133,14 @@ impl World {
                         .checked_sub(1)
                         .and_then(|y| self.chunk_block(chunk, vector3!(x, y, z)));
 
-                    // Front faces
-                    if let Some(false) = front {
-                        add_vertices(&face_vertices[0], world_position);
-                    }
-
-                    // Back faces
-                    if let Some(false) = back {
-                        add_vertices(face_vertices[3], world_position);
-                    }
-
-                    // Left faces
-                    if let Some(false) = left {
-                        add_vertices(face_vertices[2], world_position);
-                    }
-                    // Right faces
-                    if let Some(false) = right {
-                        add_vertices(face_vertices[1], world_position);
-                    }
-
-                    // Bottom faces
-                    if let Some(false) = bottom {
-                        add_vertices(face_vertices[5], world_position);
-                    }
-                    // Top faces
-                    if let Some(false) = top {
-                        add_vertices(face_vertices[4], world_position);
+                    let sides = [front, right, left, back, top, bottom];
+                    for (i, side) in sides.iter().enumerate() {
+                        match side {
+                            None | Some(BlockType::Air) => {
+                                add_vertices(&face_vertices[i], world_position, chunk[x][y][z])
+                            }
+                            _ => (),
+                        };
                     }
                 }
             }
@@ -158,12 +148,12 @@ impl World {
         Mesh::new(vertices, indices)
     }
 
-    fn block_at(&self, position: Vector3<f32>) -> bool {
+    fn block_at(&self, position: Vector3<f32>) -> BlockType {
         let (chunk_pos, block_pos) = self.world_to_block(position);
         if let Some(chunk) = self.chunks.get(&chunk_pos) {
             chunk[block_pos.x][block_pos.y][block_pos.z]
         } else {
-            false
+            BlockType::Air
         }
     }
 
@@ -171,10 +161,11 @@ impl World {
         self.chunks.get(&chunk_position)
     }
 
-    fn chunk_block<'a>(&self, chunk: &'a Chunk, block: Vector3<usize>) -> Option<&'a bool> {
+    fn chunk_block<'a>(&self, chunk: &'a Chunk, block: Vector3<usize>) -> Option<BlockType> {
         chunk
             .get(block.x)
             .and_then(|c| c.get(block.y).and_then(|c| c.get(block.z)))
+            .copied()
     }
 
     /// Takes a position in the world and returns the chunk that it's in.
@@ -202,7 +193,7 @@ struct WorldGenerator {}
 
 impl WorldGenerator {
     fn generate_chunk(&self, chunk_pos: Vector2<i32>) -> Chunk {
-        let mut blocks = [[[false; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE];
+        let mut blocks = [[[BlockType::Air; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE];
 
         let noise = generator::noise_generator();
 
@@ -219,7 +210,17 @@ impl WorldGenerator {
                 // Height must be at least 1!
                 let height = height.min(WORLD_HEIGHT - 1).max(1);
                 for y in 0..height {
-                    blocks[x][y][z] = true;
+                    if y < 5 {
+                        blocks[x][y][z] = BlockType::Water;
+                    } else if y < 10 {
+                        blocks[x][y][z] = BlockType::Sand;
+                    } else if y <= 100 {
+                        blocks[x][y][z] = BlockType::Grass;
+                    } else if y <= 170 {
+                        blocks[x][y][z] = BlockType::Stone;
+                    } else {
+                        blocks[x][y][z] = BlockType::Snow;
+                    }
                 }
             }
         }

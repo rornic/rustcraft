@@ -1,10 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use cgmath::{One, Quaternion, Vector2};
 use specs::prelude::*;
 
 use crate::{
-    render::renderer::{self, RenderMesh},
+    render::{
+        mesh::Mesh,
+        renderer::{self, RenderMesh},
+    },
     vector2, vector3,
     world::{CHUNK_SIZE, WORLD_HEIGHT},
 };
@@ -14,12 +20,14 @@ use super::{bounds::Bounds, camera::Camera, Transform};
 /// A system that continously generates and loads chunks around the camera.
 pub struct ChunkLoaderSystem {
     loaded_chunks: HashMap<Vector2<i32>, Entity>,
+    chunk_meshes: HashMap<Vector2<i32>, Arc<Mesh>>,
 }
 
 impl ChunkLoaderSystem {
     pub fn new() -> ChunkLoaderSystem {
         ChunkLoaderSystem {
             loaded_chunks: HashMap::new(),
+            chunk_meshes: HashMap::new(),
         }
     }
 }
@@ -66,18 +74,23 @@ impl<'a> System<'a> for ChunkLoaderSystem {
             for chunk_position in keys {
                 if !chunks_to_load.contains(&chunk_position) {
                     let e = self.loaded_chunks.remove(&chunk_position).unwrap();
-                    game_world.chunk_meshes.remove(&chunk_position).unwrap();
+                    self.chunk_meshes.remove(&chunk_position).unwrap();
                     entities.delete(e).unwrap();
                 }
             }
 
-            // Load any chunks in the circle we've not already loaded
-            for chunk_position in chunks_to_load
+            let chunks_to_load: Vec<Vector2<i32>> = chunks_to_load
                 .into_iter()
                 .filter(|c| !self.loaded_chunks.contains_key(&c))
                 .take(8)
-            {
-                // 1. Ensure this chunk and all its surrounding chunks have been generated.
+                .collect();
+
+            // Load any chunks in the circle we've not already loaded
+            for chunk_position in chunks_to_load {
+                if !game_world.is_chunk_generated(chunk_position) {
+                    game_world.generate_chunk(chunk_position);
+                }
+
                 for [x, z] in [[0, 0], [0, 1], [0, -1], [1, 0], [-1, 0]] {
                     let chunk = chunk_position + vector2!(x, z);
                     if !game_world.is_chunk_generated(chunk) {
@@ -86,17 +99,20 @@ impl<'a> System<'a> for ChunkLoaderSystem {
                 }
 
                 // 2. Compute the mesh for this chunk.
-                let mesh = game_world.chunk_mesh(chunk_position);
+                let mesh = self
+                    .chunk_meshes
+                    .entry(chunk_position)
+                    .or_insert(Arc::new(game_world.generate_chunk_mesh(chunk_position)));
+
                 let chunk_world_pos = vector3!(
                     (chunk_position.x * CHUNK_SIZE as i32) as f32,
                     0.0,
                     (chunk_position.y * CHUNK_SIZE as i32) as f32
                 );
-
                 new_chunks.push((
                     chunk_position,
                     Transform::new(chunk_world_pos, vector3!(1.0, 1.0, 1.0), Quaternion::one()),
-                    RenderMesh::new(mesh),
+                    RenderMesh::new(mesh.clone()),
                     Bounds::new(
                         vector3!(
                             CHUNK_SIZE as f32 / 2.0,
