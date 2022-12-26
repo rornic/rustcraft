@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use cgmath::{Vector2, Vector3};
-use noise::{Add, Multiply, NoiseFn, OpenSimplex, Perlin, RidgedMulti, Seedable};
+use noise::NoiseFn;
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3};
@@ -14,7 +14,7 @@ mod generator;
 pub const CHUNK_SIZE: usize = 16;
 type Chunk = Box<[[[bool; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
-const WORLD_HEIGHT: usize = 128;
+const WORLD_HEIGHT: usize = 256;
 
 #[derive(Default)]
 pub struct World {

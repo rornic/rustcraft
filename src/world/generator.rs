@@ -5,15 +5,15 @@ pub fn noise_generator() -> impl NoiseFn<f64, 2> {
     let scale: f64 = 1.0 / 2048.0;
 
     let base = Fbm::<Perlin>::new(seed)
-        .set_frequency(0.15)
+        .set_frequency(0.35)
         .set_persistence(0.5)
         .set_lacunarity(2.0)
         .set_octaves(30);
 
-    let mountains_def = Fbm::<Perlin>::new(seed + 10)
+    let mountains_def = Fbm::<Perlin>::new(seed)
         .set_frequency(0.7)
-        .set_lacunarity(1.21)
-        .set_octaves(3);
+        .set_lacunarity(1.2)
+        .set_octaves(16);
 
     let mountains = base.clone().set_frequency(0.7).set_octaves(30);
 

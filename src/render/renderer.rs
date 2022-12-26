@@ -148,7 +148,7 @@ impl Renderer {
         let global_uniforms = GlobalUniforms {
             projection_matrix: camera.projection_matrix(),
             view_matrix: view_matrix,
-            light: [-1.0, 0.4, 0.9f32],
+            light: [-0.2, 0.7, 0.2f32],
             model_matrix: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],
@@ -230,7 +230,7 @@ struct MemoryAllocation {
     count: usize,
 }
 
-pub const RENDER_DISTANCE: usize = 16;
+pub const RENDER_DISTANCE: usize = 8;
 
 trait Buffer<'a> {
     const BLOCK_SIZE: usize;
@@ -250,7 +250,7 @@ struct DynamicVertexBuffer {
 }
 
 impl<'a> Buffer<'a> for DynamicVertexBuffer {
-    const BLOCK_SIZE: usize = 4096;
+    const BLOCK_SIZE: usize = 2048;
     const BLOCK_COUNT: usize = 8 * RENDER_DISTANCE.pow(2);
     type Slice = VertexBufferSlice<'a, Vertex>;
 
