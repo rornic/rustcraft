@@ -18,5 +18,8 @@ void main() {
     float brightness = dot(normalize(v_normal), normalize(light));
     vec4 tex_color = texture(tex, vec2(v_uv.x, v_uv.y));
     vec4 dark = tex_color * 0.5;
-    color = mix(dark, tex_color, brightness);
+
+    vec4 fragColor = mix(dark, tex_color, brightness);
+    fragColor.a = 1.0;
+    color = fragColor;
 }

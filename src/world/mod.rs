@@ -57,15 +57,13 @@ impl World {
 
         let mut add_vertices = |vs: &[Vertex], position: Vector3<f32>, block_type: BlockType| {
             let uv_scale = 1.0 / (BLOCK_COUNT - 1) as f32;
-            let uv_padding = 0.01;
 
             let triangle_start: u32 = vertices.len() as u32;
             vertices.extend(&mut vs.iter().map(|v| Vertex {
                 position: (Vector3::from(v.position) + position).into(),
                 normal: v.normal,
                 uv: [
-                    (v.uv[0] + uv_padding) * uv_scale
-                        + ((block_type as usize - 1) as f32 - uv_padding) * uv_scale,
+                    uv_scale * (v.uv[0] + (block_type as usize - 1) as f32),
                     v.uv[1],
                 ],
             }));
@@ -129,13 +127,22 @@ impl World {
                             .or(adjacent_chunks[2]
                                 .and_then(|c| self.chunk_block(c, vector3!(0, y, z))));
                     let top = self.chunk_block(chunk, vector3!(x, y + 1, z));
-                    let bottom = y
-                        .checked_sub(1)
-                        .and_then(|y| self.chunk_block(chunk, vector3!(x, y, z)));
+
+                    let bottom = if y == 0 {
+                        Some(BlockType::Stone)
+                    } else {
+                        y.checked_sub(1)
+                            .and_then(|y| self.chunk_block(chunk, vector3!(x, y, z)))
+                    };
 
                     let sides = [front, right, left, back, top, bottom];
                     for (i, side) in sides.iter().enumerate() {
                         match side {
+                            Some(BlockType::Water) => {
+                                if chunk[x][y][z] != BlockType::Water {
+                                    add_vertices(&face_vertices[i], world_position, chunk[x][y][z])
+                                }
+                            }
                             None | Some(BlockType::Air) => {
                                 add_vertices(&face_vertices[i], world_position, chunk[x][y][z])
                             }
@@ -205,25 +212,35 @@ impl WorldGenerator {
                     chunk_pos.y * CHUNK_SIZE as i32 + z as i32,
                 );
                 let noise_val = noise.get([world_x as f64, world_z as f64]);
+
                 let height = (noise_val * WORLD_HEIGHT as f64).round() as usize;
+                let gradient_x = WORLD_HEIGHT as f64
+                    * (noise.get([(world_x + 1) as f64, world_z as f64])
+                        - noise.get([(world_x - 1) as f64, world_z as f64]));
+                let gradient_z = WORLD_HEIGHT as f64
+                    * (noise.get([world_x as f64, (world_z + 1) as f64])
+                        - noise.get([world_x as f64, (world_z - 1) as f64]));
 
                 // Height must be at least 1!
                 let height = height.min(WORLD_HEIGHT - 1).max(1);
                 for y in 0..height {
-                    if y < 5 {
-                        blocks[x][y][z] = BlockType::Water;
+                    if height >= 180 && ((gradient_x + gradient_z) <= 3.0) {
+                        blocks[x][y][z] = BlockType::Snow;
+                    } else if y >= 70 && ((gradient_x + gradient_z) <= 8.0) {
+                        blocks[x][y][z] = BlockType::Stone;
                     } else if y < 10 {
                         blocks[x][y][z] = BlockType::Sand;
-                    } else if y <= 100 {
-                        blocks[x][y][z] = BlockType::Grass;
-                    } else if y <= 170 {
-                        blocks[x][y][z] = BlockType::Stone;
                     } else {
-                        blocks[x][y][z] = BlockType::Snow;
+                        blocks[x][y][z] = BlockType::Grass;
                     }
+                }
+
+                for y in height..5 {
+                    blocks[x][y][z] = BlockType::Water;
                 }
             }
         }
+
         Box::new(blocks)
     }
 }

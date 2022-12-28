@@ -1,13 +1,17 @@
 use std::{collections::HashMap, sync::Arc, sync::Weak};
 
 use glium::{
-    index::{DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, PrimitiveType},
+    index::{
+        DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, IndicesSource,
+        PrimitiveType,
+    },
     texture::SrgbTexture2d,
     uniforms::{
-        MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, UniformBuffer,
+        MagnifySamplerFilter, MinifySamplerFilter, Sampler, SamplerBehavior, SamplerWrapFunction,
+        UniformBuffer,
     },
     vertex::VertexBufferSlice,
-    Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
+    Blend, Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
 use specs::{Component, Join, ReadStorage, System, VecStorage, Write};
 use uuid::Uuid;
@@ -85,8 +89,8 @@ pub struct Renderer {
     global_uniform_buffer: UniformBuffer<GlobalUniforms>,
     shader: Program,
     texture: SrgbTexture2d,
-    // mesh_heap: MeshHeap,
     world_mesh: WorldMesh,
+    command_buffer: DrawCommandsIndicesBuffer,
 }
 
 impl Renderer {
@@ -99,6 +103,7 @@ impl Renderer {
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
         let world_mesh = WorldMesh::new(&display);
+        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 1024).unwrap();
 
         Self {
             display,
@@ -106,6 +111,7 @@ impl Renderer {
             shader,
             texture,
             world_mesh,
+            command_buffer,
         }
     }
 
@@ -122,6 +128,7 @@ impl Renderer {
                 ..Default::default()
             },
             backface_culling: glium::BackfaceCullingMode::CullClockwise,
+            blend: Blend::alpha_blending(),
             ..Default::default()
         };
 
@@ -173,9 +180,7 @@ impl Renderer {
                     }
                 })
                 .collect::<Vec<DrawCommandIndices>>();
-            let command_buffer =
-                DrawCommandsIndicesBuffer::empty_dynamic(&self.display, commands.len()).unwrap();
-            command_buffer
+            self.command_buffer
                 .slice(0..commands.len())
                 .unwrap()
                 .write(&commands);
@@ -183,13 +188,27 @@ impl Renderer {
             target
                 .draw(
                     &self.world_mesh.vbo.buffer.vbo,
-                    command_buffer.with_index_buffer(&self.world_mesh.ibo.buffer.ibo),
+                    IndicesSource::MultidrawElement {
+                        commands: self
+                            .command_buffer
+                            .slice(0..commands.len())
+                            .unwrap()
+                            .as_slice_any(),
+                        indices: self.world_mesh.ibo.buffer.ibo.as_slice_any(),
+                        data_type: self.world_mesh.ibo.buffer.ibo.get_indices_type(),
+                        primitives: self.world_mesh.ibo.buffer.ibo.get_primitives_type(),
+                    },
                     &self.shader,
                     &uniform! {
                                 GlobalUniforms: &self.global_uniform_buffer,
                                 tex: Sampler(
                         &self.texture,
                         SamplerBehavior {
+                            wrap_function: (
+                                SamplerWrapFunction::Clamp,
+                                SamplerWrapFunction::Clamp,
+                                SamplerWrapFunction::Clamp
+                            ),
                             minify_filter: MinifySamplerFilter::NearestMipmapLinear,
                             magnify_filter: MagnifySamplerFilter::Nearest,
                             ..Default::default()

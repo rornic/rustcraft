@@ -82,7 +82,7 @@ impl<'a> System<'a> for ChunkLoaderSystem {
             let chunks_to_load: Vec<Vector2<i32>> = chunks_to_load
                 .into_iter()
                 .filter(|c| !self.loaded_chunks.contains_key(&c))
-                .take(8)
+                .take(4)
                 .collect();
 
             // Load any chunks in the circle we've not already loaded

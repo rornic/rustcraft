@@ -1,4 +1,4 @@
-use noise::{Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Select, Turbulence};
+use noise::{Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Select, Turbulence, Cache};
 
 pub fn noise_generator() -> impl NoiseFn<f64, 2> {
     let seed: u32 = 0;
@@ -33,5 +33,5 @@ pub fn noise_generator() -> impl NoiseFn<f64, 2> {
             .set_upper_bound(1.0),
     )
     .set_scale(scale);
-    generator
+    Cache::new(generator)
 }
