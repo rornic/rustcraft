@@ -3,8 +3,6 @@ use specs::{Component, VecStorage};
 
 use crate::vector3;
 
-use super::{camera::Camera, Transform};
-
 #[derive(Clone)]
 pub struct Bounds {
     origin: Vector3<f32>,

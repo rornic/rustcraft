@@ -5,7 +5,6 @@ use std::time::Instant;
 use cgmath::{One, Quaternion};
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
-use glium::glutin::GlRequest;
 use glium::Display;
 use input::{Input, InputEvent};
 use render::renderer::{RenderMesh, RenderingSystem};
@@ -73,7 +72,6 @@ fn main() {
     world.register::<Bounds>();
     world.register::<Camera>();
 
-    world.insert(ViewMatrix::default());
     world.insert(DeltaTime(0.0));
     world.insert(ElapsedTime(0.0));
     world.insert(RenderJob::default());
@@ -119,7 +117,6 @@ fn main() {
                 renderer.render(
                     world.write_storage::<Camera>().get_mut(camera).unwrap(),
                     &world.read_resource::<RenderJob>(),
-                    world.read_resource::<ViewMatrix>().0,
                 );
             }
             ev => {
@@ -136,6 +133,3 @@ pub struct DeltaTime(f32);
 
 #[derive(Default)]
 pub struct ElapsedTime(f32);
-
-#[derive(Default)]
-pub struct ViewMatrix(pub [[f32; 4]; 4]);

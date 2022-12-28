@@ -47,6 +47,7 @@ impl Component for RenderMesh {
 #[derive(Default)]
 pub struct RenderJob {
     draw_calls: Vec<DrawCall>,
+    camera: (Camera, Transform),
 }
 
 pub struct RenderingSystem;
@@ -65,6 +66,7 @@ impl<'a> System<'a> for RenderingSystem {
         (cameras, transforms, render_meshes, bounds, mut render_job): Self::SystemData,
     ) {
         let (camera, camera_transform) = (&cameras, &transforms).join().next().unwrap();
+        render_job.camera = (camera.clone(), camera_transform.clone());
 
         render_job.draw_calls.clear();
 
@@ -115,12 +117,7 @@ impl Renderer {
         }
     }
 
-    pub fn render(
-        &mut self,
-        camera: &mut Camera,
-        render_job: &RenderJob,
-        view_matrix: [[f32; 4]; 4],
-    ) {
+    pub fn render(&mut self, camera: &mut Camera, render_job: &RenderJob) {
         let draw_params = glium::DrawParameters {
             depth: glium::Depth {
                 test: glium::draw_parameters::DepthTest::IfLess,
@@ -151,7 +148,7 @@ impl Renderer {
 
             let global_uniforms = GlobalUniforms {
                 projection_matrix: camera.projection_matrix(),
-                view_matrix: view_matrix,
+                view_matrix: camera.view_matrix(),
                 light: [-0.2, 0.7, 0.2f32],
                 model_matrix: [
                     [1.0, 0.0, 0.0, 0.0],
