@@ -37,7 +37,7 @@ impl Transform {
             rotation: rotation,
         }
     }
-    /// Calculates a model matrix for rendering
+
     pub fn matrix(&self) -> [[f32; 4]; 4] {
         [
             [self.scale.x, 0.0, 0.0, 0.0],
@@ -45,6 +45,10 @@ impl Transform {
             [0.0, 0.0, self.scale.z, 0.0],
             [self.position.x, self.position.y, self.position.z, 1.0],
         ]
+    }
+
+    pub fn forward(&self) -> Vector3<f32> {
+        self.rotation * vector3!(0.0, 0.0, 1.0)
     }
 }
 

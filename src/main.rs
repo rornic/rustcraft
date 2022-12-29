@@ -90,7 +90,7 @@ fn main() {
     let mut dispatcher = DispatcherBuilder::new()
         .with(CameraSystem::new(camera), "camera", &[])
         .with(
-            ChunkGenerator::new(RENDER_DISTANCE as u32 + 4),
+            ChunkGenerator::new(RENDER_DISTANCE as u32 + RENDER_DISTANCE as u32 / 2),
             "chunk_generator",
             &[],
         )

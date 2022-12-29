@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use cgmath::{One, Quaternion, Vector2};
+use cgmath::{num_traits::Signed, InnerSpace, One, Quaternion, Vector2, Vector3};
 use specs::prelude::*;
 
 use crate::{
@@ -38,7 +38,9 @@ impl<'a> System<'a> for ChunkGenerator {
             .filter(|chunk| !game_world.is_chunk_generated(*chunk))
             .collect();
         chunks.sort_by(|c1, c2| {
-            chunk_distance(camera_chunk, *c1).cmp(&chunk_distance(camera_chunk, *c2))
+            chunk_camera_direction(camera_chunk, transform.forward(), *c1).total_cmp(
+                &chunk_camera_direction(camera_chunk, transform.forward(), *c2),
+            )
         });
 
         for chunk in chunks.iter().take(4) {
@@ -92,7 +94,9 @@ impl<'a> System<'a> for ChunkRenderer {
             .cloned()
             .collect::<Vec<Vector2<i32>>>();
         to_load.sort_by(|c1, c2| {
-            chunk_distance(camera_chunk, *c1).cmp(&chunk_distance(camera_chunk, *c2))
+            chunk_camera_direction(camera_chunk, transform.forward(), *c1).total_cmp(
+                &chunk_camera_direction(camera_chunk, transform.forward(), *c2),
+            )
         });
 
         for chunk in to_load.into_iter().take(2) {
@@ -143,13 +147,30 @@ fn chunk_distance(chunk1: Vector2<i32>, chunk2: Vector2<i32>) -> u32 {
     ((chunk2.x - chunk1.x).abs() + (chunk2.y - chunk1.x).abs()) as u32
 }
 
-fn chunk_components(chunk: Vector2<i32>, mesh: Arc<Mesh>) -> (Transform, RenderMesh, Bounds) {
-    let chunk_world_pos = vector3!(
+fn chunk_camera_direction(
+    camera_chunk: Vector2<i32>,
+    camera_forward: Vector3<f32>,
+    chunk: Vector2<i32>,
+) -> f32 {
+    let camera_dir = (chunk_world_pos(camera_chunk) - chunk_world_pos(chunk)).normalize();
+    let dot = camera_forward.dot(camera_dir);
+    dot / chunk_distance(camera_chunk, chunk) as f32
+}
+
+fn chunk_world_pos(chunk: Vector2<i32>) -> Vector3<f32> {
+    vector3!(
         (chunk.x * CHUNK_SIZE as i32) as f32,
         0.0,
         (chunk.y * CHUNK_SIZE as i32) as f32
+    )
+}
+
+fn chunk_components(chunk: Vector2<i32>, mesh: Arc<Mesh>) -> (Transform, RenderMesh, Bounds) {
+    let t = Transform::new(
+        chunk_world_pos(chunk),
+        vector3!(1.0, 1.0, 1.0),
+        Quaternion::one(),
     );
-    let t = Transform::new(chunk_world_pos, vector3!(1.0, 1.0, 1.0), Quaternion::one());
     let r = RenderMesh::new(mesh, true);
     let b = Bounds::new(
         vector3!(
