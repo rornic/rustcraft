@@ -105,7 +105,7 @@ impl Renderer {
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
         let world_mesh = WorldMesh::new(&display);
-        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 1024).unwrap();
+        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 2048).unwrap();
 
         Self {
             display,
@@ -242,7 +242,7 @@ struct MemoryAllocation {
     count: usize,
 }
 
-pub const RENDER_DISTANCE: usize = 8;
+pub const RENDER_DISTANCE: usize = 16;
 
 trait Buffer<'a> {
     const BLOCK_SIZE: usize;

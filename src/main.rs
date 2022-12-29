@@ -32,8 +32,9 @@ fn init_display() -> (EventLoop<()>, Display) {
     // Set up window
     let event_loop = glutin::event_loop::EventLoop::new();
     let wb = glutin::window::WindowBuilder::new();
-    let cb = glutin::ContextBuilder::new().with_depth_buffer(24);
-    // .with_vsync(true)
+    let cb = glutin::ContextBuilder::new()
+        .with_depth_buffer(24)
+        .with_vsync(true);
     let display = glium::Display::new(wb, cb, &event_loop).unwrap();
     (event_loop, display)
 }
@@ -95,9 +96,9 @@ fn main() {
 
     let mut last_frame = Instant::now();
     event_loop.run(move |ev, _, control_flow| {
-        // *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(
-        //     last_frame + std::time::Duration::from_nanos(16_666_667),
-        // );
+        *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(
+            last_frame + std::time::Duration::from_nanos(16_666_667),
+        );
         *control_flow = glium::glutin::event_loop::ControlFlow::Poll;
 
         match ev {
