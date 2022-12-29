@@ -104,10 +104,10 @@ impl Default for Camera {
             yaw: Deg(0.0),
             pitch: Deg(0.0),
             max_pitch: Deg(65.0),
-            aspect_ratio: 9.0 / 16.0,
+            aspect_ratio: 16.0 / 9.0,
             near_dist: 0.1,
             far_dist: RENDER_DISTANCE as f32 * CHUNK_SIZE as f32,
-            fov: 3.141592 / 2.0,
+            fov: 3.141592 / 3.0,
             view_matrix: [[0.0; 4]; 4],
             projection_matrix: [[0.0; 4]; 4],
         };
