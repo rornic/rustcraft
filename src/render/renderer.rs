@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, sync::Weak};
+use std::{collections::HashMap, sync::Arc, sync::Weak, time::Instant};
 
 use glium::{
     index::{
@@ -32,11 +32,12 @@ pub struct DrawCall {
 
 pub struct RenderMesh {
     mesh: Arc<Mesh>,
+    pub visible: bool,
 }
 
 impl RenderMesh {
-    pub fn new(mesh: Arc<Mesh>) -> RenderMesh {
-        RenderMesh { mesh: mesh }
+    pub fn new(mesh: Arc<Mesh>, visible: bool) -> RenderMesh {
+        RenderMesh { mesh, visible }
     }
 }
 
@@ -71,7 +72,9 @@ impl<'a> System<'a> for RenderingSystem {
         render_job.draw_calls.clear();
 
         for (transform, mesh_data, bounds) in (&transforms, &render_meshes, &bounds).join() {
-            if !camera.are_bounds_visible(camera_transform, transform.position, bounds) {
+            if !mesh_data.visible
+                || !camera.are_bounds_visible(camera_transform, transform.position, bounds)
+            {
                 continue;
             }
 
@@ -139,10 +142,9 @@ impl Renderer {
             }
         }
 
+        let mut target: Frame = self.display.draw();
+        target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
         if render_job.draw_calls.len() > 0 {
-            let mut target: Frame = self.display.draw();
-            target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
-
             let (width, height) = target.get_dimensions();
             camera.aspect_ratio = width as f32 / height as f32;
 
@@ -215,9 +217,9 @@ impl Renderer {
                     &draw_params,
                 )
                 .unwrap();
-            target.finish().unwrap();
-            self.world_mesh.garbage_collect();
         }
+        target.finish().unwrap();
+        self.world_mesh.garbage_collect();
     }
 }
 
@@ -242,7 +244,7 @@ struct MemoryAllocation {
     count: usize,
 }
 
-pub const RENDER_DISTANCE: usize = 16;
+pub const RENDER_DISTANCE: usize = 8;
 
 trait Buffer<'a> {
     const BLOCK_SIZE: usize;

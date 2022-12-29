@@ -48,7 +48,13 @@ impl World {
     }
 
     pub fn is_chunk_generated(&self, chunk_position: Vector2<i32>) -> bool {
-        self.chunks.get(&chunk_position).is_some()
+        self.chunks.contains_key(&chunk_position)
+    }
+
+    pub fn are_neighbours_generated(&self, chunk: Vector2<i32>) -> bool {
+        [[0, 1], [0, -1], [1, 0], [-1, 0]]
+            .iter()
+            .all(|p| self.is_chunk_generated(chunk + vector2!(p[0], p[1])))
     }
 
     fn generate_chunk_mesh(&self, chunk_pos: Vector2<i32>) -> Mesh {

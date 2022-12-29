@@ -7,7 +7,7 @@ use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
 use input::{Input, InputEvent};
-use render::renderer::{RenderMesh, RenderingSystem};
+use render::renderer::{RenderMesh, RenderingSystem, RENDER_DISTANCE};
 use specs::WorldExt;
 
 use specs::prelude::*;
@@ -20,7 +20,7 @@ mod world;
 
 use world::ecs::bounds::Bounds;
 use world::ecs::camera::{Camera, CameraSystem};
-use world::ecs::chunk_loader::ChunkLoaderSystem;
+use world::ecs::chunk_loader::{ChunkGenerator, ChunkRenderer};
 use world::ecs::Transform;
 
 use crate::render::renderer::RenderJob;
@@ -89,8 +89,17 @@ fn main() {
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(CameraSystem::new(camera), "camera", &[])
-        .with(ChunkLoaderSystem::new(), "chunk_loader", &[])
-        .with(RenderingSystem, "rendering", &["chunk_loader"])
+        .with(
+            ChunkGenerator::new(RENDER_DISTANCE as u32 + 4),
+            "chunk_generator",
+            &[],
+        )
+        .with(
+            ChunkRenderer::new(RENDER_DISTANCE as u32),
+            "chunk_renderer",
+            &[],
+        )
+        .with(RenderingSystem, "rendering", &["chunk_renderer"])
         .build();
     dispatcher.setup(&mut world);
 
@@ -99,7 +108,6 @@ fn main() {
         *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(
             last_frame + std::time::Duration::from_nanos(16_666_667),
         );
-        *control_flow = glium::glutin::event_loop::ControlFlow::Poll;
 
         match ev {
             glium::glutin::event::Event::MainEventsCleared => {
