@@ -1,5 +1,6 @@
-use std::{collections::HashMap, sync::Arc, sync::Weak, time::Instant};
+use std::{collections::HashMap, sync::Arc, sync::Weak};
 
+use cgmath::Vector3;
 use glium::{
     index::{
         DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, IndicesSource,
@@ -120,7 +121,12 @@ impl Renderer {
         }
     }
 
-    pub fn render(&mut self, camera: &mut Camera, render_job: &RenderJob) {
+    pub fn render(
+        &mut self,
+        camera: &mut Camera,
+        camera_position: Vector3<f32>,
+        render_job: &RenderJob,
+    ) {
         let draw_params = glium::DrawParameters {
             depth: glium::Depth {
                 test: glium::draw_parameters::DepthTest::IfLess,
@@ -149,15 +155,23 @@ impl Renderer {
             camera.aspect_ratio = width as f32 / height as f32;
 
             let global_uniforms = GlobalUniforms {
-                projection_matrix: camera.projection_matrix(),
-                view_matrix: camera.view_matrix(),
-                light: [-0.2, 0.7, 0.2f32],
                 model_matrix: [
                     [1.0, 0.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0, 0.0],
                     [0.0, 0.0, 1.0, 0.0],
                     [0.0, 0.0, 0.0, 1.0_f32],
                 ],
+                projection_matrix: camera.projection_matrix(),
+                view_matrix: camera.view_matrix(),
+                camera_pos: [
+                    camera_position.x,
+                    camera_position.y,
+                    camera_position.z,
+                    0.0f32,
+                ],
+                light: [-0.2, 0.7, 0.2f32, 0.0f32],
+                fog_start: camera.far_dist - 16.0,
+                fog_end: camera.far_dist,
             };
             self.global_uniform_buffer.write(&global_uniforms);
 
@@ -199,21 +213,21 @@ impl Renderer {
                     },
                     &self.shader,
                     &uniform! {
-                                GlobalUniforms: &self.global_uniform_buffer,
-                                tex: Sampler(
-                        &self.texture,
-                        SamplerBehavior {
-                            wrap_function: (
-                                SamplerWrapFunction::Clamp,
-                                SamplerWrapFunction::Clamp,
-                                SamplerWrapFunction::Clamp
-                            ),
-                            minify_filter: MinifySamplerFilter::NearestMipmapLinear,
-                            magnify_filter: MagnifySamplerFilter::Nearest,
-                            ..Default::default()
-                        },
-                    )
+                        GlobalUniforms: &self.global_uniform_buffer,
+                        tex: Sampler(
+                            &self.texture,
+                            SamplerBehavior {
+                                wrap_function: (
+                                    SamplerWrapFunction::Clamp,
+                                    SamplerWrapFunction::Clamp,
+                                    SamplerWrapFunction::Clamp
+                                ),
+                                minify_filter: MinifySamplerFilter::NearestMipmapLinear,
+                                magnify_filter: MagnifySamplerFilter::Nearest,
+                                ..Default::default()
                             },
+                        )
+                    },
                     &draw_params,
                 )
                 .unwrap();
@@ -228,14 +242,20 @@ struct GlobalUniforms {
     model_matrix: [[f32; 4]; 4],
     projection_matrix: [[f32; 4]; 4],
     view_matrix: [[f32; 4]; 4],
-    light: [f32; 3],
+    camera_pos: [f32; 4],
+    light: [f32; 4],
+    fog_start: f32,
+    fog_end: f32,
 }
 implement_uniform_block!(
     GlobalUniforms,
     model_matrix,
     projection_matrix,
     view_matrix,
-    light
+    camera_pos,
+    light,
+    fog_start,
+    fog_end
 );
 
 #[derive(Clone, Copy)]
@@ -244,7 +264,7 @@ struct MemoryAllocation {
     count: usize,
 }
 
-pub const RENDER_DISTANCE: usize = 8;
+pub const RENDER_DISTANCE: usize = 16;
 
 trait Buffer<'a> {
     const BLOCK_SIZE: usize;

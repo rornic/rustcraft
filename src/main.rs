@@ -125,6 +125,11 @@ fn main() {
 
                 renderer.render(
                     world.write_storage::<Camera>().get_mut(camera).unwrap(),
+                    world
+                        .read_storage::<Transform>()
+                        .get(camera)
+                        .unwrap()
+                        .position,
                     &world.read_resource::<RenderJob>(),
                 );
             }

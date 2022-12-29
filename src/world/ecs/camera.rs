@@ -2,7 +2,9 @@ use cgmath::{prelude::*, Deg, Euler, Quaternion, Vector3};
 use glium::glutin::event::VirtualKeyCode;
 use specs::{Component, Entity, Read, System, VecStorage, WriteStorage};
 
-use crate::{input::Input, vector3, DeltaTime};
+use crate::{
+    input::Input, render::renderer::RENDER_DISTANCE, vector3, world::CHUNK_SIZE, DeltaTime,
+};
 
 use super::{bounds::Bounds, Transform};
 
@@ -104,7 +106,7 @@ impl Default for Camera {
             max_pitch: Deg(65.0),
             aspect_ratio: 9.0 / 16.0,
             near_dist: 0.1,
-            far_dist: 1024.0,
+            far_dist: RENDER_DISTANCE as f32 * CHUNK_SIZE as f32,
             fov: 3.141592 / 2.0,
             view_matrix: [[0.0; 4]; 4],
             projection_matrix: [[0.0; 4]; 4],
