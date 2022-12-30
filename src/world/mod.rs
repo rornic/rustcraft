@@ -21,6 +21,16 @@ pub enum BlockType {
     Water,
     Snow,
 }
+
+impl BlockType {
+    pub fn is_solid(&self) -> bool {
+        match self {
+            BlockType::Water | BlockType::Air => false,
+            _ => true,
+        }
+    }
+}
+
 const BLOCK_COUNT: usize = 6;
 
 type Chunk = Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;

@@ -6,7 +6,7 @@ use crate::vector3;
 #[derive(Clone)]
 pub struct Bounds {
     origin: Vector3<f32>,
-    dimensions: Vector3<f32>,
+    pub dimensions: Vector3<f32>,
 }
 
 impl Bounds {
@@ -38,6 +38,10 @@ impl Bounds {
             origin: self.origin + position,
             dimensions: self.dimensions,
         }
+    }
+
+    pub fn bottom(&self) -> Vector3<f32> {
+        self.origin - vector3!(0.0, self.dimensions.y, 0.0)
     }
 }
 

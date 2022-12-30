@@ -2,7 +2,7 @@
 extern crate glium;
 use std::time::Instant;
 
-use cgmath::{One, Quaternion};
+use cgmath::{One, Quaternion, Vector3, Zero};
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
@@ -21,6 +21,8 @@ mod world;
 use world::ecs::bounds::Bounds;
 use world::ecs::camera::{Camera, CameraSystem};
 use world::ecs::chunk_loader::{ChunkGenerator, ChunkLoader};
+use world::ecs::physics::{Physics, Rigidbody};
+use world::ecs::player::{Player, PlayerMovement};
 use world::ecs::Transform;
 
 use crate::render::renderer::RenderJob;
@@ -72,23 +74,29 @@ fn main() {
     world.register::<RenderMesh>();
     world.register::<Bounds>();
     world.register::<Camera>();
-
-    world.insert(DeltaTime(0.0));
-    world.insert(ElapsedTime(0.0));
-    world.insert(RenderJob::default());
+    world.register::<Rigidbody>();
+    world.register::<Player>();
 
     let camera = world
         .create_entity()
+        .with(Player::default())
         .with(Transform::new(
             vector3!(0.0, 32.0, 25.0),
             vector3!(1.0, 1.0, 1.0),
             Quaternion::one(),
         ))
         .with(Camera::default())
+        .with(Rigidbody::default())
+        .with(Bounds::new(
+            vector3!(0.0, -0.8, 0.0),
+            vector3!(0.5, 1.0, 0.5),
+        ))
         .build();
 
     let mut dispatcher = DispatcherBuilder::new()
         .with(CameraSystem::new(camera), "camera", &[])
+        .with(Physics::new(), "physics", &[])
+        .with(PlayerMovement::default(), "player_movement", &[])
         .with(
             ChunkGenerator::new(RENDER_DISTANCE as u32 + RENDER_DISTANCE as u32 / 2),
             "chunk_generator",
@@ -116,7 +124,7 @@ fn main() {
                 last_frame = frame_start;
 
                 world.write_resource::<DeltaTime>().0 = delta_time;
-                world.write_resource::<ElapsedTime>().0 += delta_time;
+                // world.write_resource::<ElapsedTime>().0 += delta_time;
 
                 dispatcher.dispatch(&mut world);
                 world.maintain();

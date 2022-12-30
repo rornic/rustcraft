@@ -50,38 +50,12 @@ impl<'a> System<'a> for CameraSystem {
         );
         camera.calculate_projection_matrix();
 
-        // Apply changes to camera's pitch and yaw based on mouse movement
-        camera.pitch.0 = (camera.pitch.0 + input.mouse.vertical_motion() * 30.0 * delta_time)
+        let sensitivity = 90.0;
+
+        camera.pitch.0 = (camera.pitch.0
+            + input.mouse.vertical_motion() * sensitivity * delta_time)
             .clamp(-camera.max_pitch.0, camera.max_pitch.0);
-        camera.yaw.0 += input.mouse.horizontal_motion() * 30.0 * delta_time;
-
-        let move_speed = 30.0;
-
-        // Move camera in XYZ space
-        let mut movement_vector = Vector3::new(0.0, 0.0, 0.0);
-        if input.keyboard.is_pressed(VirtualKeyCode::A) {
-            movement_vector.x = -move_speed;
-        } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
-            movement_vector.x = move_speed;
-        }
-
-        if input.keyboard.is_pressed(VirtualKeyCode::W) {
-            movement_vector.z = move_speed;
-        } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
-            movement_vector.z = -move_speed;
-        }
-
-        if input.keyboard.is_pressed(VirtualKeyCode::Space) {
-            movement_vector.y = move_speed;
-        } else if input.keyboard.is_pressed(VirtualKeyCode::LShift) {
-            movement_vector.y = -move_speed;
-        }
-
-        // Apply Y axis movement separately so we don't rotate the movement to follow the camera
-        transform.position += (transform.rotation
-            * vector3!(movement_vector.x, 0.0, movement_vector.z)
-            + vector3!(0.0, movement_vector.y, 0.0))
-            * delta_time;
+        camera.yaw.0 += input.mouse.horizontal_motion() * sensitivity * delta_time;
     }
 }
 
