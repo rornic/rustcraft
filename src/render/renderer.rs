@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, sync::Weak};
+use std::{collections::HashMap, sync::Arc, sync::Weak, time::Instant};
 
 use cgmath::Vector3;
 use glium::{
@@ -14,7 +14,9 @@ use glium::{
     vertex::VertexBufferSlice,
     Blend, Display, Frame, IndexBuffer, Program, Surface, VertexBuffer,
 };
-use specs::{Component, Join, ReadStorage, System, VecStorage, Write};
+use specs::{
+    prelude::ParallelIterator, Component, Join, ParJoin, ReadStorage, System, VecStorage, Write,
+};
 use uuid::Uuid;
 
 use crate::world::ecs::{bounds::Bounds, camera::Camera, Transform};
@@ -72,21 +74,24 @@ impl<'a> System<'a> for RenderingSystem {
 
         render_job.draw_calls.clear();
 
-        for (transform, mesh_data, bounds) in (&transforms, &render_meshes, &bounds).join() {
-            if !mesh_data.visible
-                || !camera.are_bounds_visible(camera_transform, transform.position, bounds)
-            {
-                continue;
-            }
+        render_job.draw_calls = (&transforms, &render_meshes, &bounds)
+            .par_join()
+            .filter_map(|(transform, mesh_data, bounds)| {
+                if !mesh_data.visible
+                    || !camera.are_bounds_visible(camera_transform, transform.position, bounds)
+                {
+                    return None;
+                }
 
-            render_job.draw_calls.push(DrawCall {
-                material: Material {
-                    name: "default".to_string(),
-                },
-                mesh: mesh_data.mesh.clone(),
-                transform: transform.clone(),
-            });
-        }
+                Some(DrawCall {
+                    material: Material {
+                        name: "default".to_string(),
+                    },
+                    mesh: mesh_data.mesh.clone(),
+                    transform: transform.clone(),
+                })
+            })
+            .collect();
     }
 }
 
