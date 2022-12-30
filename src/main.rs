@@ -20,7 +20,7 @@ mod world;
 
 use world::ecs::bounds::Bounds;
 use world::ecs::camera::{Camera, CameraSystem};
-use world::ecs::chunk_loader::{ChunkGenerator, ChunkRenderer};
+use world::ecs::chunk_loader::{ChunkGenerator, ChunkLoader};
 use world::ecs::Transform;
 
 use crate::render::renderer::RenderJob;
@@ -95,11 +95,11 @@ fn main() {
             &[],
         )
         .with(
-            ChunkRenderer::new(RENDER_DISTANCE as u32),
-            "chunk_renderer",
+            ChunkLoader::new(RENDER_DISTANCE as u32),
+            "chunk_loader",
             &[],
         )
-        .with(RenderingSystem, "rendering", &["chunk_renderer"])
+        .with(RenderingSystem, "rendering", &[])
         .build();
     dispatcher.setup(&mut world);
 

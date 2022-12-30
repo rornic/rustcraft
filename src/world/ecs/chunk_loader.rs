@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use cgmath::{num_traits::Signed, InnerSpace, One, Quaternion, Vector2, Vector3};
+use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3};
 use specs::prelude::*;
 
 use crate::{
@@ -49,14 +49,14 @@ impl<'a> System<'a> for ChunkGenerator {
     }
 }
 
-pub struct ChunkRenderer {
+pub struct ChunkLoader {
     render_distance: u32,
     active_chunks: HashSet<Vector2<i32>>,
     chunk_meshes: HashMap<Vector2<i32>, Arc<Mesh>>,
     chunk_entities: HashMap<Vector2<i32>, Entity>,
 }
 
-impl ChunkRenderer {
+impl ChunkLoader {
     pub fn new(render_distance: u32) -> Self {
         Self {
             render_distance,
@@ -67,7 +67,7 @@ impl ChunkRenderer {
     }
 }
 
-impl<'a> System<'a> for ChunkRenderer {
+impl<'a> System<'a> for ChunkLoader {
     type SystemData = (
         ReadStorage<'a, Camera>,
         WriteStorage<'a, Transform>,
