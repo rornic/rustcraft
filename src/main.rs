@@ -88,7 +88,7 @@ fn main() {
         .with(Camera::default())
         .with(Rigidbody::default())
         .with(Bounds::new(
-            vector3!(0.0, -0.8, 0.0),
+            vector3!(0.0, 0.0, 0.0),
             vector3!(0.5, 1.0, 0.5),
         ))
         .build();

@@ -164,7 +164,7 @@ impl Camera {
             return false;
         }
 
-        let h = pcz * 2.0 * f32::tan(135.0_f32.to_radians() / 2.0);
+        let h = pcz * 2.0 * f32::tan(175.0_f32.to_radians() / 2.0);
         let pcy = v.dot(transform.rotation * vector3!(0.0, 1.0, 0.0));
         if -h / 2.0 > pcy || pcy > h / 2.0 {
             return false;

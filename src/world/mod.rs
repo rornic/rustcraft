@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
+use specs::world;
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3};
@@ -208,6 +209,14 @@ impl World {
             (world_position.z - (chunk.y * CHUNK_SIZE as i32) as f32).floor() as usize
         );
         (chunk, relative_pos)
+    }
+
+    fn block_centre(&self, world_position: Vector3<f32>) -> Vector3<f32> {
+        vector3!(
+            world_position.x.round(),
+            world_position.y.floor(),
+            world_position.z.round()
+        )
     }
 }
 

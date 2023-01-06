@@ -60,6 +60,28 @@ impl<'a> System<'a> for Physics {
                 rigidbody.velocity += vector3!(0.0, GRAVITY, 0.0f32) * delta_time.0;
             }
 
+            let new_position = transform.position + rigidbody.velocity * delta_time.0;
+
+            let next_block = world.block_centre(transform.position)
+                + vector3!(rigidbody.velocity.x.signum(), 0.0, 0.0);
+            if world.block_at(next_block).is_solid()
+                && bounds
+                    .to_world(new_position)
+                    .intersects(Bounds::new(next_block, vector3!(1.0, 1.0, 1.0)))
+            {
+                rigidbody.velocity.x = 0.0;
+            }
+
+            let next_block = world.block_centre(transform.position)
+                + vector3!(0.0, 0.0, rigidbody.velocity.z.signum());
+            if world.block_at(next_block).is_solid()
+                && bounds.to_world(new_position).intersects(Bounds::new(
+                    world.block_centre(next_block),
+                    vector3!(1.0, 1.0, 1.0),
+                ))
+            {
+                rigidbody.velocity.z = 0.0;
+            }
             transform.position += rigidbody.velocity * delta_time.0;
         }
     }
