@@ -1,5 +1,4 @@
 use cgmath::{prelude::*, Deg, Euler, Quaternion, Vector3};
-use glium::glutin::event::VirtualKeyCode;
 use specs::{Component, Entity, Read, System, VecStorage, WriteStorage};
 
 use crate::{

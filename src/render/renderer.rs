@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, sync::Weak, time::Instant};
+use std::{collections::HashMap, sync::Arc, sync::Weak};
 
 use cgmath::Vector3;
 use glium::{

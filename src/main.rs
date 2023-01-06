@@ -2,7 +2,7 @@
 extern crate glium;
 use std::time::Instant;
 
-use cgmath::{One, Quaternion, Vector3, Zero};
+use cgmath::{One, Quaternion};
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
@@ -81,7 +81,7 @@ fn main() {
         .create_entity()
         .with(Player::default())
         .with(Transform::new(
-            vector3!(30.0, 10.0, 25.0),
+            vector3!(30.0, 75.0, 25.0),
             vector3!(1.0, 1.0, 1.0),
             Quaternion::one(),
         ))

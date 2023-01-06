@@ -55,27 +55,37 @@ impl<'a> System<'a> for Physics {
         (mut transforms, mut rigidbodies, bounds, delta_time, world): Self::SystemData,
     ) {
         for (transform, rigidbody, bounds) in (&mut transforms, &mut rigidbodies, &bounds).join() {
-            let bottom = bounds.to_world(transform.position).bottom() + vector3!(0.0, -0.01, 0.0);
-            rigidbody.grounded = world.block_at(bottom).is_solid();
-            if rigidbody.velocity.y < 0.0 && rigidbody.grounded {
-                rigidbody.velocity.y = 0.0;
+            let bottom_block = world.block_centre(bounds.to_world(transform.position).bottom());
+
+            let new_position = transform.position
+                + vector3!(rigidbody.velocity.x, 0.0, rigidbody.velocity.z) * delta_time.0;
+            if collides_with_block(
+                bottom_block + vector3!(rigidbody.velocity.x.signum(), 0.0, 0.0),
+                bounds.to_world(new_position),
+                &world,
+            ) {
+                rigidbody.velocity.x = 0.0;
+            }
+
+            if collides_with_block(
+                bottom_block + vector3!(0.0, 0.0, rigidbody.velocity.z.signum()),
+                bounds.to_world(new_position),
+                &world,
+            ) {
+                rigidbody.velocity.z = 0.0;
             }
 
             if !rigidbody.grounded && rigidbody.apply_gravity {
                 rigidbody.velocity += vector3!(0.0, GRAVITY, 0.0f32) * delta_time.0;
             }
 
-            let new_position = transform.position + rigidbody.velocity * delta_time.0;
-            let x_block = world.block_centre(transform.position)
-                + vector3!(rigidbody.velocity.x.signum(), 0.0, 0.0);
-            if collides_with_block(x_block, bounds.to_world(new_position), &world) {
-                rigidbody.velocity.x = 0.0;
-            }
-
-            let z_block = world.block_centre(transform.position)
-                + vector3!(0.0, 0.0, rigidbody.velocity.z.signum());
-            if collides_with_block(z_block, bounds.to_world(new_position), &world) {
-                rigidbody.velocity.z = 0.0;
+            rigidbody.grounded = collides_with_block(
+                bottom_block + vector3!(0.0, -0.1, 0.0),
+                bounds.to_world(new_position),
+                &world,
+            );
+            if rigidbody.velocity.y < 0.0 && rigidbody.grounded {
+                rigidbody.velocity.y = 0.0;
             }
 
             transform.position += rigidbody.velocity * delta_time.0;

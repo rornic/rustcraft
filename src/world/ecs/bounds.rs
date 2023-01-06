@@ -3,7 +3,7 @@ use specs::{Component, VecStorage};
 
 use crate::vector3;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Bounds {
     pub origin: Vector3<f32>,
     pub dimensions: Vector3<f32>,

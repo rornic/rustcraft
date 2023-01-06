@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
-use specs::world;
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3};
@@ -214,7 +213,7 @@ impl World {
     fn block_centre(&self, world_position: Vector3<f32>) -> Vector3<f32> {
         vector3!(
             world_position.x.round(),
-            world_position.y.floor(),
+            world_position.y.round(),
             world_position.z.round()
         )
     }
