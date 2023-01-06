@@ -45,8 +45,8 @@ impl<'a> System<'a> for PlayerMovement {
             rigidbody.velocity.x = movement_vector.x;
             rigidbody.velocity.z = movement_vector.z;
 
-            if input.keyboard.is_pressed(VirtualKeyCode::Space) {
-                rigidbody.velocity.y = 4.0;
+            if input.keyboard.is_pressed(VirtualKeyCode::Space) && rigidbody.is_grounded() {
+                rigidbody.velocity.y = 5.0;
             }
         }
     }

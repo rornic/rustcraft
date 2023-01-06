@@ -81,7 +81,7 @@ fn main() {
         .create_entity()
         .with(Player::default())
         .with(Transform::new(
-            vector3!(0.0, 32.0, 25.0),
+            vector3!(30.0, 10.0, 25.0),
             vector3!(1.0, 1.0, 1.0),
             Quaternion::one(),
         ))
