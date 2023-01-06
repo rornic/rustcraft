@@ -62,27 +62,24 @@ impl<'a> System<'a> for Physics {
 
             let new_position = transform.position + rigidbody.velocity * delta_time.0;
 
-            let next_block = world.block_centre(transform.position)
+            let x_block = world.block_centre(transform.position)
                 + vector3!(rigidbody.velocity.x.signum(), 0.0, 0.0);
-            if world.block_at(next_block).is_solid()
-                && bounds
-                    .to_world(new_position)
-                    .intersects(Bounds::new(next_block, vector3!(1.0, 1.0, 1.0)))
-            {
+            if collides_with_block(x_block, bounds.to_world(new_position), &world) {
                 rigidbody.velocity.x = 0.0;
             }
 
-            let next_block = world.block_centre(transform.position)
+            let z_block = world.block_centre(transform.position)
                 + vector3!(0.0, 0.0, rigidbody.velocity.z.signum());
-            if world.block_at(next_block).is_solid()
-                && bounds.to_world(new_position).intersects(Bounds::new(
-                    world.block_centre(next_block),
-                    vector3!(1.0, 1.0, 1.0),
-                ))
-            {
+            if collides_with_block(z_block, bounds.to_world(new_position), &world) {
                 rigidbody.velocity.z = 0.0;
             }
+
             transform.position += rigidbody.velocity * delta_time.0;
         }
     }
+}
+
+fn collides_with_block(block: Vector3<f32>, bounds: Bounds, world: &World) -> bool {
+    world.block_at(block).is_solid()
+        && bounds.intersects(Bounds::new(block, vector3!(1.0, 1.0, 1.0)))
 }
