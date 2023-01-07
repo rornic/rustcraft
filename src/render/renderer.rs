@@ -114,7 +114,8 @@ impl Renderer {
         let texture = load_texture(&display, "textures/stone.png").unwrap();
 
         let world_mesh = WorldMesh::new(&display);
-        let command_buffer = DrawCommandsIndicesBuffer::empty_dynamic(&display, 2048).unwrap();
+        let command_buffer =
+            DrawCommandsIndicesBuffer::empty_dynamic(&display, COMMAND_BUFFER_SIZE).unwrap();
 
         Self {
             display,
@@ -263,13 +264,18 @@ implement_uniform_block!(
     fog_end
 );
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct MemoryAllocation {
     start: usize,
     count: usize,
 }
 
 pub const RENDER_DISTANCE: usize = 16;
+
+// For a render distance r, we can load (2r)^2 chunks around the player.
+// If none of these are culled, we need a draw command for each chunk. Therefore command buffer should be have room for at least (2r)^2 commands.
+// I've doubled it for good measure.
+const COMMAND_BUFFER_SIZE: usize = 2 * (2 * RENDER_DISTANCE).pow(2);
 
 trait Buffer<'a> {
     const BLOCK_SIZE: usize;
@@ -279,8 +285,13 @@ trait Buffer<'a> {
     fn new(display: &Display) -> Self;
     fn slice(&'a self, block: MemoryAllocation) -> Self::Slice;
     fn clear(&self, block: MemoryAllocation);
+
     fn block_size(&self) -> usize {
         Self::BLOCK_SIZE
+    }
+
+    fn block_count(&self) -> usize {
+        Self::BLOCK_COUNT
     }
 }
 
@@ -290,7 +301,7 @@ struct DynamicVertexBuffer {
 
 impl<'a> Buffer<'a> for DynamicVertexBuffer {
     const BLOCK_SIZE: usize = 4096;
-    const BLOCK_COUNT: usize = 4096;
+    const BLOCK_COUNT: usize = 8192;
     type Slice = VertexBufferSlice<'a, Vertex>;
 
     fn slice(&'a self, block: MemoryAllocation) -> Self::Slice {
@@ -353,7 +364,7 @@ impl<'a, T: Buffer<'a>> AllocatedBuffer<T> {
     fn new(buffer: T) -> Self {
         let initial_block = MemoryAllocation {
             start: 0,
-            count: buffer.block_size(),
+            count: buffer.block_count(),
         };
         Self {
             buffer,
