@@ -3,7 +3,6 @@ extern crate glium;
 use std::time::Instant;
 
 use cgmath::{One, Quaternion};
-use glium::glutin::dpi::PhysicalPosition;
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
