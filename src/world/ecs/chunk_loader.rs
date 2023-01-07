@@ -133,6 +133,7 @@ impl<'a> System<'a> for ChunkLoader {
             let e = self.chunk_entities.remove(&chunk).unwrap();
             entities.delete(e).unwrap();
             self.active_chunks.remove(&chunk);
+            self.chunk_meshes.remove(&chunk);
         }
     }
 }
