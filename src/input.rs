@@ -20,7 +20,7 @@ pub enum InputEvent {
 impl Input {
     /// Updates the input, resetting any values if they should only be set on a per-frame basis.
     pub fn update(&mut self) {
-        self.mouse.motion = (0.0, 0.0);
+        self.mouse.delta = (0.0, 0.0);
     }
 
     pub fn process_event(&mut self, event: &InputEvent) {
@@ -33,7 +33,9 @@ impl Input {
                 ElementState::Pressed => self.keyboard.press(*code),
                 ElementState::Released => self.keyboard.release(*code),
             },
-            InputEvent::MouseMotion { delta } => self.mouse.motion(*delta),
+            InputEvent::MouseMotion { delta } => {
+                self.mouse.move_mouse((delta.0 as f32, delta.1 as f32))
+            }
             _ => (),
         }
     }
@@ -68,18 +70,18 @@ impl KeyboardMap {
 
 #[derive(Default)]
 pub struct Mouse {
-    motion: (f32, f32),
+    delta: (f32, f32),
 }
 impl Mouse {
-    fn motion(&mut self, motion: (f64, f64)) {
-        self.motion = (motion.0 as f32, motion.1 as f32);
+    fn move_mouse(&mut self, delta: (f32, f32)) {
+        self.delta = delta;
     }
 
     pub fn horizontal_motion(&self) -> f32 {
-        self.motion.0
+        self.delta.0
     }
 
     pub fn vertical_motion(&self) -> f32 {
-        self.motion.1
+        self.delta.1
     }
 }

@@ -49,7 +49,7 @@ impl<'a> System<'a> for CameraSystem {
         );
         camera.calculate_projection_matrix();
 
-        let sensitivity = 90.0;
+        let sensitivity = 50.0;
 
         camera.pitch.0 = (camera.pitch.0
             + input.mouse.vertical_motion() * sensitivity * delta_time)

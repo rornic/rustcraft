@@ -3,6 +3,7 @@ extern crate glium;
 use std::time::Instant;
 
 use cgmath::{One, Quaternion};
+use glium::glutin::dpi::PhysicalPosition;
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
@@ -34,10 +35,15 @@ fn init_display() -> (EventLoop<()>, Display) {
     // Set up window
     let event_loop = glutin::event_loop::EventLoop::new();
     let wb = glutin::window::WindowBuilder::new();
-    let cb = glutin::ContextBuilder::new()
+    let window = glutin::ContextBuilder::new()
         .with_depth_buffer(24)
-        .with_vsync(true);
-    let display = glium::Display::new(wb, cb, &event_loop).unwrap();
+        .with_vsync(true)
+        .build_windowed(wb, &event_loop)
+        .unwrap();
+    window.window().set_cursor_grab(true).unwrap();
+    window.window().set_cursor_visible(false);
+
+    let display = glium::Display::from_gl_window(window).unwrap();
     (event_loop, display)
 }
 
@@ -51,10 +57,12 @@ fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputE
                 *control_flow = glutin::event_loop::ControlFlow::Exit;
                 None
             }
+            glutin::event::WindowEvent::KeyboardInput { input, .. } => {
+                Some(InputEvent::Keyboard(input))
+            }
             _ => None,
         },
         glutin::event::Event::DeviceEvent { event, .. } => match event {
-            glutin::event::DeviceEvent::Key(ki) => Some(InputEvent::Keyboard(ki)),
             glutin::event::DeviceEvent::MouseMotion { delta: d } => {
                 Some(InputEvent::MouseMotion { delta: d })
             }
