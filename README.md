@@ -15,7 +15,6 @@ cargo run --release
 ## Planned work
 
 - Ability to break blocks.
-- Parallel chunk generation outside the game loop.
 - Renderer capable of simple lighting.
 - Occlusion culling.
 

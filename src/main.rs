@@ -39,7 +39,10 @@ fn init_display() -> (EventLoop<()>, Display) {
         .with_vsync(true)
         .build_windowed(wb, &event_loop)
         .unwrap();
-    window.window().set_cursor_grab(true).unwrap();
+    window
+        .window()
+        .set_cursor_grab(glutin::window::CursorGrabMode::Confined)
+        .unwrap();
     window.window().set_cursor_visible(false);
 
     let display = glium::Display::from_gl_window(window).unwrap();

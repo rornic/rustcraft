@@ -4,12 +4,12 @@ use std::{
 };
 
 use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3};
-use specs::prelude::*;
+use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
     render::{mesh::Mesh, renderer::RenderMesh},
     vector2, vector3,
-    world::{CHUNK_SIZE, WORLD_HEIGHT},
+    world::{Chunk, CHUNK_SIZE, WORLD_HEIGHT},
 };
 
 use super::{bounds::Bounds, camera::Camera, Transform};
@@ -43,8 +43,16 @@ impl<'a> System<'a> for ChunkGenerator {
             )
         });
 
-        for chunk in chunks.iter().take(4) {
-            game_world.generate_chunk(*chunk);
+        let generated_chunks = chunks
+            .iter()
+            .take(32)
+            .collect::<Vec<&Vector2<i32>>>()
+            .par_iter()
+            .map(|chunk| (**chunk, game_world.generate_chunk(**chunk)))
+            .collect::<Vec<(Vector2<i32>, Chunk)>>();
+
+        for chunk in generated_chunks {
+            game_world.cache_chunk(chunk.0, chunk.1);
         }
     }
 }
@@ -99,7 +107,19 @@ impl<'a> System<'a> for ChunkLoader {
             )
         });
 
-        for chunk in to_load.into_iter().take(2) {
+        let new_meshes = to_load
+            .iter()
+            .cloned()
+            .filter(|chunk| !self.chunk_meshes.contains_key(chunk))
+            .collect::<Vec<Vector2<i32>>>()
+            .par_iter()
+            .map(|chunk| (*chunk, game_world.generate_chunk_mesh(*chunk)))
+            .collect::<Vec<(Vector2<i32>, Mesh)>>();
+        for (chunk, mesh) in new_meshes {
+            self.chunk_meshes.insert(chunk, Arc::new(mesh));
+        }
+
+        for chunk in to_load {
             self.active_chunks.insert(chunk);
 
             if let Some(e) = self.chunk_entities.get(&chunk) {
@@ -107,10 +127,7 @@ impl<'a> System<'a> for ChunkLoader {
                 continue;
             }
 
-            let mesh = self
-                .chunk_meshes
-                .entry(chunk)
-                .or_insert(Arc::new(game_world.generate_chunk_mesh(chunk)));
+            let mesh = self.chunk_meshes.get(&chunk).unwrap();
 
             let (t, r, b) = chunk_components(chunk, mesh.clone());
             let entity = entities
@@ -122,12 +139,10 @@ impl<'a> System<'a> for ChunkLoader {
             self.chunk_entities.insert(chunk, entity);
         }
 
-        // TODO: ensure we remove old meshes so space is freed on the GPU
         for chunk in self
             .active_chunks
             .difference(&all_chunks)
             .cloned()
-            .take(2)
             .collect::<Vec<Vector2<i32>>>()
         {
             let e = self.chunk_entities.remove(&chunk).unwrap();
