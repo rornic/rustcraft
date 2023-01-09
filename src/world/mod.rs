@@ -44,17 +44,12 @@ pub struct World {
 }
 
 impl World {
-    /// Generates a chunk at a given chunk coordinate and returns a reference to it.
-    ///
-    /// Returns `None` if this chunk has already been generated.
-    pub fn generate_chunk(&mut self, chunk_position: Vector2<i32>) -> Option<&Chunk> {
-        if !self.chunks.contains_key(&chunk_position) {
-            let chunk = self.generator.generate_chunk(chunk_position);
-            self.chunks.insert(chunk_position, chunk);
-            self.chunks.get(&chunk_position)
-        } else {
-            None
-        }
+    pub fn cache_chunk(&mut self, chunk_position: Vector2<i32>, chunk: Chunk) {
+        self.chunks.insert(chunk_position, chunk);
+    }
+
+    pub fn generate_chunk(&self, chunk_position: Vector2<i32>) -> Chunk {
+        self.generator.generate_chunk(chunk_position)
     }
 
     pub fn is_chunk_generated(&self, chunk_position: Vector2<i32>) -> bool {

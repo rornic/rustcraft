@@ -4,12 +4,12 @@ use std::{
 };
 
 use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3};
-use specs::prelude::*;
+use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
     render::{mesh::Mesh, renderer::RenderMesh},
     vector2, vector3,
-    world::{CHUNK_SIZE, WORLD_HEIGHT},
+    world::{Chunk, CHUNK_SIZE, WORLD_HEIGHT},
 };
 
 use super::{bounds::Bounds, camera::Camera, Transform};
@@ -43,8 +43,13 @@ impl<'a> System<'a> for ChunkGenerator {
             )
         });
 
-        for chunk in chunks.iter().take(4) {
-            game_world.generate_chunk(*chunk);
+        let generated_chunks = chunks
+            .par_iter()
+            .map(|chunk| (*chunk, game_world.generate_chunk(*chunk)))
+            .collect::<Vec<(Vector2<i32>, Chunk)>>();
+
+        for chunk in generated_chunks {
+            game_world.cache_chunk(chunk.0, chunk.1);
         }
     }
 }
@@ -122,7 +127,6 @@ impl<'a> System<'a> for ChunkLoader {
             self.chunk_entities.insert(chunk, entity);
         }
 
-        // TODO: ensure we remove old meshes so space is freed on the GPU
         for chunk in self
             .active_chunks
             .difference(&all_chunks)
