@@ -111,7 +111,7 @@ impl Renderer {
 
         // TODO: keep shaders and textures in a HashMap
         let shader = load_shader(&display, "default").unwrap();
-        let texture = load_texture(&display, "textures/stone.png").unwrap();
+        let texture = load_texture(&display, "textures/blocks.png").unwrap();
 
         let world_mesh = WorldMesh::new(&display);
         let command_buffer =
