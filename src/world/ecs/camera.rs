@@ -1,5 +1,5 @@
 use cgmath::{prelude::*, Deg, Euler, Quaternion, Vector3};
-use specs::{Component, Entity, Read, System, VecStorage, WriteStorage};
+use specs::{Component, Entity, Read, ReadStorage, System, VecStorage, WriteStorage};
 
 use crate::{
     input::Input, render::renderer::RENDER_DISTANCE, vector3, world::CHUNK_SIZE, DeltaTime,
@@ -21,30 +21,26 @@ impl CameraSystem {
 
 impl<'a> System<'a> for CameraSystem {
     type SystemData = (
-        WriteStorage<'a, Transform>,
+        ReadStorage<'a, Transform>,
         WriteStorage<'a, Camera>,
         Read<'a, Input>,
         Read<'a, DeltaTime>,
     );
 
-    fn run(&mut self, (mut transforms, mut cameras, input, delta_time): Self::SystemData) {
+    fn run(&mut self, (transforms, mut cameras, input, delta_time): Self::SystemData) {
         let delta_time = delta_time.0;
 
         let transform = transforms
-            .get_mut(self.camera)
+            .get(self.camera)
             .expect("No transform found on camera entity");
 
         let camera = cameras
             .get_mut(self.camera)
             .expect("No camera found on camera entity");
 
-        // Apply yaw first, then pitch (YXZ)
-        transform.rotation = Quaternion::from(Euler::new(Deg(0.0), camera.yaw, Deg(0.0)))
-            * Quaternion::from(Euler::new(camera.pitch, Deg(0.0), Deg(0.0)));
-
         camera.calculate_view_matrix(
             transform.position,
-            transform.rotation * vector3!(0.0, 0.0, 1.0),
+            camera.look_rotation() * vector3!(0.0, 0.0, 1.0),
             vector3!(0.0, 1.0, 0.0),
         );
         camera.calculate_projection_matrix();
@@ -122,6 +118,15 @@ impl Camera {
         ]
     }
 
+    pub fn look_rotation(&self) -> Quaternion<f32> {
+        Quaternion::from(Euler::new(Deg(0.0), self.yaw, Deg(0.0)))
+            * Quaternion::from(Euler::new(self.pitch, Deg(0.0), Deg(0.0)))
+    }
+
+    pub fn yaw(&self) -> Deg<f32> {
+        self.yaw
+    }
+
     pub fn calculate_view_matrix(
         &mut self,
         position: Vector3<f32>,
@@ -158,18 +163,19 @@ impl Camera {
     pub fn is_point_visible(&self, transform: &Transform, point: Vector3<f32>) -> bool {
         let v = point - transform.position;
 
-        let pcz = v.dot(transform.rotation * vector3!(0.0, 0.0, 1.0));
+        let look_rotation = self.look_rotation();
+        let pcz = v.dot(look_rotation * vector3!(0.0, 0.0, 1.0));
         if pcz < self.near_dist || pcz > self.far_dist {
             return false;
         }
 
         let h = pcz * 2.0 * f32::tan(175.0_f32.to_radians() / 2.0);
-        let pcy = v.dot(transform.rotation * vector3!(0.0, 1.0, 0.0));
+        let pcy = v.dot(look_rotation * vector3!(0.0, 1.0, 0.0));
         if -h / 2.0 > pcy || pcy > h / 2.0 {
             return false;
         }
 
-        let pcx = v.dot(transform.rotation * vector3!(1.0, 0.0, 0.0));
+        let pcx = v.dot(look_rotation * vector3!(1.0, 0.0, 0.0));
         let w = h * self.aspect_ratio;
         if -w / 2.0 > pcx || pcx > w / 2.0 {
             return false;

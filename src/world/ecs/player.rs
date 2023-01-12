@@ -1,10 +1,10 @@
-use cgmath::Vector3;
+use cgmath::{Deg, Euler, Quaternion, Vector3};
 use glium::glutin::event::VirtualKeyCode;
 use specs::{Component, Join, Read, ReadStorage, System, VecStorage, WriteStorage};
 
 use crate::input::Input;
 
-use super::{physics::Rigidbody, Transform};
+use super::{camera::Camera, physics::Rigidbody, Transform};
 
 #[derive(Default)]
 pub struct Player {}
@@ -20,12 +20,15 @@ impl<'a> System<'a> for PlayerMovement {
     type SystemData = (
         ReadStorage<'a, Transform>,
         ReadStorage<'a, Player>,
+        ReadStorage<'a, Camera>,
         WriteStorage<'a, Rigidbody>,
         Read<'a, Input>,
     );
 
-    fn run(&mut self, (transforms, players, mut rigidbodies, input): Self::SystemData) {
-        for (transform, player, rigidbody) in (&transforms, &players, &mut rigidbodies).join() {
+    fn run(&mut self, (transforms, players, cameras, mut rigidbodies, input): Self::SystemData) {
+        for (transform, player, camera, rigidbody) in
+            (&transforms, &players, &cameras, &mut rigidbodies).join()
+        {
             let move_speed = 5.0;
 
             let mut movement_vector = Vector3::new(0.0, 0.0, 0.0);
@@ -41,7 +44,11 @@ impl<'a> System<'a> for PlayerMovement {
                 movement_vector.z = -move_speed;
             }
 
-            movement_vector = transform.rotation * movement_vector;
+            movement_vector = Quaternion::from(Euler {
+                x: Deg(0.0),
+                y: camera.yaw(),
+                z: Deg(0.0),
+            }) * movement_vector;
             rigidbody.velocity.x = movement_vector.x;
             rigidbody.velocity.z = movement_vector.z;
 
