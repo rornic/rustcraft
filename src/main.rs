@@ -24,6 +24,7 @@ use world::ecs::chunk_loader::{ChunkGenerator, ChunkLoader};
 use world::ecs::physics::{Physics, Rigidbody};
 use world::ecs::player::{Player, PlayerMovement};
 use world::ecs::Transform;
+use world::World;
 
 use crate::render::renderer::RenderJob;
 
@@ -87,11 +88,13 @@ fn main() {
     world.register::<Rigidbody>();
     world.register::<Player>();
 
+    let game_world = World::default();
+
     let camera = world
         .create_entity()
         .with(Player::default())
         .with(Transform::new(
-            vector3!(30.0, 75.0, 25.0),
+            game_world.spawn(),
             vector3!(1.0, 1.0, 1.0),
             Quaternion::one(),
         ))
@@ -103,6 +106,7 @@ fn main() {
         ))
         .build();
 
+    world.insert(game_world);
     let mut dispatcher = DispatcherBuilder::new()
         .with(CameraSystem::new(camera), "camera", &[])
         .with(Physics::new(), "physics", &[])

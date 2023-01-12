@@ -37,10 +37,35 @@ type Chunk = Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
 const WORLD_HEIGHT: usize = 256;
 
-#[derive(Default)]
 pub struct World {
     generator: WorldGenerator,
     chunks: HashMap<Vector2<i32>, Chunk>,
+    spawn: Vector3<f32>,
+}
+
+impl Default for World {
+    fn default() -> Self {
+        let mut world = Self {
+            generator: Default::default(),
+            chunks: Default::default(),
+            spawn: vector3!(0.0, 0.0, 0.0),
+        };
+
+        let spawn_chunk = world.generate_chunk(vector2!(0, 0));
+        world.spawn.y = (0..CHUNK_SIZE)
+            .flat_map(move |x| (0..CHUNK_SIZE).map(move |z| (x, z)))
+            .map(|(x, z)| {
+                (0..WORLD_HEIGHT)
+                    .rev()
+                    .find(|y| spawn_chunk[x][*y][z] != BlockType::Air)
+                    .unwrap_or(70)
+                    + 2
+            })
+            .next()
+            .unwrap() as f32;
+
+        world
+    }
 }
 
 impl World {
@@ -60,6 +85,10 @@ impl World {
         [[0, 1], [0, -1], [1, 0], [-1, 0]]
             .iter()
             .all(|p| self.is_chunk_generated(chunk + vector2!(p[0], p[1])))
+    }
+
+    pub fn spawn(&self) -> Vector3<f32> {
+        self.spawn
     }
 
     fn generate_chunk_mesh(&self, chunk_pos: Vector2<i32>) -> Mesh {
