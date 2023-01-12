@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
+use rand::Rng;
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3};
@@ -51,18 +52,20 @@ impl Default for World {
             spawn: vector3!(0.0, 0.0, 0.0),
         };
 
-        let spawn_chunk = world.generate_chunk(vector2!(0, 0));
-        world.spawn.y = (0..CHUNK_SIZE)
-            .flat_map(move |x| (0..CHUNK_SIZE).map(move |z| (x, z)))
-            .map(|(x, z)| {
-                (0..WORLD_HEIGHT)
-                    .rev()
-                    .find(|y| spawn_chunk[x][*y][z] != BlockType::Air)
-                    .unwrap_or(70)
-                    + 2
-            })
-            .next()
-            .unwrap() as f32;
+        let mut rng = rand::thread_rng();
+        let chunk = vector2!(rng.gen_range(-64..64), rng.gen_range(-64..64));
+        let spawn_chunk = world.generate_chunk(chunk);
+        let y = (0..WORLD_HEIGHT)
+            .rev()
+            .find(|y| spawn_chunk[0][*y][0] != BlockType::Air)
+            .unwrap_or(70) as f32
+            + 2.0;
+
+        world.spawn = vector3!(
+            chunk.x as f32 * CHUNK_SIZE as f32,
+            y,
+            chunk.y as f32 * CHUNK_SIZE as f32
+        );
 
         world
     }

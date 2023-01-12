@@ -28,12 +28,6 @@ pub fn noise_generator(seed: u32) -> impl NoiseFn<f64, 2> {
         .set_bounds(0.2, 1.0)
         .set_falloff(0.1);
 
-    // Scale and clamp
-    let generator = ScalePoint::new(
-        Clamp::new(combined)
-            .set_lower_bound(0.0)
-            .set_upper_bound(1.0),
-    )
-    .set_scale(scale);
+    let generator = ScalePoint::new(combined).set_scale(scale);
     Cache::new(generator)
 }
