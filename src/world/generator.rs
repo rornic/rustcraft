@@ -1,7 +1,8 @@
-use noise::{Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Select, Turbulence, Cache};
+use noise::{
+    Cache, Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence,
+};
 
-pub fn noise_generator() -> impl NoiseFn<f64, 2> {
-    let seed: u32 = 0;
+pub fn noise_generator(seed: u32) -> impl NoiseFn<f64, 2> {
     let scale: f64 = 1.0 / 2048.0;
 
     let freq = 0.2;
@@ -13,6 +14,7 @@ pub fn noise_generator() -> impl NoiseFn<f64, 2> {
         .set_persistence(0.5);
 
     let base_continents_tu = Turbulence::<_, Perlin>::new(base_continents.clone())
+        .set_seed(seed)
         .set_frequency(freq * 15.25)
         .set_power(1.0 / 40.75)
         .set_roughness(13);

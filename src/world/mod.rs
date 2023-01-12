@@ -214,14 +214,24 @@ impl World {
     }
 }
 
-#[derive(Default, Copy, Clone)]
-struct WorldGenerator {}
+#[derive(Copy, Clone)]
+struct WorldGenerator {
+    seed: u32,
+}
+
+impl Default for WorldGenerator {
+    fn default() -> Self {
+        Self {
+            seed: rand::random(),
+        }
+    }
+}
 
 impl WorldGenerator {
     fn generate_chunk(&self, chunk_pos: Vector2<i32>) -> Chunk {
         let mut blocks = [[[BlockType::Air; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE];
 
-        let noise = generator::noise_generator();
+        let noise = generator::noise_generator(self.seed);
 
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
@@ -233,19 +243,21 @@ impl WorldGenerator {
                 let noise_val = noise.get([world_x as f64, world_z as f64]);
 
                 let height = (noise_val * WORLD_HEIGHT as f64).round() as usize;
-                let gradient_x = WORLD_HEIGHT as f64
+                let gradient_x = (WORLD_HEIGHT as f64
                     * (noise.get([(world_x + 1) as f64, world_z as f64])
-                        - noise.get([(world_x - 1) as f64, world_z as f64]));
-                let gradient_z = WORLD_HEIGHT as f64
+                        - noise.get([(world_x - 1) as f64, world_z as f64])))
+                .abs();
+                let gradient_z = (WORLD_HEIGHT as f64
                     * (noise.get([world_x as f64, (world_z + 1) as f64])
-                        - noise.get([world_x as f64, (world_z - 1) as f64]));
+                        - noise.get([world_x as f64, (world_z - 1) as f64])))
+                .abs();
 
                 // Height must be at least 1!
                 let height = height.min(WORLD_HEIGHT - 1).max(1);
                 for y in 0..height {
                     if height >= 180 && ((gradient_x + gradient_z) <= 3.0) {
                         blocks[x][y][z] = BlockType::Snow;
-                    } else if y >= 70 && ((gradient_x + gradient_z) <= 8.0) {
+                    } else if y >= 30 && ((gradient_x + gradient_z) >= 2.0) {
                         blocks[x][y][z] = BlockType::Stone;
                     } else if y < 10 {
                         blocks[x][y][z] = BlockType::Sand;
