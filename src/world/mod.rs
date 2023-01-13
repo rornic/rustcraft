@@ -37,6 +37,7 @@ const BLOCK_COUNT: usize = 6;
 type Chunk = Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
 const WORLD_HEIGHT: usize = 256;
+const MIN_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 3;
 
 pub struct World {
     generator: WorldGenerator,
@@ -53,19 +54,24 @@ impl Default for World {
         };
 
         let mut rng = rand::thread_rng();
-        let chunk = vector2!(rng.gen_range(-64..64), rng.gen_range(-64..64));
-        let spawn_chunk = world.generate_chunk(chunk);
-        let y = (0..WORLD_HEIGHT)
-            .rev()
-            .find(|y| spawn_chunk[0][*y][0] != BlockType::Air)
-            .unwrap_or(70) as f32
-            + 2.0;
+        let mut spawn: Option<Vector3<f32>> = None;
+        while let None = spawn {
+            let chunk_pos = vector2!(rng.gen_range(-256..256), rng.gen_range(-256..256));
+            let chunk = world.generate_chunk(chunk_pos);
 
-        world.spawn = vector3!(
-            chunk.x as f32 * CHUNK_SIZE as f32,
-            y,
-            chunk.y as f32 * CHUNK_SIZE as f32
-        );
+            let y = (0..WORLD_HEIGHT)
+                .rev()
+                .find(|y| chunk[0][*y][0] != BlockType::Air)
+                .unwrap_or(0);
+            if y >= MIN_SPAWN_HEIGHT {
+                spawn = Some(vector3!(
+                    chunk_pos.x as f32 * CHUNK_SIZE as f32,
+                    y as f32 + 2.0,
+                    chunk_pos.y as f32 * CHUNK_SIZE as f32
+                ));
+            }
+        }
+        world.spawn = spawn.unwrap();
 
         world
     }
@@ -293,7 +299,7 @@ impl WorldGenerator {
                 for y in 0..height {
                     if height >= 180 && ((gradient_x + gradient_z) <= 3.0) {
                         blocks[x][y][z] = BlockType::Snow;
-                    } else if y >= 30 && ((gradient_x + gradient_z) >= 2.0) {
+                    } else if y >= 30 && ((gradient_x + gradient_z) >= 3.0) {
                         blocks[x][y][z] = BlockType::Stone;
                     } else if y < 10 {
                         blocks[x][y][z] = BlockType::Sand;

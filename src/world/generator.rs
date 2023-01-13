@@ -1,6 +1,4 @@
-use noise::{
-    Cache, Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence,
-};
+use noise::{Cache, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence};
 
 pub fn noise_generator(seed: u32) -> impl NoiseFn<f64, 2> {
     let scale: f64 = 1.0 / 2048.0;
