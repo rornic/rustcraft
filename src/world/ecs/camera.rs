@@ -123,6 +123,10 @@ impl Camera {
             * Quaternion::from(Euler::new(self.pitch, Deg(0.0), Deg(0.0)))
     }
 
+    pub fn look_direction(&self) -> Vector3<f32> {
+        self.look_rotation() * vector3!(0.0, 0.0, 1.0)
+    }
+
     pub fn yaw(&self) -> Deg<f32> {
         self.yaw
     }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
+use rand::Rng;
 
 use crate::render::mesh::{Mesh, Vertex};
 use crate::{vector2, vector3};
@@ -36,11 +37,44 @@ const BLOCK_COUNT: usize = 6;
 type Chunk = Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
 const WORLD_HEIGHT: usize = 256;
+const MIN_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 3;
 
-#[derive(Default)]
 pub struct World {
     generator: WorldGenerator,
     chunks: HashMap<Vector2<i32>, Chunk>,
+    spawn: Vector3<f32>,
+}
+
+impl Default for World {
+    fn default() -> Self {
+        let mut world = Self {
+            generator: Default::default(),
+            chunks: Default::default(),
+            spawn: vector3!(0.0, 0.0, 0.0),
+        };
+
+        let mut rng = rand::thread_rng();
+        let mut spawn: Option<Vector3<f32>> = None;
+        while let None = spawn {
+            let chunk_pos = vector2!(rng.gen_range(-256..256), rng.gen_range(-256..256));
+            let chunk = world.generate_chunk(chunk_pos);
+
+            let y = (0..WORLD_HEIGHT)
+                .rev()
+                .find(|y| chunk[0][*y][0] != BlockType::Air)
+                .unwrap_or(0);
+            if y >= MIN_SPAWN_HEIGHT {
+                spawn = Some(vector3!(
+                    chunk_pos.x as f32 * CHUNK_SIZE as f32,
+                    y as f32 + 2.0,
+                    chunk_pos.y as f32 * CHUNK_SIZE as f32
+                ));
+            }
+        }
+        world.spawn = spawn.unwrap();
+
+        world
+    }
 }
 
 impl World {
@@ -60,6 +94,10 @@ impl World {
         [[0, 1], [0, -1], [1, 0], [-1, 0]]
             .iter()
             .all(|p| self.is_chunk_generated(chunk + vector2!(p[0], p[1])))
+    }
+
+    pub fn spawn(&self) -> Vector3<f32> {
+        self.spawn
     }
 
     fn generate_chunk_mesh(&self, chunk_pos: Vector2<i32>) -> Mesh {
@@ -168,6 +206,10 @@ impl World {
 
     fn block_at(&self, position: Vector3<f32>) -> BlockType {
         let (chunk_pos, block_pos) = self.world_to_block(position);
+        if block_pos.y >= WORLD_HEIGHT {
+            return BlockType::Air;
+        }
+
         if let Some(chunk) = self.chunks.get(&chunk_pos) {
             chunk[block_pos.x][block_pos.y][block_pos.z]
         } else {
@@ -214,14 +256,24 @@ impl World {
     }
 }
 
-#[derive(Default, Copy, Clone)]
-struct WorldGenerator {}
+#[derive(Copy, Clone)]
+struct WorldGenerator {
+    seed: u32,
+}
+
+impl Default for WorldGenerator {
+    fn default() -> Self {
+        Self {
+            seed: rand::random(),
+        }
+    }
+}
 
 impl WorldGenerator {
     fn generate_chunk(&self, chunk_pos: Vector2<i32>) -> Chunk {
         let mut blocks = [[[BlockType::Air; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE];
 
-        let noise = generator::noise_generator();
+        let noise = generator::noise_generator(self.seed);
 
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
@@ -233,19 +285,21 @@ impl WorldGenerator {
                 let noise_val = noise.get([world_x as f64, world_z as f64]);
 
                 let height = (noise_val * WORLD_HEIGHT as f64).round() as usize;
-                let gradient_x = WORLD_HEIGHT as f64
+                let gradient_x = (WORLD_HEIGHT as f64
                     * (noise.get([(world_x + 1) as f64, world_z as f64])
-                        - noise.get([(world_x - 1) as f64, world_z as f64]));
-                let gradient_z = WORLD_HEIGHT as f64
+                        - noise.get([(world_x - 1) as f64, world_z as f64])))
+                .abs();
+                let gradient_z = (WORLD_HEIGHT as f64
                     * (noise.get([world_x as f64, (world_z + 1) as f64])
-                        - noise.get([world_x as f64, (world_z - 1) as f64]));
+                        - noise.get([world_x as f64, (world_z - 1) as f64])))
+                .abs();
 
                 // Height must be at least 1!
                 let height = height.min(WORLD_HEIGHT - 1).max(1);
                 for y in 0..height {
                     if height >= 180 && ((gradient_x + gradient_z) <= 3.0) {
                         blocks[x][y][z] = BlockType::Snow;
-                    } else if y >= 70 && ((gradient_x + gradient_z) <= 8.0) {
+                    } else if y >= 30 && ((gradient_x + gradient_z) >= 3.0) {
                         blocks[x][y][z] = BlockType::Stone;
                     } else if y < 10 {
                         blocks[x][y][z] = BlockType::Sand;
