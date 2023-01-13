@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3};
+use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3, Zero};
 use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
@@ -31,16 +31,14 @@ impl<'a> System<'a> for ChunkGenerator {
     );
 
     fn run(&mut self, (cameras, transforms, mut game_world): Self::SystemData) {
-        let (_, transform) = (&cameras, &transforms).join().next().unwrap();
+        let (camera, transform) = (&cameras, &transforms).join().next().unwrap();
         let camera_chunk = game_world.world_to_chunk(transform.position);
 
         let mut chunks: Vec<Vector2<i32>> = all_chunks(camera_chunk, self.generate_distance)
             .filter(|chunk| !game_world.is_chunk_generated(*chunk))
             .collect();
         chunks.sort_by(|c1, c2| {
-            chunk_camera_direction(camera_chunk, transform.forward(), *c1).total_cmp(
-                &chunk_camera_direction(camera_chunk, transform.forward(), *c2),
-            )
+            chunk_distance(camera_chunk, *c1).total_cmp(&chunk_distance(camera_chunk, *c2))
         });
 
         let generated_chunks = chunks
@@ -89,7 +87,7 @@ impl<'a> System<'a> for ChunkLoader {
         &mut self,
         (cameras, mut transforms, mut render_meshes, mut bounds, game_world, entities): Self::SystemData,
     ) {
-        let (_, transform) = (&cameras, &transforms).join().next().unwrap();
+        let (camera, transform) = (&cameras, &transforms).join().next().unwrap();
         let camera_chunk = game_world.world_to_chunk(transform.position);
 
         let all_chunks = all_chunks(camera_chunk, self.render_distance)
@@ -102,8 +100,8 @@ impl<'a> System<'a> for ChunkLoader {
             .cloned()
             .collect::<Vec<Vector2<i32>>>();
         to_load.sort_by(|c1, c2| {
-            chunk_camera_direction(camera_chunk, transform.forward(), *c1).total_cmp(
-                &chunk_camera_direction(camera_chunk, transform.forward(), *c2),
+            chunk_camera_direction(camera_chunk, camera.look_direction(), *c1).total_cmp(
+                &chunk_camera_direction(camera_chunk, camera.look_direction(), *c2),
             )
         });
 
@@ -159,8 +157,8 @@ fn all_chunks(centre: Vector2<i32>, distance: u32) -> impl Iterator<Item = Vecto
     (x_min..x_max).flat_map(move |a| (z_min..z_max).map(move |b| vector2!(a, b)))
 }
 
-fn chunk_distance(chunk1: Vector2<i32>, chunk2: Vector2<i32>) -> u32 {
-    ((chunk2.x - chunk1.x).abs() + (chunk2.y - chunk1.x).abs()) as u32
+fn chunk_distance(chunk1: Vector2<i32>, chunk2: Vector2<i32>) -> f32 {
+    (((chunk2.x - chunk1.x).abs().pow(2) + (chunk2.y - chunk1.y).abs().pow(2)) as f32).sqrt()
 }
 
 fn chunk_camera_direction(
@@ -170,7 +168,11 @@ fn chunk_camera_direction(
 ) -> f32 {
     let camera_dir = (chunk_world_pos(camera_chunk) - chunk_world_pos(chunk)).normalize();
     let dot = camera_forward.dot(camera_dir);
-    dot / chunk_distance(camera_chunk, chunk) as f32
+    let dist = chunk_distance(camera_chunk, chunk) as f32;
+    if dist.is_zero() {
+        return -f32::INFINITY;
+    }
+    dot / dist
 }
 
 fn chunk_world_pos(chunk: Vector2<i32>) -> Vector3<f32> {
@@ -198,4 +200,32 @@ fn chunk_components(chunk: Vector2<i32>, mesh: Arc<Mesh>) -> (Transform, RenderM
     );
 
     (t, r, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{vector2, vector3};
+
+    use super::chunk_camera_direction;
+
+    #[test]
+    fn test_chunk_sorting() {
+        let mut chunks = vec![
+            vector2!(-5, 5),
+            vector2!(-1, 0),
+            vector2!(0, 0),
+            vector2!(1, 0),
+            vector2!(1, 1),
+            vector2!(5, 0),
+        ];
+        let camera_chunk = vector2!(0, 0);
+        let camera_dir = vector3!(1.0, 0.0, 0.0);
+        chunks.sort_by(|c1, c2| {
+            chunk_camera_direction(camera_chunk, camera_dir, *c1)
+                .total_cmp(&chunk_camera_direction(camera_chunk, camera_dir, *c2))
+        });
+
+        assert_eq!(chunks[0], vector2!(0, 0));
+        assert_eq!(chunks[1], vector2!(1, 0));
+    }
 }
