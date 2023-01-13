@@ -177,7 +177,7 @@ impl Renderer {
                 ],
                 light: [-0.2, 0.7, 0.2f32, 0.0f32],
                 fog_start: camera.far_dist - 16.0,
-                fog_end: camera.far_dist,
+                fog_end: camera.far_dist - 4.0,
             };
             self.global_uniform_buffer.write(&global_uniforms);
 

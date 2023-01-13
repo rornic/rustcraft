@@ -299,7 +299,7 @@ impl WorldGenerator {
                 for y in 0..height {
                     if height >= 180 && ((gradient_x + gradient_z) <= 3.0) {
                         blocks[x][y][z] = BlockType::Snow;
-                    } else if y >= 30 && ((gradient_x + gradient_z) >= 3.0) {
+                    } else if y >= 10 && ((gradient_x + gradient_z) >= 3.0) {
                         blocks[x][y][z] = BlockType::Stone;
                     } else if y < 10 {
                         blocks[x][y][z] = BlockType::Sand;
