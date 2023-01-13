@@ -200,6 +200,10 @@ impl World {
 
     fn block_at(&self, position: Vector3<f32>) -> BlockType {
         let (chunk_pos, block_pos) = self.world_to_block(position);
+        if block_pos.y >= WORLD_HEIGHT {
+            return BlockType::Air;
+        }
+
         if let Some(chunk) = self.chunks.get(&chunk_pos) {
             chunk[block_pos.x][block_pos.y][block_pos.z]
         } else {
