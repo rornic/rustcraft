@@ -17,6 +17,7 @@ cargo run --release
 - Ability to break blocks.
 - Renderer capable of simple lighting.
 - Occlusion culling.
+- Trees!
 
 ## License
 
@@ -30,6 +31,8 @@ Licensed under either of
 at your option.
 
 ## Contribution
+
+All contributions are welcome. Feel free to open issues for fixes or discussing changes. I am particularly interested in any optimisations on the rendering code.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
