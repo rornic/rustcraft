@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc, sync::Weak};
 
-use cgmath::Vector3;
+use cgmath::{InnerSpace, Vector3};
 use glium::{
     index::{
         DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, IndicesSource,
@@ -19,7 +19,10 @@ use specs::{
 };
 use uuid::Uuid;
 
-use crate::world::ecs::{bounds::Bounds, camera::Camera, Transform};
+use crate::{
+    vector3,
+    world::ecs::{bounds::Bounds, camera::Camera, Transform},
+};
 
 use super::{
     material::{load_shader, load_texture, Material},
@@ -78,7 +81,11 @@ impl<'a> System<'a> for RenderingSystem {
             .par_join()
             .filter_map(|(transform, mesh_data, bounds)| {
                 if !mesh_data.visible
-                    || !camera.are_bounds_visible(camera_transform, transform.position, bounds)
+                    || !camera.is_mesh_visible(
+                        camera_transform,
+                        transform.position,
+                        &mesh_data.mesh,
+                    )
                 {
                     return None;
                 }
@@ -92,6 +99,11 @@ impl<'a> System<'a> for RenderingSystem {
                 })
             })
             .collect();
+        render_job.draw_calls.sort_by(|a, b| {
+            (a.transform.position - camera_transform.position)
+                .magnitude2()
+                .total_cmp(&(b.transform.position - camera_transform.position).magnitude2())
+        });
     }
 }
 

@@ -1,8 +1,12 @@
-use cgmath::{prelude::*, Deg, Euler, Quaternion, Vector3};
+use cgmath::{prelude::*, Deg, Euler, Quaternion, Rad, Vector3};
 use specs::{Component, Entity, Read, ReadStorage, System, VecStorage, WriteStorage};
 
 use crate::{
-    input::Input, render::renderer::RENDER_DISTANCE, vector3, world::CHUNK_SIZE, DeltaTime,
+    input::Input,
+    render::{mesh::Mesh, renderer::RENDER_DISTANCE},
+    vector3,
+    world::CHUNK_SIZE,
+    DeltaTime,
 };
 
 use super::{bounds::Bounds, Transform};
@@ -99,9 +103,9 @@ impl Camera {
     }
 
     fn calculate_projection_matrix(&mut self) {
-        let f = 1.0 / (self.fov / 2.0).tan();
+        let f = Rad::cot(Rad(self.fov / 2.0));
         self.projection_matrix = [
-            [f * (1.0 / self.aspect_ratio), 0.0, 0.0, 0.0],
+            [f / self.aspect_ratio, 0.0, 0.0, 0.0],
             [0.0, f, 0.0, 0.0],
             [
                 0.0,
@@ -173,7 +177,7 @@ impl Camera {
             return false;
         }
 
-        let h = pcz * 2.0 * f32::tan(175.0_f32.to_radians() / 2.0);
+        let h = pcz * f32::tan(120_f32.to_radians() / 2.0);
         let pcy = v.dot(look_rotation * vector3!(0.0, 1.0, 0.0));
         if -h / 2.0 > pcy || pcy > h / 2.0 {
             return false;
@@ -188,14 +192,23 @@ impl Camera {
         true
     }
 
-    pub fn are_bounds_visible(
+    pub fn is_mesh_visible(
+        &self,
+        transform: &Transform,
+        mesh_origin: Vector3<f32>,
+        mesh: &Mesh,
+    ) -> bool {
+        self.are_bounds_visible(transform, mesh_origin, &mesh.bounds())
+    }
+
+    fn are_bounds_visible(
         &self,
         transform: &Transform,
         position: Vector3<f32>,
         bounds: &Bounds,
     ) -> bool {
         bounds
-            .to_world(position)
+            // .to_world(position)
             .vertices()
             .iter()
             .any(|v| self.is_point_visible(transform, *v))
