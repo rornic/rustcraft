@@ -1,8 +1,8 @@
-use cgmath::{num_traits::Signed, InnerSpace, Vector3};
+use cgmath::{num_traits::Signed, InnerSpace, Vector3, Zero};
 
 use crate::world::ecs::bounds::Bounds;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ViewFrustum {
     planes: [Plane; 6],
 }
@@ -83,7 +83,7 @@ impl ViewFrustum {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct Plane {
     point: Vector3<f32>,
     normal: Vector3<f32>,
@@ -92,6 +92,15 @@ struct Plane {
 impl Plane {
     fn distance(&self, pos: Vector3<f32>) -> f32 {
         (pos - self.point).dot(self.normal)
+    }
+}
+
+impl Default for Plane {
+    fn default() -> Self {
+        Self {
+            point: Vector3::zero(),
+            normal: Vector3::zero(),
+        }
     }
 }
 

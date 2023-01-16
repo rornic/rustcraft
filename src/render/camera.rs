@@ -48,6 +48,7 @@ impl<'a> System<'a> for CameraSystem {
             vector3!(0.0, 1.0, 0.0),
         );
         camera.calculate_projection_matrix();
+        camera.calculate_view_frustum(transform.position);
 
         let sensitivity = 50.0;
 
@@ -69,6 +70,7 @@ pub struct Camera {
     pub fov: f32,
     view_matrix: [[f32; 4]; 4],
     projection_matrix: [[f32; 4]; 4],
+    view_frustum: ViewFrustum,
 }
 
 impl Default for Camera {
@@ -83,6 +85,7 @@ impl Default for Camera {
             fov: 3.141592 / 3.0,
             view_matrix: [[0.0; 4]; 4],
             projection_matrix: [[0.0; 4]; 4],
+            view_frustum: ViewFrustum::default(),
         };
         cam.calculate_projection_matrix();
         cam
@@ -168,16 +171,9 @@ impl Camera {
         ];
     }
 
-    pub fn is_mesh_visible(
-        &self,
-        transform: &Transform,
-
-        // TODO: make mesh bounds relative to the mesh, and use mesh_origin to transform them to world space
-        mesh_origin: Vector3<f32>,
-        mesh: &Mesh,
-    ) -> bool {
-        let view_frustum = ViewFrustum::new(
-            transform.position,
+    fn calculate_view_frustum(&mut self, pos: Vector3<f32>) {
+        self.view_frustum = ViewFrustum::new(
+            pos,
             self.look_direction(),
             self.look_rotation() * vector3!(0.0, 1.0, 0.0),
             self.fov,
@@ -185,6 +181,14 @@ impl Camera {
             self.far_dist,
             self.aspect_ratio,
         );
-        view_frustum.contains_box(mesh.bounds())
+    }
+
+    pub fn is_mesh_visible(
+        &self,
+        // TODO: make mesh bounds relative to the mesh, and use mesh_origin to transform them to world space
+        mesh_origin: Vector3<f32>,
+        mesh: &Mesh,
+    ) -> bool {
+        self.view_frustum.contains_box(mesh.bounds())
     }
 }

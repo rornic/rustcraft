@@ -79,11 +79,7 @@ impl<'a> System<'a> for RenderingSystem {
             .par_join()
             .filter_map(|(transform, mesh_data, bounds)| {
                 if !mesh_data.visible
-                    || !camera.is_mesh_visible(
-                        camera_transform,
-                        transform.position,
-                        &mesh_data.mesh,
-                    )
+                    || !camera.is_mesh_visible(transform.position, &mesh_data.mesh)
                 {
                     return None;
                 }
