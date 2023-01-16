@@ -19,12 +19,10 @@ use specs::{
 };
 use uuid::Uuid;
 
-use crate::{
-    vector3,
-    world::ecs::{bounds::Bounds, camera::Camera, Transform},
-};
+use crate::world::ecs::{bounds::Bounds, Transform};
 
 use super::{
+    camera::Camera,
     material::{load_shader, load_texture, Material},
     mesh::{Mesh, Vertex},
 };
@@ -282,7 +280,7 @@ struct MemoryAllocation {
     count: usize,
 }
 
-pub const RENDER_DISTANCE: usize = 16;
+pub const RENDER_DISTANCE: usize = 32;
 
 // For a render distance r, we can load (2r)^2 chunks around the player.
 // If none of these are culled, we need a draw command for each chunk. Therefore command buffer should be have room for at least (2r)^2 commands.

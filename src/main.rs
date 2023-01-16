@@ -7,6 +7,7 @@ use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
 use input::{Input, InputEvent};
+use render::camera::{Camera, CameraSystem};
 use render::renderer::{RenderMesh, RenderingSystem, RENDER_DISTANCE};
 use specs::WorldExt;
 
@@ -19,7 +20,6 @@ mod util;
 mod world;
 
 use world::ecs::bounds::Bounds;
-use world::ecs::camera::{Camera, CameraSystem};
 use world::ecs::chunk_loader::{ChunkGenerator, ChunkLoader};
 use world::ecs::physics::{Physics, Rigidbody};
 use world::ecs::player::{Player, PlayerMovement};

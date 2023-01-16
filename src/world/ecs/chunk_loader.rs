@@ -7,12 +7,12 @@ use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3, Zero};
 use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
-    render::{mesh::Mesh, renderer::RenderMesh},
+    render::{camera::Camera, mesh::Mesh, renderer::RenderMesh},
     vector2, vector3,
     world::{Chunk, CHUNK_SIZE, WORLD_HEIGHT},
 };
 
-use super::{bounds::Bounds, camera::Camera, Transform};
+use super::{bounds::Bounds, Transform};
 pub struct ChunkGenerator {
     generate_distance: u32,
 }
