@@ -1,11 +1,15 @@
-use cgmath::{prelude::*, Deg, Euler, Quaternion, Vector3};
+use cgmath::{Angle, Deg, Euler, InnerSpace, Quaternion, Rad, Vector3};
 use specs::{Component, Entity, Read, ReadStorage, System, VecStorage, WriteStorage};
 
 use crate::{
-    input::Input, render::renderer::RENDER_DISTANCE, vector3, world::CHUNK_SIZE, DeltaTime,
+    input::Input,
+    render::{mesh::Mesh, renderer::RENDER_DISTANCE},
+    vector3,
+    world::{ecs::Transform, CHUNK_SIZE},
+    DeltaTime,
 };
 
-use super::{bounds::Bounds, Transform};
+use super::culling::ViewFrustum;
 
 /// Runs on a single `Entity` designated as the camera. This entity must have a `Transform` component otherwise the system will fail.
 pub struct CameraSystem {
@@ -44,6 +48,7 @@ impl<'a> System<'a> for CameraSystem {
             vector3!(0.0, 1.0, 0.0),
         );
         camera.calculate_projection_matrix();
+        camera.calculate_view_frustum(transform.position);
 
         let sensitivity = 50.0;
 
@@ -65,6 +70,7 @@ pub struct Camera {
     pub fov: f32,
     view_matrix: [[f32; 4]; 4],
     projection_matrix: [[f32; 4]; 4],
+    view_frustum: ViewFrustum,
 }
 
 impl Default for Camera {
@@ -79,6 +85,7 @@ impl Default for Camera {
             fov: 3.141592 / 3.0,
             view_matrix: [[0.0; 4]; 4],
             projection_matrix: [[0.0; 4]; 4],
+            view_frustum: ViewFrustum::default(),
         };
         cam.calculate_projection_matrix();
         cam
@@ -99,9 +106,9 @@ impl Camera {
     }
 
     fn calculate_projection_matrix(&mut self) {
-        let f = 1.0 / (self.fov / 2.0).tan();
+        let f = Rad::cot(Rad(self.fov / 2.0));
         self.projection_matrix = [
-            [f * (1.0 / self.aspect_ratio), 0.0, 0.0, 0.0],
+            [f / self.aspect_ratio, 0.0, 0.0, 0.0],
             [0.0, f, 0.0, 0.0],
             [
                 0.0,
@@ -124,7 +131,7 @@ impl Camera {
     }
 
     pub fn look_direction(&self) -> Vector3<f32> {
-        self.look_rotation() * vector3!(0.0, 0.0, 1.0)
+        (self.look_rotation() * vector3!(0.0, 0.0, 1.0)).normalize()
     }
 
     pub fn yaw(&self) -> Deg<f32> {
@@ -164,40 +171,24 @@ impl Camera {
         ];
     }
 
-    pub fn is_point_visible(&self, transform: &Transform, point: Vector3<f32>) -> bool {
-        let v = point - transform.position;
-
-        let look_rotation = self.look_rotation();
-        let pcz = v.dot(look_rotation * vector3!(0.0, 0.0, 1.0));
-        if pcz < self.near_dist || pcz > self.far_dist {
-            return false;
-        }
-
-        let h = pcz * 2.0 * f32::tan(175.0_f32.to_radians() / 2.0);
-        let pcy = v.dot(look_rotation * vector3!(0.0, 1.0, 0.0));
-        if -h / 2.0 > pcy || pcy > h / 2.0 {
-            return false;
-        }
-
-        let pcx = v.dot(look_rotation * vector3!(1.0, 0.0, 0.0));
-        let w = h * self.aspect_ratio;
-        if -w / 2.0 > pcx || pcx > w / 2.0 {
-            return false;
-        }
-
-        true
+    fn calculate_view_frustum(&mut self, pos: Vector3<f32>) {
+        self.view_frustum = ViewFrustum::new(
+            pos,
+            self.look_direction(),
+            self.look_rotation() * vector3!(0.0, 1.0, 0.0),
+            self.fov,
+            self.near_dist,
+            self.far_dist,
+            self.aspect_ratio,
+        );
     }
 
-    pub fn are_bounds_visible(
+    pub fn is_mesh_visible(
         &self,
-        transform: &Transform,
-        position: Vector3<f32>,
-        bounds: &Bounds,
+        // TODO: make mesh bounds relative to the mesh, and use mesh_origin to transform them to world space
+        mesh_origin: Vector3<f32>,
+        mesh: &Mesh,
     ) -> bool {
-        bounds
-            .to_world(position)
-            .vertices()
-            .iter()
-            .any(|v| self.is_point_visible(transform, *v))
+        self.view_frustum.contains_box(mesh.bounds())
     }
 }

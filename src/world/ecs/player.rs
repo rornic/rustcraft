@@ -2,9 +2,9 @@ use cgmath::{Deg, Euler, Quaternion, Vector3};
 use glium::glutin::event::VirtualKeyCode;
 use specs::{Component, Join, Read, ReadStorage, System, VecStorage, WriteStorage};
 
-use crate::input::Input;
+use crate::{input::Input, render::camera::Camera};
 
-use super::{camera::Camera, physics::Rigidbody, Transform};
+use super::{physics::Rigidbody, Transform};
 
 #[derive(Default)]
 pub struct Player {}

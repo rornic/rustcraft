@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc, sync::Weak};
 
-use cgmath::Vector3;
+use cgmath::{InnerSpace, Vector3};
 use glium::{
     index::{
         DrawCommandIndices, DrawCommandsIndicesBuffer, IndexBufferSlice, IndicesSource,
@@ -19,9 +19,10 @@ use specs::{
 };
 use uuid::Uuid;
 
-use crate::world::ecs::{bounds::Bounds, camera::Camera, Transform};
+use crate::world::ecs::{bounds::Bounds, Transform};
 
 use super::{
+    camera::Camera,
     material::{load_shader, load_texture, Material},
     mesh::{Mesh, Vertex},
 };
@@ -78,7 +79,7 @@ impl<'a> System<'a> for RenderingSystem {
             .par_join()
             .filter_map(|(transform, mesh_data, bounds)| {
                 if !mesh_data.visible
-                    || !camera.are_bounds_visible(camera_transform, transform.position, bounds)
+                    || !camera.is_mesh_visible(transform.position, &mesh_data.mesh)
                 {
                     return None;
                 }
@@ -92,6 +93,11 @@ impl<'a> System<'a> for RenderingSystem {
                 })
             })
             .collect();
+        render_job.draw_calls.sort_by(|a, b| {
+            (a.transform.position - camera_transform.position)
+                .magnitude2()
+                .total_cmp(&(b.transform.position - camera_transform.position).magnitude2())
+        });
     }
 }
 
@@ -270,7 +276,7 @@ struct MemoryAllocation {
     count: usize,
 }
 
-pub const RENDER_DISTANCE: usize = 16;
+pub const RENDER_DISTANCE: usize = 32;
 
 // For a render distance r, we can load (2r)^2 chunks around the player.
 // If none of these are culled, we need a draw command for each chunk. Therefore command buffer should be have room for at least (2r)^2 commands.
