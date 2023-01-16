@@ -38,6 +38,7 @@ type Chunk = Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
 
 const WORLD_HEIGHT: usize = 256;
 const MIN_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 3;
+const MAX_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 2;
 
 pub struct World {
     generator: WorldGenerator,
@@ -63,7 +64,7 @@ impl Default for World {
                 .rev()
                 .find(|y| chunk[0][*y][0] != BlockType::Air)
                 .unwrap_or(0);
-            if y >= MIN_SPAWN_HEIGHT {
+            if y > MIN_SPAWN_HEIGHT && y < MAX_SPAWN_HEIGHT {
                 spawn = Some(vector3!(
                     chunk_pos.x as f32 * CHUNK_SIZE as f32,
                     y as f32 + 2.0,
