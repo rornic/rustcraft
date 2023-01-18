@@ -3,6 +3,7 @@
 in vec3 v_pos;
 in vec3 v_normal;
 in vec2 v_uv;
+in float camera_dist;
 
 out vec4 color;
 
@@ -33,8 +34,6 @@ void main() {
     vec4 tex_color_lit = mix(dark, tex_color, brightness);
     tex_color_lit.a = 1.0;
 
-    float d = distance(vec3(camera_pos), v_pos);
-    float alpha = getFog(d);
-
+    float alpha = getFog(camera_dist);
     color = mix(tex_color_lit, vec4(0.0, 0.0, 0.0, 0.0), alpha);
 }
