@@ -2,9 +2,12 @@ use cgmath::{Deg, Euler, Quaternion, Vector3};
 use glium::glutin::event::VirtualKeyCode;
 use specs::{Component, Join, Read, ReadStorage, System, VecStorage, WriteStorage};
 
-use crate::{input::Input, render::camera::Camera};
+use crate::{input::Input, render::camera::Camera, world::World};
 
-use super::{physics::Rigidbody, Transform};
+use super::{
+    physics::{self, Rigidbody},
+    Transform,
+};
 
 #[derive(Default)]
 pub struct Player {}
@@ -22,10 +25,14 @@ impl<'a> System<'a> for PlayerMovement {
         ReadStorage<'a, Player>,
         ReadStorage<'a, Camera>,
         WriteStorage<'a, Rigidbody>,
+        Read<'a, World>,
         Read<'a, Input>,
     );
 
-    fn run(&mut self, (transforms, players, cameras, mut rigidbodies, input): Self::SystemData) {
+    fn run(
+        &mut self,
+        (transforms, players, cameras, mut rigidbodies, world, input): Self::SystemData,
+    ) {
         for (transform, player, camera, rigidbody) in
             (&transforms, &players, &cameras, &mut rigidbodies).join()
         {
@@ -42,6 +49,14 @@ impl<'a> System<'a> for PlayerMovement {
                 movement_vector.z = move_speed;
             } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
                 movement_vector.z = -move_speed;
+            }
+
+            if input.keyboard.is_pressed(VirtualKeyCode::E) {
+                if let Some(hit) =
+                    physics::raycast::raycast(&world, transform.position, camera.look_direction())
+                {
+                    // TODO: move this check to another system and break the block we hit
+                }
             }
 
             movement_vector = Quaternion::from(Euler {

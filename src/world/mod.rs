@@ -13,7 +13,7 @@ mod generator;
 /// Each chunk is a cube of blocks. `CHUNK_SIZE` determines the size of this cube in blocks.
 pub const CHUNK_SIZE: usize = 16;
 
-#[derive(PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum BlockType {
     Air,
     Stone,

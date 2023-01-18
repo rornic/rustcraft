@@ -97,3 +97,33 @@ fn collides_with_block(block: Vector3<f32>, bounds: Bounds, world: &World) -> bo
     world.block_at(block).is_solid()
         && bounds.intersects(Bounds::new(block, vector3!(1.0, 1.0, 1.0)))
 }
+
+pub mod raycast {
+    use cgmath::{InnerSpace, Vector3};
+
+    use crate::world::{BlockType, World};
+
+    const RAYCAST_STEP: f32 = 0.5;
+    const MAX_RAYCAST_STEPS: u32 = 100;
+
+    pub struct RaycastHit {
+        pub block: BlockType,
+        pub position: Vector3<f32>,
+    }
+
+    pub fn raycast(world: &World, origin: Vector3<f32>, dir: Vector3<f32>) -> Option<RaycastHit> {
+        let dir = dir.normalize();
+        for i in 0..MAX_RAYCAST_STEPS {
+            let pos = origin + i as f32 * RAYCAST_STEP * dir;
+
+            let block = world.block_at(pos);
+            if block.is_solid() {
+                return Some(RaycastHit {
+                    block: block,
+                    position: pos,
+                });
+            }
+        }
+        None
+    }
+}
