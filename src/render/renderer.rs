@@ -161,7 +161,7 @@ impl Renderer {
         }
 
         let mut target: Frame = self.display.draw();
-        target.clear_color_and_depth((0.549, 0.745, 0.839, 1.0), 1.0);
+        target.clear_color_and_depth((0.466, 0.709, 0.996, 1.0), 1.0);
         if render_job.draw_calls.len() > 0 {
             let (width, height) = target.get_dimensions();
             camera.aspect_ratio = width as f32 / height as f32;
