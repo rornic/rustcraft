@@ -104,16 +104,20 @@ pub mod raycast {
     use crate::world::{BlockType, World};
 
     const RAYCAST_STEP: f32 = 0.5;
-    const MAX_RAYCAST_STEPS: u32 = 100;
 
     pub struct RaycastHit {
         pub block: BlockType,
         pub position: Vector3<f32>,
     }
 
-    pub fn raycast(world: &World, origin: Vector3<f32>, dir: Vector3<f32>) -> Option<RaycastHit> {
+    pub fn raycast(
+        world: &World,
+        origin: Vector3<f32>,
+        dir: Vector3<f32>,
+        max_dist: f32,
+    ) -> Option<RaycastHit> {
         let dir = dir.normalize();
-        for i in 0..MAX_RAYCAST_STEPS {
+        for i in 0..(max_dist / RAYCAST_STEP).ceil() as usize {
             let pos = origin + i as f32 * RAYCAST_STEP * dir;
 
             let block = world.block_at(pos);
