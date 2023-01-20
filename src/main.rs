@@ -3,6 +3,7 @@ extern crate glium;
 use std::time::Instant;
 
 use cgmath::{One, Quaternion};
+use glium::glutin::dpi::LogicalSize;
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
@@ -45,6 +46,7 @@ fn init_display() -> (EventLoop<()>, Display) {
         .set_cursor_grab(glutin::window::CursorGrabMode::Confined)
         .unwrap();
     window.window().set_cursor_visible(false);
+    window.window().set_inner_size(LogicalSize::new(1600, 900));
 
     let display = glium::Display::from_gl_window(window).unwrap();
     (event_loop, display)

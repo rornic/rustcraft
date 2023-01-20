@@ -123,12 +123,6 @@ impl<'a> System<'a> for ChunkLoader {
             game_world.clear_chunk_dirty_bit(chunk);
         }
 
-        self.active_chunks = self
-            .active_chunks
-            .drain()
-            .filter(|c| !game_world.chunk(*c).unwrap().dirty)
-            .collect::<HashSet<Vector2<i32>>>();
-
         // Load new chunks
         let mut to_load = all_chunks
             .difference(&self.active_chunks)

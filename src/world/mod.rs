@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ops::Index;
 
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
