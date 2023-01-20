@@ -35,7 +35,7 @@ pub struct DrawCall {
 }
 
 pub struct RenderMesh {
-    mesh: Arc<Mesh>,
+    pub mesh: Arc<Mesh>,
     pub visible: bool,
 }
 
