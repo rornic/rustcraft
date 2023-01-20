@@ -22,7 +22,7 @@ mod world;
 use world::ecs::bounds::Bounds;
 use world::ecs::chunk_loader::{ChunkGenerator, ChunkLoader};
 use world::ecs::physics::{Physics, Rigidbody};
-use world::ecs::player::{Player, PlayerMovement};
+use world::ecs::player::{Player, PlayerBlockBreak, PlayerMovement};
 use world::ecs::Transform;
 use world::World;
 
@@ -53,7 +53,6 @@ fn init_display() -> (EventLoop<()>, Display) {
 fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputEvent> {
     use glium::glutin;
 
-    // Handle window events
     match ev {
         glutin::event::Event::WindowEvent { event, .. } => match event {
             glutin::event::WindowEvent::CloseRequested => {
@@ -62,6 +61,9 @@ fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputE
             }
             glutin::event::WindowEvent::KeyboardInput { input, .. } => {
                 Some(InputEvent::Keyboard(input))
+            }
+            glutin::event::WindowEvent::MouseInput { state, button, .. } => {
+                Some(InputEvent::MouseButton { button, state })
             }
             _ => None,
         },
@@ -111,6 +113,7 @@ fn main() {
         .with(CameraSystem::new(camera), "camera", &[])
         .with(Physics::new(), "physics", &[])
         .with(PlayerMovement::default(), "player_movement", &[])
+        .with(PlayerBlockBreak::default(), "player_block_break", &[])
         .with(
             ChunkGenerator::new(RENDER_DISTANCE as u32 + RENDER_DISTANCE as u32 / 2),
             "chunk_generator",
