@@ -1,8 +1,12 @@
 use cgmath::{Deg, Euler, Quaternion, Vector3};
 use glium::glutin::event::VirtualKeyCode;
-use specs::{Component, Join, Read, ReadStorage, System, VecStorage, WriteStorage};
+use specs::{Component, Join, Read, ReadStorage, System, VecStorage, Write, WriteStorage};
 
-use crate::{input::Input, render::camera::Camera, world::World};
+use crate::{
+    input::Input,
+    render::camera::Camera,
+    world::{BlockType, World},
+};
 
 use super::{
     physics::{self, Rigidbody},
@@ -51,14 +55,6 @@ impl<'a> System<'a> for PlayerMovement {
                 movement_vector.z = -move_speed;
             }
 
-            if input.keyboard.is_pressed(VirtualKeyCode::E) {
-                if let Some(hit) =
-                    physics::raycast::raycast(&world, transform.position, camera.look_direction())
-                {
-                    // TODO: move this check to another system and break the block we hit
-                }
-            }
-
             movement_vector = Quaternion::from(Euler {
                 x: Deg(0.0),
                 y: camera.yaw(),
@@ -69,6 +65,33 @@ impl<'a> System<'a> for PlayerMovement {
 
             if input.keyboard.is_pressed(VirtualKeyCode::Space) && rigidbody.is_grounded() {
                 rigidbody.velocity.y = 4.0;
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct PlayerBlockBreak {}
+
+impl<'a> System<'a> for PlayerBlockBreak {
+    type SystemData = (
+        ReadStorage<'a, Transform>,
+        ReadStorage<'a, Camera>,
+        Write<'a, World>,
+        Read<'a, Input>,
+    );
+
+    fn run(&mut self, (transforms, cameras, mut world, input): Self::SystemData) {
+        for (transform, camera) in (&transforms, &cameras).join() {
+            if input.mouse.is_left_pressed() {
+                if let Some(hit) = physics::raycast::block_aligned_raycast(
+                    &world,
+                    transform.position,
+                    camera.look_direction(),
+                    5.0,
+                ) {
+                    world.set_block_at(hit.position, BlockType::Air);
+                }
             }
         }
     }

@@ -14,7 +14,6 @@ cargo run --release
 
 ## Planned work
 
-- Ability to break blocks.
 - Renderer capable of simple lighting.
 - Occlusion culling.
 - Trees!

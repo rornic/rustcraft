@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use glium::glutin::event::{ElementState, KeyboardInput, VirtualKeyCode};
+use glium::glutin::event::{ElementState, KeyboardInput, MouseButton, VirtualKeyCode};
 
 /// Represents the state of all input peripherals.
 ///
@@ -14,13 +14,20 @@ pub struct Input {
 #[derive(Debug)]
 pub enum InputEvent {
     Keyboard(KeyboardInput),
-    MouseMotion { delta: (f64, f64) },
+    MouseMotion {
+        delta: (f64, f64),
+    },
+    MouseButton {
+        button: MouseButton,
+        state: ElementState,
+    },
 }
 
 impl Input {
-    /// Updates the input, resetting any values if they should only be set on a per-frame basis.
     pub fn update(&mut self) {
+        // TODO: refactor this awful input system
         self.mouse.delta = (0.0, 0.0);
+        self.mouse.left_press = false;
     }
 
     pub fn process_event(&mut self, event: &InputEvent) {
@@ -35,6 +42,10 @@ impl Input {
             },
             InputEvent::MouseMotion { delta } => {
                 self.mouse.move_mouse((delta.0 as f32, delta.1 as f32))
+            }
+            InputEvent::MouseButton { button, state } => {
+                self.mouse.left_press =
+                    *button == MouseButton::Left && *state == ElementState::Pressed;
             }
             _ => (),
         }
@@ -51,7 +62,6 @@ pub struct KeyboardMap {
 }
 
 impl KeyboardMap {
-    /// Checks whether a key is currently pressed.
     pub fn is_pressed(&self, virtual_keycode: VirtualKeyCode) -> bool {
         match self.map.get(&virtual_keycode) {
             Some(ElementState::Pressed) => true,
@@ -71,8 +81,13 @@ impl KeyboardMap {
 #[derive(Default)]
 pub struct Mouse {
     delta: (f32, f32),
+    left_press: bool,
 }
 impl Mouse {
+    pub fn is_left_pressed(&self) -> bool {
+        self.left_press
+    }
+
     fn move_mouse(&mut self, delta: (f32, f32)) {
         self.delta = delta;
     }

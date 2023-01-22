@@ -34,7 +34,10 @@ impl BlockType {
 
 const BLOCK_COUNT: usize = 6;
 
-type Chunk = Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>;
+pub struct Chunk {
+    blocks: Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>,
+    dirty: bool,
+}
 
 const WORLD_HEIGHT: usize = 256;
 const MIN_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 3;
@@ -62,7 +65,7 @@ impl Default for World {
 
             let y = (0..WORLD_HEIGHT)
                 .rev()
-                .find(|y| chunk[0][*y][0] != BlockType::Air)
+                .find(|y| chunk.blocks[0][*y][0] != BlockType::Air)
                 .unwrap_or(0);
             if y > MIN_SPAWN_HEIGHT && y < MAX_SPAWN_HEIGHT {
                 spawn = Some(vector3!(
@@ -99,6 +102,38 @@ impl World {
 
     pub fn spawn(&self) -> Vector3<f32> {
         self.spawn
+    }
+
+    pub fn set_block_at(&mut self, pos: Vector3<f32>, block: BlockType) {
+        let (chunk_pos, pos) = self.world_to_block_relative(pos);
+        let chunk = self
+            .chunks
+            .get_mut(&chunk_pos)
+            .expect("attempting to set block in chunk that is not generated");
+        chunk.blocks[pos.x][pos.y][pos.z] = block;
+        chunk.dirty = true;
+
+        // If changing a block on the edge of a chunk, we also need to set the dirty bit
+        // on the neighbouring chunks.
+        let mut regenerate_neighbours = vec![];
+        if pos.x == 0 {
+            regenerate_neighbours.push(chunk_pos + vector2!(-1, 0));
+        } else if pos.x == CHUNK_SIZE - 1 {
+            regenerate_neighbours.push(chunk_pos + vector2!(1, 0));
+        }
+
+        if pos.z == 0 {
+            regenerate_neighbours.push(chunk_pos + vector2!(0, -1));
+        } else if pos.z == CHUNK_SIZE - 1 {
+            regenerate_neighbours.push(chunk_pos + vector2!(0, 1));
+        }
+
+        for neighbour in regenerate_neighbours {
+            self.chunks
+                .get_mut(&neighbour)
+                .expect("neighbouring chunk is not generated")
+                .dirty = true;
+        }
     }
 
     fn generate_chunk_mesh(&self, chunk_pos: Vector2<i32>) -> Mesh {
@@ -148,7 +183,7 @@ impl World {
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
                 for y in 0..WORLD_HEIGHT {
-                    if chunk[x][y][z] == BlockType::Air {
+                    if chunk.blocks[x][y][z] == BlockType::Air {
                         continue;
                     }
 
@@ -189,13 +224,19 @@ impl World {
                     for (i, side) in sides.iter().enumerate() {
                         match side {
                             Some(BlockType::Water) => {
-                                if chunk[x][y][z] != BlockType::Water {
-                                    add_vertices(&face_vertices[i], world_position, chunk[x][y][z])
+                                if chunk.blocks[x][y][z] != BlockType::Water {
+                                    add_vertices(
+                                        &face_vertices[i],
+                                        world_position,
+                                        chunk.blocks[x][y][z],
+                                    )
                                 }
                             }
-                            None | Some(BlockType::Air) => {
-                                add_vertices(&face_vertices[i], world_position, chunk[x][y][z])
-                            }
+                            None | Some(BlockType::Air) => add_vertices(
+                                &face_vertices[i],
+                                world_position,
+                                chunk.blocks[x][y][z],
+                            ),
                             _ => (),
                         };
                     }
@@ -206,13 +247,13 @@ impl World {
     }
 
     fn block_at(&self, position: Vector3<f32>) -> BlockType {
-        let (chunk_pos, block_pos) = self.world_to_block(position);
+        let (chunk_pos, block_pos) = self.world_to_block_relative(position);
         if block_pos.y >= WORLD_HEIGHT {
             return BlockType::Air;
         }
 
         if let Some(chunk) = self.chunks.get(&chunk_pos) {
-            chunk[block_pos.x][block_pos.y][block_pos.z]
+            chunk.blocks[block_pos.x][block_pos.y][block_pos.z]
         } else {
             BlockType::Air
         }
@@ -222,8 +263,13 @@ impl World {
         self.chunks.get(&chunk_position)
     }
 
+    fn clear_chunk_dirty_bit(&mut self, chunk_pos: Vector2<i32>) {
+        self.chunks.get_mut(&chunk_pos).unwrap().dirty = false;
+    }
+
     fn chunk_block<'a>(&self, chunk: &'a Chunk, block: Vector3<usize>) -> Option<BlockType> {
         chunk
+            .blocks
             .get(block.x)
             .and_then(|c| c.get(block.y).and_then(|c| c.get(block.z)))
             .copied()
@@ -238,7 +284,10 @@ impl World {
     }
 
     /// Takes a position in the world and converts it to a position relative to the chunk it's in.
-    fn world_to_block(&self, world_position: Vector3<f32>) -> (Vector2<i32>, Vector3<usize>) {
+    fn world_to_block_relative(
+        &self,
+        world_position: Vector3<f32>,
+    ) -> (Vector2<i32>, Vector3<usize>) {
         let chunk = self.world_to_chunk(world_position);
         let relative_pos = vector3!(
             (world_position.x - (chunk.x * CHUNK_SIZE as i32) as f32).floor() as usize,
@@ -246,6 +295,14 @@ impl World {
             (world_position.z - (chunk.y * CHUNK_SIZE as i32) as f32).floor() as usize
         );
         (chunk, relative_pos)
+    }
+
+    fn world_to_block(&self, world_position: Vector3<f32>) -> Vector3<f32> {
+        vector3!(
+            world_position.x.floor(),
+            world_position.y.floor(),
+            world_position.z.floor()
+        )
     }
 
     fn block_centre(&self, world_position: Vector3<f32>) -> Vector3<f32> {
@@ -315,6 +372,9 @@ impl WorldGenerator {
             }
         }
 
-        Box::new(blocks)
+        Chunk {
+            blocks: Box::new(blocks),
+            dirty: false,
+        }
     }
 }

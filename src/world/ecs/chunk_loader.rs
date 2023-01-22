@@ -85,7 +85,7 @@ impl<'a> System<'a> for ChunkLoader {
 
     fn run(
         &mut self,
-        (cameras, mut transforms, mut render_meshes, mut bounds, game_world, entities): Self::SystemData,
+        (cameras, mut transforms, mut render_meshes, mut bounds, mut game_world, entities): Self::SystemData,
     ) {
         let (camera, transform) = (&cameras, &transforms).join().next().unwrap();
         let camera_chunk = game_world.world_to_chunk(transform.position);
@@ -95,6 +95,35 @@ impl<'a> System<'a> for ChunkLoader {
             .filter(|chunk| game_world.are_neighbours_generated(*chunk))
             .collect::<HashSet<Vector2<i32>>>();
 
+        // Unload old chunks
+        for chunk in self
+            .active_chunks
+            .difference(&all_chunks)
+            .cloned()
+            .collect::<Vec<Vector2<i32>>>()
+        {
+            let e = self.chunk_entities.remove(&chunk).unwrap();
+            entities.delete(e).unwrap();
+            self.active_chunks.remove(&chunk);
+            self.chunk_meshes.remove(&chunk);
+        }
+
+        // Re-mesh dirty chunks
+        for chunk in self
+            .active_chunks
+            .iter()
+            .cloned()
+            .filter(|c| game_world.chunk(*c).unwrap().dirty)
+            .collect::<Vec<Vector2<i32>>>()
+        {
+            self.chunk_meshes.remove(&chunk);
+            let entity = self.chunk_entities.get(&chunk).unwrap();
+            let new_mesh = game_world.generate_chunk_mesh(chunk);
+            render_meshes.get_mut(*entity).unwrap().mesh = Arc::new(new_mesh);
+            game_world.clear_chunk_dirty_bit(chunk);
+        }
+
+        // Load new chunks
         let mut to_load = all_chunks
             .difference(&self.active_chunks)
             .cloned()
@@ -135,18 +164,6 @@ impl<'a> System<'a> for ChunkLoader {
                 .with(b, &mut bounds)
                 .build();
             self.chunk_entities.insert(chunk, entity);
-        }
-
-        for chunk in self
-            .active_chunks
-            .difference(&all_chunks)
-            .cloned()
-            .collect::<Vec<Vector2<i32>>>()
-        {
-            let e = self.chunk_entities.remove(&chunk).unwrap();
-            entities.delete(e).unwrap();
-            self.active_chunks.remove(&chunk);
-            self.chunk_meshes.remove(&chunk);
         }
     }
 }
