@@ -101,7 +101,10 @@ fn collides_with_block(block: Vector3<f32>, bounds: Bounds, world: &World) -> bo
 pub mod raycast {
     use cgmath::{InnerSpace, Vector3};
 
-    use crate::world::{BlockType, World};
+    use crate::{
+        vector3,
+        world::{BlockType, World},
+    };
 
     const RAYCAST_STEP: f32 = 0.5;
 
@@ -129,5 +132,61 @@ pub mod raycast {
             }
         }
         None
+    }
+
+    pub fn block_aligned_raycast(
+        world: &World,
+        origin: Vector3<f32>,
+        dir: Vector3<f32>,
+        max_blocks: f32,
+    ) -> Option<RaycastHit> {
+        let dir = dir.normalize();
+        let (step_x, step_y, step_z) = (dir.x.signum(), dir.y.signum(), dir.z.signum());
+
+        let (t_delta_x, t_delta_y, t_delta_z) =
+            (1.0 / dir.x.abs(), 1.0 / dir.y.abs(), 1.0 / dir.z.abs());
+
+        let start_block = world.block_centre(origin);
+        let (x_out, y_out, z_out) = (
+            start_block.x + step_x * max_blocks,
+            start_block.y + step_y * max_blocks,
+            start_block.z + step_z * max_blocks,
+        );
+        let (mut t_max_x, mut t_max_y, mut t_max_z) = (
+            (start_block.x - origin.x) / dir.x,
+            (start_block.y - origin.y) / dir.y,
+            (start_block.z - origin.z) / dir.z,
+        );
+        let (mut x, mut y, mut z) = (start_block.x, start_block.y, start_block.z);
+        loop {
+            if t_max_x < t_max_y && t_max_x < t_max_z {
+                x += step_x;
+                if x == x_out {
+                    return None;
+                }
+                t_max_x += t_delta_x;
+            } else if t_max_y < t_max_z {
+                y += step_y;
+                if y == y_out {
+                    return None;
+                }
+                t_max_y += t_delta_y;
+            } else {
+                z += step_z;
+                if z == z_out {
+                    return None;
+                }
+                t_max_z += t_delta_z;
+            }
+
+            let pos = vector3!(x, y, z);
+            let block = world.block_at(pos);
+            if block.is_solid() {
+                return Some(RaycastHit {
+                    block: block,
+                    position: pos,
+                });
+            }
+        }
     }
 }

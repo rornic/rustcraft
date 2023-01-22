@@ -105,7 +105,7 @@ impl World {
     }
 
     pub fn set_block_at(&mut self, pos: Vector3<f32>, block: BlockType) {
-        let (chunk_pos, pos) = self.world_to_block(pos);
+        let (chunk_pos, pos) = self.world_to_block_relative(pos);
         let chunk = self
             .chunks
             .get_mut(&chunk_pos)
@@ -247,7 +247,7 @@ impl World {
     }
 
     fn block_at(&self, position: Vector3<f32>) -> BlockType {
-        let (chunk_pos, block_pos) = self.world_to_block(position);
+        let (chunk_pos, block_pos) = self.world_to_block_relative(position);
         if block_pos.y >= WORLD_HEIGHT {
             return BlockType::Air;
         }
@@ -284,7 +284,10 @@ impl World {
     }
 
     /// Takes a position in the world and converts it to a position relative to the chunk it's in.
-    fn world_to_block(&self, world_position: Vector3<f32>) -> (Vector2<i32>, Vector3<usize>) {
+    fn world_to_block_relative(
+        &self,
+        world_position: Vector3<f32>,
+    ) -> (Vector2<i32>, Vector3<usize>) {
         let chunk = self.world_to_chunk(world_position);
         let relative_pos = vector3!(
             (world_position.x - (chunk.x * CHUNK_SIZE as i32) as f32).floor() as usize,
@@ -292,6 +295,14 @@ impl World {
             (world_position.z - (chunk.y * CHUNK_SIZE as i32) as f32).floor() as usize
         );
         (chunk, relative_pos)
+    }
+
+    fn world_to_block(&self, world_position: Vector3<f32>) -> Vector3<f32> {
+        vector3!(
+            world_position.x.floor(),
+            world_position.y.floor(),
+            world_position.z.floor()
+        )
     }
 
     fn block_centre(&self, world_position: Vector3<f32>) -> Vector3<f32> {

@@ -84,7 +84,7 @@ impl<'a> System<'a> for PlayerBlockBreak {
     fn run(&mut self, (transforms, cameras, mut world, input): Self::SystemData) {
         for (transform, camera) in (&transforms, &cameras).join() {
             if input.mouse.is_left_pressed() {
-                if let Some(hit) = physics::raycast::raycast(
+                if let Some(hit) = physics::raycast::block_aligned_raycast(
                     &world,
                     transform.position,
                     camera.look_direction(),
