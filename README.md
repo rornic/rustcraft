@@ -6,6 +6,8 @@ Another Minecraft clone, using [specs](https://github.com/amethyst/specs) and [g
 cargo run --release
 ```
 
+![Image of rustcraft](images/readme.jpg)
+
 ## Features
 
 - Player controller with gravity and collision detection.
