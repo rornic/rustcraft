@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate glium;
+use std::error::Error;
 use std::time::Instant;
 
 use cgmath::{One, Quaternion};
@@ -9,7 +10,8 @@ use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
 use input::{Input, InputEvent};
 use render::camera::{Camera, CameraSystem};
-use render::renderer::{RenderMesh, RenderingSystem, RENDER_DISTANCE};
+use render::renderer::{RenderMesh, RenderingSystem};
+use settings::Settings;
 use specs::WorldExt;
 
 use specs::prelude::*;
@@ -17,6 +19,7 @@ use specs::prelude::*;
 mod input;
 mod math;
 mod render;
+mod settings;
 mod util;
 mod world;
 
@@ -79,10 +82,18 @@ fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputE
     }
 }
 
+fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
+    let settings_str = std::fs::read_to_string(file)?;
+    let settings = toml::from_str(&settings_str)?;
+    Ok(settings)
+}
+
 fn main() {
     let (event_loop, display) = init_display();
 
-    let mut renderer = crate::render::renderer::Renderer::new(display);
+    let settings = read_settings("resources/settings.toml").expect("Failed to read settings.toml");
+
+    let mut renderer = crate::render::renderer::Renderer::new(display, &settings.renderer);
 
     let mut world = specs::World::new();
     world.register::<Transform>();
@@ -102,7 +113,7 @@ fn main() {
             vector3!(1.0, 1.0, 1.0),
             Quaternion::one(),
         ))
-        .with(Camera::default())
+        .with(Camera::from(settings.renderer))
         .with(Rigidbody::default())
         .with(Bounds::new(
             vector3!(0.0, 0.0, 0.0),
@@ -117,17 +128,19 @@ fn main() {
         .with(PlayerMovement::default(), "player_movement", &[])
         .with(PlayerBlockBreak::default(), "player_block_break", &[])
         .with(
-            ChunkGenerator::new(RENDER_DISTANCE as u32 + RENDER_DISTANCE as u32 / 2),
+            ChunkGenerator::new(settings.renderer.render_distance + 4),
             "chunk_generator",
             &[],
         )
         .with(
-            ChunkLoader::new(RENDER_DISTANCE as u32),
+            ChunkLoader::new(settings.renderer.render_distance),
             "chunk_loader",
             &[],
         )
         .with(RenderingSystem, "rendering", &[])
         .build();
+
+    world.insert(settings);
     dispatcher.setup(&mut world);
 
     let mut last_frame = Instant::now();

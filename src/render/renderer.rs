@@ -19,7 +19,10 @@ use specs::{
 };
 use uuid::Uuid;
 
-use crate::world::ecs::{bounds::Bounds, Transform};
+use crate::{
+    settings::RendererSettings,
+    world::ecs::{bounds::Bounds, Transform},
+};
 
 use super::{
     camera::Camera,
@@ -111,7 +114,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(display: Display) -> Self {
+    pub fn new(display: Display, settings: &RendererSettings) -> Self {
         let global_uniform_buffer: UniformBuffer<GlobalUniforms> =
             UniformBuffer::empty(&display).unwrap();
 
@@ -120,8 +123,13 @@ impl Renderer {
         let texture = load_texture(&display, "textures/blocks.png").unwrap();
 
         let world_mesh = WorldMesh::new(&display);
+
+        // For a render distance r, we can load (2r)^2 chunks around the player.
+        // If none of these are culled, we need a draw command for each chunk. Therefore command buffer should be have room for at least (2r)^2 commands.
+        // I've doubled it for good measure.
+        let command_buffer_size = 2 * (2 * settings.render_distance).pow(2) as usize;
         let command_buffer =
-            DrawCommandsIndicesBuffer::empty_dynamic(&display, COMMAND_BUFFER_SIZE).unwrap();
+            DrawCommandsIndicesBuffer::empty_dynamic(&display, command_buffer_size).unwrap();
 
         Self {
             display,
@@ -275,13 +283,6 @@ struct MemoryAllocation {
     start: usize,
     count: usize,
 }
-
-pub const RENDER_DISTANCE: usize = 16;
-
-// For a render distance r, we can load (2r)^2 chunks around the player.
-// If none of these are culled, we need a draw command for each chunk. Therefore command buffer should be have room for at least (2r)^2 commands.
-// I've doubled it for good measure.
-const COMMAND_BUFFER_SIZE: usize = 2 * (2 * RENDER_DISTANCE).pow(2);
 
 trait Buffer<'a> {
     const BLOCK_SIZE: usize;
