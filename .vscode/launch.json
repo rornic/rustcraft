@@ -11,16 +11,10 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=rustcraft",
-                    "--package=rustcraft"
-                ],
-                "filter": {
-                    "name": "rustcraft",
-                    "kind": "bin"
-                }
+                    "--bin=rustcraft"
+                ]
             },
-            "args": [],
-            "cwd": "${workspaceFolder}"
+            "args": []
         },
         {
             "type": "lldb",

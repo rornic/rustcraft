@@ -3,7 +3,8 @@ use specs::{Component, Entity, Read, ReadStorage, System, VecStorage, WriteStora
 
 use crate::{
     input::Input,
-    render::{mesh::Mesh, renderer::RENDER_DISTANCE},
+    render::mesh::Mesh,
+    settings::RendererSettings,
     vector3,
     world::{ecs::Transform, CHUNK_SIZE},
     DeltaTime,
@@ -81,7 +82,26 @@ impl Default for Camera {
             max_pitch: Deg(65.0),
             aspect_ratio: 16.0 / 9.0,
             near_dist: 0.1,
-            far_dist: RENDER_DISTANCE as f32 * CHUNK_SIZE as f32,
+            far_dist: 8.0 * CHUNK_SIZE as f32,
+            fov: 3.141592 / 3.0,
+            view_matrix: [[0.0; 4]; 4],
+            projection_matrix: [[0.0; 4]; 4],
+            view_frustum: ViewFrustum::default(),
+        };
+        cam.calculate_projection_matrix();
+        cam
+    }
+}
+
+impl From<RendererSettings> for Camera {
+    fn from(settings: RendererSettings) -> Self {
+        let mut cam = Self {
+            yaw: Deg(0.0),
+            pitch: Deg(0.0),
+            max_pitch: Deg(65.0),
+            aspect_ratio: 16.0 / 9.0,
+            near_dist: 0.1,
+            far_dist: settings.render_distance as f32 * CHUNK_SIZE as f32,
             fov: 3.141592 / 3.0,
             view_matrix: [[0.0; 4]; 4],
             projection_matrix: [[0.0; 4]; 4],
