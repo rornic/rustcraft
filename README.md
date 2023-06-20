@@ -5,6 +5,7 @@ Another Minecraft clone, using [specs](https://github.com/amethyst/specs) and [g
 ```
 cargo run --release
 ```
+NB: currently only works on Windows 10. 
 
 ![Image of rustcraft](images/readme.jpg)
 
