@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use bevy::ecs::component::Component;
-use bevy::log::info;
 use bevy::render::mesh::{Indices, Mesh, MeshVertexAttribute, VertexAttributeValues};
 use bevy::render::render_asset::RenderAssetUsages;
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 use crate::render::mesh::Vertex;
 use crate::{vector2, vector3};
@@ -59,28 +59,28 @@ impl Default for World {
         let mut world = Self {
             generator: Default::default(),
             chunks: Default::default(),
-            spawn: vector3!(0.0, 0.0, 0.0),
+            spawn: vector3!(0.0, 20.0, 0.0),
         };
 
-        let mut rng = rand::thread_rng();
-        let mut spawn: Option<Vector3<f32>> = None;
-        while let None = spawn {
-            let chunk_pos = vector2!(rng.gen_range(-256..256), rng.gen_range(-256..256));
-            let chunk = world.generate_chunk(chunk_pos);
+        // let mut rng = StdRng::seed_from_u64(world.generator.seed as u64);
+        // let mut spawn: Option<Vector3<f32>> = None;
+        // while let None = spawn {
+        //     let chunk_pos = vector2!(rng.gen_range(-256..256), rng.gen_range(-256..256));
+        //     let chunk = world.generate_chunk(chunk_pos);
 
-            let y = (0..WORLD_HEIGHT)
-                .rev()
-                .find(|y| chunk.blocks[0][*y][0] != BlockType::Air)
-                .unwrap_or(0);
-            if y > MIN_SPAWN_HEIGHT && y < MAX_SPAWN_HEIGHT {
-                spawn = Some(vector3!(
-                    chunk_pos.x as f32 * CHUNK_SIZE as f32,
-                    y as f32 + 2.0,
-                    chunk_pos.y as f32 * CHUNK_SIZE as f32
-                ));
-            }
-        }
-        world.spawn = spawn.unwrap();
+        //     let y = (0..WORLD_HEIGHT)
+        //         .rev()
+        //         .find(|y| chunk.blocks[0][*y][0] != BlockType::Air)
+        //         .unwrap_or(0);
+        //     if y > MIN_SPAWN_HEIGHT && y < MAX_SPAWN_HEIGHT {
+        //         spawn = Some(vector3!(
+        //             chunk_pos.x as f32 * CHUNK_SIZE as f32,
+        //             y as f32 + 2.0,
+        //             chunk_pos.y as f32 * CHUNK_SIZE as f32
+        //         ));
+        //     }
+        // }
+        // world.spawn = spawn.unwrap();
 
         world
     }
@@ -192,7 +192,11 @@ impl World {
                         continue;
                     }
 
-                    let world_position = vector3!(x as f32, y as f32, z as f32);
+                    let world_position = vector3!(
+                        chunk_pos.x as f32 * CHUNK_SIZE as f32 + x as f32,
+                        y as f32,
+                        chunk_pos.y as f32 * CHUNK_SIZE as f32 + z as f32
+                    );
 
                     let front = z
                         .checked_sub(1)
@@ -257,6 +261,10 @@ impl World {
         mesh.insert_attribute(
             Mesh::ATTRIBUTE_NORMAL,
             VertexAttributeValues::Float32x3(vertices.iter().map(|v| v.normal).collect()),
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_UV_0,
+            VertexAttributeValues::Float32x2(vertices.iter().map(|v| v.uv).collect()),
         );
         mesh
     }

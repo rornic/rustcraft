@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy::{
-    asset::Assets,
+    asset::{AssetServer, Assets},
     ecs::{
         component::Component,
         entity::Entity,
@@ -14,7 +14,10 @@ use bevy::{
     math::{Quat, Vec3},
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
-    render::{color::Color, mesh::Mesh, render_resource::Face},
+    render::{
+        color::Color, mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image,
+        view::NoFrustumCulling,
+    },
     transform::components::{GlobalTransform, Transform},
 };
 use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3, Zero};
@@ -24,8 +27,6 @@ use crate::{
     vector2, vector3,
     world::{Chunk, World, CHUNK_SIZE, WORLD_HEIGHT},
 };
-
-use super::bounds::Bounds;
 
 const GENERATE_DISTANCE: u32 = 16;
 
@@ -61,6 +62,7 @@ pub fn load_chunks(
     mut chunk_loader_query: Query<&mut ChunkLoader>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
 ) {
     let world = &mut world_query
         .get_single_mut()
@@ -125,20 +127,24 @@ pub fn load_chunks(
         .map(|chunk| (*chunk, world.generate_chunk_mesh(*chunk)))
         .collect::<Vec<(Vector2<i32>, Mesh)>>();
     for (chunk, mesh) in new_meshes {
-        let (t, b) = chunk_components(chunk);
+        let (t, aabb) = chunk_components(chunk);
         info!("chunk loaded at {:?}", t);
         chunk_loader.active_chunks.insert(chunk);
         let entity = commands
-            .spawn(PbrBundle {
-                mesh: meshes.add(mesh),
-                material: materials.add(StandardMaterial {
-                    base_color: Color::WHITE,
-                    cull_mode: None,
+            .spawn((
+                PbrBundle {
+                    mesh: meshes.add(mesh),
+                    material: materials.add(StandardMaterial {
+                        base_color: Color::WHITE,
+                        base_color_texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+                        cull_mode: Some(Face::Front),
+                        ..default()
+                    }),
+                    transform: t,
                     ..default()
-                }),
-                transform: t,
-                ..default()
-            })
+                },
+                aabb,
+            ))
             .id();
         chunk_loader.chunk_entities.insert(chunk, entity);
     }
@@ -206,19 +212,14 @@ fn chunk_world_pos(chunk: Vector2<i32>) -> Vector3<f32> {
     )
 }
 
-fn chunk_components(chunk: Vector2<i32>) -> (Transform, Bounds) {
+fn chunk_components(chunk: Vector2<i32>) -> (Transform, Aabb) {
     let pos = chunk_world_pos(chunk);
     let t = Transform::from_translation(Vec3::new(pos.x, pos.y, pos.z));
-    let b = Bounds::new(
-        vector3!(
-            CHUNK_SIZE as f32 / 2.0,
-            WORLD_HEIGHT as f32 / 2.0,
-            CHUNK_SIZE as f32 / 2.0
-        ),
-        vector3!(CHUNK_SIZE as f32, WORLD_HEIGHT as f32, CHUNK_SIZE as f32),
+    let aabb = Aabb::from_min_max(
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(CHUNK_SIZE as f32, WORLD_HEIGHT as f32, CHUNK_SIZE as f32),
     );
-
-    (t, b)
+    (t, aabb)
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 extern crate glium;
 use std::error::Error;
 
+use bevy::render::render_resource::Texture;
 use glium::glutin::dpi::LogicalSize;
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
@@ -19,29 +20,6 @@ mod world;
 use bevy::prelude::*;
 use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
 use world::World;
-
-/// Prepares a `Display` and `EventLoop` for rendering and updating.
-fn init_display() -> (EventLoop<()>, Display) {
-    use glium::glutin;
-
-    // Set up window
-    let event_loop = glutin::event_loop::EventLoop::new();
-    let wb = glutin::window::WindowBuilder::new();
-    let window = glutin::ContextBuilder::new()
-        .with_depth_buffer(24)
-        // .with_vsync(true)
-        .build_windowed(wb, &event_loop)
-        .unwrap();
-    window
-        .window()
-        .set_cursor_grab(glutin::window::CursorGrabMode::Confined)
-        .unwrap();
-    window.window().set_cursor_visible(false);
-    window.window().set_inner_size(LogicalSize::new(1600, 900));
-
-    let display = glium::Display::from_gl_window(window).unwrap();
-    (event_loop, display)
-}
 
 fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputEvent> {
     use glium::glutin;
@@ -76,17 +54,10 @@ fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     Ok(settings)
 }
 
-fn setup_scene(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
+fn setup_scene(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
-            shadows_enabled: true,
-            ..default()
-        },
-        transform: Transform::from_xyz(4.0, 8.0, 4.0),
+        directional_light: DirectionalLight::default(),
+        transform: Transform::from_xyz(0.0, 800.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
 
@@ -99,25 +70,23 @@ fn setup_scene(
     commands.spawn(Camera3dBundle {
         transform: Transform::from_xyz(spawn.x, spawn.y, spawn.y)
             .looking_at(Vec3::new(spawn.x, spawn.y, spawn.z + 10.0), Vec3::Y),
-        projection: Projection::Perspective(PerspectiveProjection {
-            near: 0.1,
-            far: 10000.0,
-            ..default()
-        }),
         ..default()
     });
 
-    let chunk_loader = ChunkLoader::new(16);
+    let chunk_loader = ChunkLoader::new(32);
     commands.spawn(chunk_loader);
 
-    let settings = read_settings("resources/settings.toml").expect("Failed to read settings.toml");
+    let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     commands.spawn(settings);
+
+    asset_server.load::<Image>("textures/blocks.png");
 }
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .insert_resource(ClearColor(Color::ALICE_BLUE))
+        .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(Update, (generate_chunks, load_chunks).chain())
         .run();
