@@ -136,6 +136,7 @@ pub fn load_chunks(
                     material: materials.add(StandardMaterial {
                         base_color: Color::WHITE,
                         base_color_texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+                        reflectance: 0.0,
                         cull_mode: Some(Face::Front),
                         ..default()
                     }),

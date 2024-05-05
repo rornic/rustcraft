@@ -1,98 +1,101 @@
-use cgmath::{Deg, Euler, Quaternion, Vector3};
-use glium::glutin::event::VirtualKeyCode;
-use specs::{Component, Join, Read, ReadStorage, System, VecStorage, Write, WriteStorage};
-
-use crate::{
-    input::Input,
-    render::camera::Camera,
-    world::{BlockType, World},
+use bevy::{
+    ecs::{
+        bundle::Bundle,
+        component::Component,
+        query::{With, Without},
+        system::{Query, Res},
+    },
+    hierarchy::Parent,
+    input::{keyboard::KeyCode, ButtonInput},
+    math::Vec3,
+    render::camera::{self, Camera},
+    time::Time,
+    transform::{components::Transform, TransformBundle},
 };
 
-use super::{
-    physics::{self, Rigidbody},
-    Transform,
-};
-
-#[derive(Default)]
-pub struct Player {}
-
-impl Component for Player {
-    type Storage = VecStorage<Player>;
+#[derive(Bundle, Default)]
+pub struct PlayerBundle {
+    pub movement: PlayerMovement,
+    pub transform_bundle: TransformBundle,
 }
 
-#[derive(Default)]
-pub struct PlayerMovement {}
+#[derive(Component)]
+pub struct PlayerMovement {
+    move_speed: f32,
+}
 
-impl<'a> System<'a> for PlayerMovement {
-    type SystemData = (
-        ReadStorage<'a, Transform>,
-        ReadStorage<'a, Player>,
-        ReadStorage<'a, Camera>,
-        WriteStorage<'a, Rigidbody>,
-        Read<'a, World>,
-        Read<'a, Input>,
-    );
-
-    fn run(
-        &mut self,
-        (transforms, players, cameras, mut rigidbodies, world, input): Self::SystemData,
-    ) {
-        for (transform, player, camera, rigidbody) in
-            (&transforms, &players, &cameras, &mut rigidbodies).join()
-        {
-            let move_speed = 5.0;
-
-            let mut movement_vector = Vector3::new(0.0, 0.0, 0.0);
-            if input.keyboard.is_pressed(VirtualKeyCode::A) {
-                movement_vector.x = -move_speed;
-            } else if input.keyboard.is_pressed(VirtualKeyCode::D) {
-                movement_vector.x = move_speed;
-            }
-
-            if input.keyboard.is_pressed(VirtualKeyCode::W) {
-                movement_vector.z = move_speed;
-            } else if input.keyboard.is_pressed(VirtualKeyCode::S) {
-                movement_vector.z = -move_speed;
-            }
-
-            movement_vector = Quaternion::from(Euler {
-                x: Deg(0.0),
-                y: camera.yaw(),
-                z: Deg(0.0),
-            }) * movement_vector;
-            rigidbody.velocity.x = movement_vector.x;
-            rigidbody.velocity.z = movement_vector.z;
-
-            if input.keyboard.is_pressed(VirtualKeyCode::Space) && rigidbody.is_grounded() {
-                rigidbody.velocity.y = 4.0;
-            }
-        }
+impl Default for PlayerMovement {
+    fn default() -> Self {
+        Self { move_speed: 5.0 }
     }
 }
 
-#[derive(Default)]
-pub struct PlayerBlockBreak {}
+pub fn move_player(
+    time: Res<Time>,
+    mut player_query: Query<(&PlayerMovement, &mut Transform)>,
+    camera_query: Query<(&Parent, &Transform), (With<Camera>, Without<PlayerMovement>)>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    let (parent, camera_transform) = camera_query.get_single().expect("camera does not exist");
+    let (player_movement, player_transform) = &mut player_query
+        .get_mut(parent.get())
+        .expect("player does not exist");
 
-impl<'a> System<'a> for PlayerBlockBreak {
-    type SystemData = (
-        ReadStorage<'a, Transform>,
-        ReadStorage<'a, Camera>,
-        Write<'a, World>,
-        Read<'a, Input>,
-    );
+    let move_speed = player_movement.move_speed;
 
-    fn run(&mut self, (transforms, cameras, mut world, input): Self::SystemData) {
-        for (transform, camera) in (&transforms, &cameras).join() {
-            if input.mouse.is_left_pressed() {
-                if let Some(hit) = physics::raycast::block_aligned_raycast(
-                    &world,
-                    transform.position,
-                    camera.look_direction(),
-                    5.0,
-                ) {
-                    world.set_block_at(hit.position, BlockType::Air);
-                }
-            }
-        }
+    let mut movement_vector = Vec3::new(0.0, 0.0, 0.0);
+    if keys.pressed(KeyCode::KeyA) {
+        movement_vector.x = -move_speed;
+    } else if keys.pressed(KeyCode::KeyD) {
+        movement_vector.x = move_speed;
     }
+
+    if keys.pressed(KeyCode::KeyW) {
+        movement_vector.z = -move_speed;
+    } else if keys.pressed(KeyCode::KeyS) {
+        movement_vector.z = move_speed;
+    }
+
+    // movement_vector = Quaternion::from(Euler {
+    //     x: Deg(0.0),
+    //     y: 0.0,
+    //     z: Deg(0.0),
+    // }) * movement_vector;
+
+    let final_movement = player_transform.rotation * movement_vector * time.delta_seconds();
+    player_transform.translation += final_movement;
+
+    // rigidbody.velocity.x = movement_vector.x;
+    // rigidbody.velocity.z = movement_vector.z;
+
+    // if input.keyboard.is_pressed(VirtualKeyCode::Space) && rigidbody.is_grounded() {
+    //     rigidbody.velocity.y = 4.0;
+    // }
 }
+
+// #[derive(Default)]
+// pub struct PlayerBlockBreak {}
+
+// impl<'a> System<'a> for PlayerBlockBreak {
+//     type SystemData = (
+//         ReadStorage<'a, Transform>,
+//         ReadStorage<'a, Camera>,
+//         Write<'a, World>,
+//         Read<'a, Input>,
+//     );
+
+//     fn run(&mut self, (transforms, cameras, mut world, input): Self::SystemData) {
+//         for (transform, camera) in (&transforms, &cameras).join() {
+//             if input.mouse.is_left_pressed() {
+//                 if let Some(hit) = physics::raycast::block_aligned_raycast(
+//                     &world,
+//                     transform.position,
+//                     camera.look_direction(),
+//                     5.0,
+//                 ) {
+//                     world.set_block_at(hit.position, BlockType::Air);
+//                 }
+//             }
+//         }
+//     }
+// }

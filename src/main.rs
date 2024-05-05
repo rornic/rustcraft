@@ -3,6 +3,7 @@ extern crate glium;
 use std::error::Error;
 use std::f32::consts::PI;
 
+use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use bevy::render::render_resource::Texture;
 use glium::glutin::dpi::LogicalSize;
 use glium::glutin::event::Event;
@@ -20,7 +21,10 @@ mod world;
 
 use bevy::prelude::*;
 use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
+use world::ecs::player::move_player;
 use world::World;
+
+use crate::world::ecs::player::{PlayerBundle, PlayerMovement};
 
 fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputEvent> {
     use glium::glutin;
@@ -58,13 +62,14 @@ fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
 fn setup_scene(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mut ambient_light: ResMut<AmbientLight>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             illuminance: light_consts::lux::DIRECT_SUNLIGHT,
-            shadows_enabled: true,
+            shadows_enabled: false,
             ..default()
         },
         transform: Transform {
@@ -74,6 +79,7 @@ fn setup_scene(
         },
         ..default()
     });
+    ambient_light.brightness = 1000.0;
 
     let game_world = World::default();
     let spawn = game_world.spawn();
@@ -81,10 +87,24 @@ fn setup_scene(
 
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
 
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(spawn.x, spawn.y, spawn.z),
-        ..default()
-    });
+    let player = commands
+        .spawn(PlayerBundle {
+            transform_bundle: TransformBundle {
+                local: Transform::from_xyz(spawn.x, spawn.y, spawn.z).looking_to(Dir3::Z, Dir3::Y),
+                ..default()
+            },
+            ..default()
+        })
+        .id();
+
+    let camera = commands
+        .spawn(Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 2.0, 0.0),
+            ..default()
+        })
+        .insert(ScreenSpaceAmbientOcclusionBundle::default())
+        .id();
+    commands.entity(player).push_children(&[camera]);
 
     let chunk_loader = ChunkLoader::new(8);
     commands.spawn(chunk_loader);
@@ -92,7 +112,7 @@ fn setup_scene(
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     commands.spawn(settings);
 
-    asset_server.load::<Image>("textures/blocks.png");
+    let _ = asset_server.load::<Image>("textures/blocks.png");
 }
 
 fn main() {
@@ -102,6 +122,7 @@ fn main() {
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(Update, (generate_chunks, load_chunks).chain())
+        .add_systems(Update, move_player)
         .run();
 }
 
