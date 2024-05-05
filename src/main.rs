@@ -1,20 +1,13 @@
 #[macro_use]
 extern crate glium;
 use std::error::Error;
-use std::time::Instant;
 
-use cgmath::{One, Quaternion};
 use glium::glutin::dpi::LogicalSize;
 use glium::glutin::event::Event;
 use glium::glutin::event_loop::{ControlFlow, EventLoop};
 use glium::Display;
-use input::{Input, InputEvent};
-use render::camera::{Camera, CameraSystem};
-use render::renderer::{RenderMesh, RenderingSystem};
+use input::InputEvent;
 use settings::Settings;
-use specs::WorldExt;
-
-use specs::prelude::*;
 
 mod input;
 mod math;
@@ -23,14 +16,9 @@ mod settings;
 mod util;
 mod world;
 
-use world::ecs::bounds::Bounds;
-use world::ecs::chunk_loader::{ChunkGenerator, ChunkLoader};
-use world::ecs::physics::{Physics, Rigidbody};
-use world::ecs::player::{Player, PlayerBlockBreak, PlayerMovement};
-use world::ecs::Transform;
+use bevy::prelude::*;
+use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
 use world::World;
-
-use crate::render::renderer::RenderJob;
 
 /// Prepares a `Display` and `EventLoop` for rendering and updating.
 fn init_display() -> (EventLoop<()>, Display) {
@@ -88,97 +76,51 @@ fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     Ok(settings)
 }
 
-fn main() {
-    let (event_loop, display) = init_display();
-
-    let settings = read_settings("resources/settings.toml").expect("Failed to read settings.toml");
-
-    let mut renderer = crate::render::renderer::Renderer::new(display, &settings.renderer);
-
-    let mut world = specs::World::new();
-    world.register::<Transform>();
-    world.register::<RenderMesh>();
-    world.register::<Bounds>();
-    world.register::<Camera>();
-    world.register::<Rigidbody>();
-    world.register::<Player>();
+fn setup_scene(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    commands.spawn(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            shadows_enabled: true,
+            ..default()
+        },
+        transform: Transform::from_xyz(4.0, 8.0, 4.0),
+        ..default()
+    });
 
     let game_world = World::default();
+    let spawn = game_world.spawn();
+    commands.spawn(game_world);
 
-    let camera = world
-        .create_entity()
-        .with(Player::default())
-        .with(Transform::new(
-            game_world.spawn(),
-            vector3!(1.0, 1.0, 1.0),
-            Quaternion::one(),
-        ))
-        .with(Camera::from(settings.renderer))
-        .with(Rigidbody::default())
-        .with(Bounds::new(
-            vector3!(0.0, 0.0, 0.0),
-            vector3!(0.5, 2.0, 0.5),
-        ))
-        .build();
+    info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
 
-    world.insert(game_world);
-    let mut dispatcher = DispatcherBuilder::new()
-        .with(CameraSystem::new(camera), "camera", &[])
-        .with(Physics::new(), "physics", &[])
-        .with(PlayerMovement::default(), "player_movement", &[])
-        .with(PlayerBlockBreak::default(), "player_block_break", &[])
-        .with(
-            ChunkGenerator::new(settings.renderer.render_distance + 4),
-            "chunk_generator",
-            &[],
-        )
-        .with(
-            ChunkLoader::new(settings.renderer.render_distance),
-            "chunk_loader",
-            &[],
-        )
-        .with(RenderingSystem, "rendering", &[])
-        .build();
-
-    world.insert(settings);
-    dispatcher.setup(&mut world);
-
-    let mut last_frame = Instant::now();
-    event_loop.run(move |ev, _, control_flow| {
-        // *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(
-        //     last_frame + std::time::Duration::from_nanos(16_666_667),
-        // );
-
-        match ev {
-            glium::glutin::event::Event::MainEventsCleared => {
-                let frame_start = Instant::now();
-                let delta_time = (frame_start - last_frame).as_secs_f32();
-                last_frame = frame_start;
-
-                world.write_resource::<DeltaTime>().0 = delta_time;
-
-                dispatcher.dispatch(&mut world);
-                world.maintain();
-
-                world.write_resource::<Input>().update();
-
-                renderer.render(
-                    world.write_storage::<Camera>().get_mut(camera).unwrap(),
-                    world
-                        .read_storage::<Transform>()
-                        .get(camera)
-                        .unwrap()
-                        .position,
-                    &world.read_resource::<RenderJob>(),
-                );
-            }
-            ev => {
-                if let Some(e) = process_event(ev, control_flow) {
-                    world.write_resource::<Input>().process_event(&e);
-                }
-            }
-        };
+    commands.spawn(Camera3dBundle {
+        transform: Transform::from_xyz(spawn.x, spawn.y, spawn.y)
+            .looking_at(Vec3::new(spawn.x, spawn.y, spawn.z + 10.0), Vec3::Y),
+        projection: Projection::Perspective(PerspectiveProjection {
+            near: 0.1,
+            far: 10000.0,
+            ..default()
+        }),
+        ..default()
     });
+
+    let chunk_loader = ChunkLoader::new(16);
+    commands.spawn(chunk_loader);
+
+    let settings = read_settings("resources/settings.toml").expect("Failed to read settings.toml");
+    commands.spawn(settings);
+}
+
+fn main() {
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .insert_resource(ClearColor(Color::ALICE_BLUE))
+        .add_systems(Startup, setup_scene)
+        .add_systems(Update, (generate_chunks, load_chunks).chain())
+        .run();
 }
 
 #[derive(Default)]

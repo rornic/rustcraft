@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
+use bevy::ecs::component::Component;
+use bevy::log::info;
+use bevy::render::mesh::{Indices, Mesh, MeshVertexAttribute, VertexAttributeValues};
+use bevy::render::render_asset::RenderAssetUsages;
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
 use rand::Rng;
 
-use crate::render::mesh::{Mesh, Vertex};
+use crate::render::mesh::Vertex;
 use crate::{vector2, vector3};
 
 pub mod ecs;
@@ -43,6 +47,7 @@ const WORLD_HEIGHT: usize = 256;
 const MIN_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 3;
 const MAX_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 2;
 
+#[derive(Component)]
 pub struct World {
     generator: WorldGenerator,
     chunks: HashMap<Vector2<i32>, Chunk>,
@@ -187,11 +192,7 @@ impl World {
                         continue;
                     }
 
-                    let world_position = vector3!(
-                        chunk_pos.x as f32 * CHUNK_SIZE as f32 + x as f32,
-                        y as f32,
-                        chunk_pos.y as f32 * CHUNK_SIZE as f32 + z as f32
-                    );
+                    let world_position = vector3!(x as f32, y as f32, z as f32);
 
                     let front = z
                         .checked_sub(1)
@@ -243,7 +244,21 @@ impl World {
                 }
             }
         }
-        Mesh::new(vertices, indices)
+
+        let mut mesh = Mesh::new(
+            bevy::render::mesh::PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+        );
+        mesh.insert_indices(Indices::U32(indices));
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            VertexAttributeValues::Float32x3(vertices.iter().map(|v| v.position).collect()),
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_NORMAL,
+            VertexAttributeValues::Float32x3(vertices.iter().map(|v| v.normal).collect()),
+        );
+        mesh
     }
 
     fn block_at(&self, position: Vector3<f32>) -> BlockType {

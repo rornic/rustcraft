@@ -3,58 +3,159 @@ use std::{
     sync::Arc,
 };
 
+use bevy::{
+    asset::Assets,
+    ecs::{
+        component::Component,
+        entity::Entity,
+        system::{Commands, Query, Res, ResMut},
+    },
+    log::info,
+    math::{Quat, Vec3},
+    pbr::{PbrBundle, StandardMaterial},
+    prelude::default,
+    render::{color::Color, mesh::Mesh, render_resource::Face},
+    transform::components::{GlobalTransform, Transform},
+};
 use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3, Zero};
 use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
-    render::{camera::Camera, mesh::Mesh, renderer::RenderMesh},
     vector2, vector3,
-    world::{Chunk, CHUNK_SIZE, WORLD_HEIGHT},
+    world::{Chunk, World, CHUNK_SIZE, WORLD_HEIGHT},
 };
 
-use super::{bounds::Bounds, Transform};
-pub struct ChunkGenerator {
-    generate_distance: u32,
-}
+use super::bounds::Bounds;
 
-impl ChunkGenerator {
-    pub fn new(generate_distance: u32) -> Self {
-        Self { generate_distance }
+const GENERATE_DISTANCE: u32 = 16;
+
+pub fn generate_chunks(mut query: Query<&mut World>) {
+    let world = &mut query.get_single_mut().expect("could not find single world");
+
+    let spawn = world.spawn();
+    let camera_chunk = world.world_to_chunk(spawn);
+
+    let mut chunks: Vec<Vector2<i32>> = all_chunks(camera_chunk, GENERATE_DISTANCE)
+        .filter(|chunk| !world.is_chunk_generated(*chunk))
+        .collect();
+    chunks.sort_by(|c1, c2| {
+        chunk_distance(camera_chunk, *c1).total_cmp(&chunk_distance(camera_chunk, *c2))
+    });
+
+    let generated_chunks = chunks
+        .iter()
+        .take(32)
+        .collect::<Vec<&Vector2<i32>>>()
+        .par_iter()
+        .map(|chunk| (**chunk, world.generate_chunk(**chunk)))
+        .collect::<Vec<(Vector2<i32>, Chunk)>>();
+
+    for chunk in generated_chunks {
+        world.cache_chunk(chunk.0, chunk.1);
     }
 }
 
-impl<'a> System<'a> for ChunkGenerator {
-    type SystemData = (
-        ReadStorage<'a, Camera>,
-        WriteStorage<'a, Transform>,
-        Write<'a, crate::world::World>,
-    );
+pub fn load_chunks(
+    mut commands: Commands,
+    mut world_query: Query<&mut World>,
+    mut chunk_loader_query: Query<&mut ChunkLoader>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let world = &mut world_query
+        .get_single_mut()
+        .expect("could not find single world");
+    let chunk_loader = &mut chunk_loader_query
+        .get_single_mut()
+        .expect("could not find single chunk loader");
 
-    fn run(&mut self, (cameras, transforms, mut game_world): Self::SystemData) {
-        let (camera, transform) = (&cameras, &transforms).join().next().unwrap();
-        let camera_chunk = game_world.world_to_chunk(transform.position);
+    let spawn = world.spawn();
+    let camera_chunk = world.world_to_chunk(spawn);
 
-        let mut chunks: Vec<Vector2<i32>> = all_chunks(camera_chunk, self.generate_distance)
-            .filter(|chunk| !game_world.is_chunk_generated(*chunk))
-            .collect();
-        chunks.sort_by(|c1, c2| {
-            chunk_distance(camera_chunk, *c1).total_cmp(&chunk_distance(camera_chunk, *c2))
-        });
+    let all_chunks = all_chunks(camera_chunk, chunk_loader.render_distance)
+        .filter(|chunk| world.is_chunk_generated(*chunk))
+        .filter(|chunk| world.are_neighbours_generated(*chunk))
+        .collect::<HashSet<Vector2<i32>>>();
 
-        let generated_chunks = chunks
-            .iter()
-            .take(32)
-            .collect::<Vec<&Vector2<i32>>>()
-            .par_iter()
-            .map(|chunk| (**chunk, game_world.generate_chunk(**chunk)))
-            .collect::<Vec<(Vector2<i32>, Chunk)>>();
+    // Unload old chunks
+    // for chunk in chunk_loader
+    //     .active_chunks
+    //     .difference(&all_chunks)
+    //     .cloned()
+    //     .collect::<Vec<Vector2<i32>>>()
+    // {
+    //     let e = chunk_loader.chunk_entities.remove(&chunk).unwrap();
+    //     commands.entity(e).despawn();
+    //     chunk_loader.active_chunks.remove(&chunk);
+    //     chunk_loader.chunk_meshes.remove(&chunk);
+    // }
 
-        for chunk in generated_chunks {
-            game_world.cache_chunk(chunk.0, chunk.1);
-        }
+    // Re-mesh dirty chunks
+    // for chunk in chunk_loader
+    //     .active_chunks
+    //     .iter()
+    //     .cloned()
+    //     .filter(|c| world.chunk(*c).unwrap().dirty)
+    //     .collect::<Vec<Vector2<i32>>>()
+    // {
+    //     chunk_loader.chunk_meshes.remove(&chunk);
+    //     let entity = chunk_loader.chunk_entities.get(&chunk).unwrap();
+    //     let new_mesh = world.generate_chunk_mesh(chunk);
+    //     render_meshes.get_mut(*entity).unwrap().mesh = Arc::new(new_mesh);
+    //     game_world.clear_chunk_dirty_bit(chunk);
+    // }
+
+    // Load new chunks
+    let mut to_load = all_chunks
+        .difference(&chunk_loader.active_chunks)
+        .cloned()
+        .collect::<Vec<Vector2<i32>>>();
+    // to_load.sort_by(|c1, c2| {
+    //     chunk_camera_direction(camera_chunk, camera.look_direction(), *c1).total_cmp(
+    //         &chunk_camera_direction(camera_chunk, camera.look_direction(), *c2),
+    //     )
+    // });
+
+    let new_meshes = to_load
+        .iter()
+        .cloned()
+        .filter(|chunk| !chunk_loader.chunk_meshes.contains_key(chunk))
+        .collect::<Vec<Vector2<i32>>>()
+        .par_iter()
+        .map(|chunk| (*chunk, world.generate_chunk_mesh(*chunk)))
+        .collect::<Vec<(Vector2<i32>, Mesh)>>();
+    for (chunk, mesh) in new_meshes {
+        let (t, b) = chunk_components(chunk);
+        info!("chunk loaded at {:?}", t);
+        chunk_loader.active_chunks.insert(chunk);
+        let entity = commands
+            .spawn(PbrBundle {
+                mesh: meshes.add(mesh),
+                material: materials.add(StandardMaterial {
+                    base_color: Color::WHITE,
+                    cull_mode: None,
+                    ..default()
+                }),
+                transform: t,
+                ..default()
+            })
+            .id();
+        chunk_loader.chunk_entities.insert(chunk, entity);
     }
+
+    // for chunk in to_load {
+    //     chunk_loader.active_chunks.insert(chunk);
+
+    //     if let Some(e) = chunk_loader.chunk_entities.get(&chunk) {
+    //         // render_meshes.get_mut(*e).unwrap().visible = true;
+    //         continue;
+    //     }
+
+    //     let mesh = chunk_loader.chunk_meshes.get(&chunk).unwrap();
+    // }
 }
 
+#[derive(Component)]
 pub struct ChunkLoader {
     render_distance: u32,
     active_chunks: HashSet<Vector2<i32>>,
@@ -69,101 +170,6 @@ impl ChunkLoader {
             active_chunks: HashSet::new(),
             chunk_meshes: HashMap::new(),
             chunk_entities: HashMap::new(),
-        }
-    }
-}
-
-impl<'a> System<'a> for ChunkLoader {
-    type SystemData = (
-        ReadStorage<'a, Camera>,
-        WriteStorage<'a, Transform>,
-        WriteStorage<'a, RenderMesh>,
-        WriteStorage<'a, Bounds>,
-        Write<'a, crate::world::World>,
-        Entities<'a>,
-    );
-
-    fn run(
-        &mut self,
-        (cameras, mut transforms, mut render_meshes, mut bounds, mut game_world, entities): Self::SystemData,
-    ) {
-        let (camera, transform) = (&cameras, &transforms).join().next().unwrap();
-        let camera_chunk = game_world.world_to_chunk(transform.position);
-
-        let all_chunks = all_chunks(camera_chunk, self.render_distance)
-            .filter(|chunk| game_world.is_chunk_generated(*chunk))
-            .filter(|chunk| game_world.are_neighbours_generated(*chunk))
-            .collect::<HashSet<Vector2<i32>>>();
-
-        // Unload old chunks
-        for chunk in self
-            .active_chunks
-            .difference(&all_chunks)
-            .cloned()
-            .collect::<Vec<Vector2<i32>>>()
-        {
-            let e = self.chunk_entities.remove(&chunk).unwrap();
-            entities.delete(e).unwrap();
-            self.active_chunks.remove(&chunk);
-            self.chunk_meshes.remove(&chunk);
-        }
-
-        // Re-mesh dirty chunks
-        for chunk in self
-            .active_chunks
-            .iter()
-            .cloned()
-            .filter(|c| game_world.chunk(*c).unwrap().dirty)
-            .collect::<Vec<Vector2<i32>>>()
-        {
-            self.chunk_meshes.remove(&chunk);
-            let entity = self.chunk_entities.get(&chunk).unwrap();
-            let new_mesh = game_world.generate_chunk_mesh(chunk);
-            render_meshes.get_mut(*entity).unwrap().mesh = Arc::new(new_mesh);
-            game_world.clear_chunk_dirty_bit(chunk);
-        }
-
-        // Load new chunks
-        let mut to_load = all_chunks
-            .difference(&self.active_chunks)
-            .cloned()
-            .collect::<Vec<Vector2<i32>>>();
-        to_load.sort_by(|c1, c2| {
-            chunk_camera_direction(camera_chunk, camera.look_direction(), *c1).total_cmp(
-                &chunk_camera_direction(camera_chunk, camera.look_direction(), *c2),
-            )
-        });
-
-        let new_meshes = to_load
-            .iter()
-            .cloned()
-            .filter(|chunk| !self.chunk_meshes.contains_key(chunk))
-            .collect::<Vec<Vector2<i32>>>()
-            .par_iter()
-            .map(|chunk| (*chunk, game_world.generate_chunk_mesh(*chunk)))
-            .collect::<Vec<(Vector2<i32>, Mesh)>>();
-        for (chunk, mesh) in new_meshes {
-            self.chunk_meshes.insert(chunk, Arc::new(mesh));
-        }
-
-        for chunk in to_load {
-            self.active_chunks.insert(chunk);
-
-            if let Some(e) = self.chunk_entities.get(&chunk) {
-                render_meshes.get_mut(*e).unwrap().visible = true;
-                continue;
-            }
-
-            let mesh = self.chunk_meshes.get(&chunk).unwrap();
-
-            let (t, r, b) = chunk_components(chunk, mesh.clone());
-            let entity = entities
-                .build_entity()
-                .with(t, &mut transforms)
-                .with(r, &mut render_meshes)
-                .with(b, &mut bounds)
-                .build();
-            self.chunk_entities.insert(chunk, entity);
         }
     }
 }
@@ -200,13 +206,9 @@ fn chunk_world_pos(chunk: Vector2<i32>) -> Vector3<f32> {
     )
 }
 
-fn chunk_components(chunk: Vector2<i32>, mesh: Arc<Mesh>) -> (Transform, RenderMesh, Bounds) {
-    let t = Transform::new(
-        chunk_world_pos(chunk),
-        vector3!(1.0, 1.0, 1.0),
-        Quaternion::one(),
-    );
-    let r = RenderMesh::new(mesh, true);
+fn chunk_components(chunk: Vector2<i32>) -> (Transform, Bounds) {
+    let pos = chunk_world_pos(chunk);
+    let t = Transform::from_translation(Vec3::new(pos.x, pos.y, pos.z));
     let b = Bounds::new(
         vector3!(
             CHUNK_SIZE as f32 / 2.0,
@@ -216,7 +218,7 @@ fn chunk_components(chunk: Vector2<i32>, mesh: Arc<Mesh>) -> (Transform, RenderM
         vector3!(CHUNK_SIZE as f32, WORLD_HEIGHT as f32, CHUNK_SIZE as f32),
     );
 
-    (t, r, b)
+    (t, b)
 }
 
 #[cfg(test)]
