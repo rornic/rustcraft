@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate glium;
 use std::error::Error;
+use std::f32::consts::PI;
 
 use bevy::render::render_resource::Texture;
 use glium::glutin::dpi::LogicalSize;
@@ -54,10 +55,23 @@ fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     Ok(settings)
 }
 
-fn setup_scene(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn setup_scene(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
     commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight::default(),
-        transform: Transform::from_xyz(0.0, 800.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y),
+        directional_light: DirectionalLight {
+            illuminance: light_consts::lux::DIRECT_SUNLIGHT,
+            shadows_enabled: true,
+            ..default()
+        },
+        transform: Transform {
+            translation: Vec3::new(0.0, 2.0, 0.0),
+            rotation: Quat::from_rotation_x(-PI / 4.0),
+            ..default()
+        },
         ..default()
     });
 
@@ -68,12 +82,11 @@ fn setup_scene(mut commands: Commands, asset_server: Res<AssetServer>) {
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
 
     commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(spawn.x, spawn.y, spawn.y)
-            .looking_at(Vec3::new(spawn.x, spawn.y, spawn.z + 10.0), Vec3::Y),
+        transform: Transform::from_xyz(spawn.x, spawn.y, spawn.z),
         ..default()
     });
 
-    let chunk_loader = ChunkLoader::new(32);
+    let chunk_loader = ChunkLoader::new(8);
     commands.spawn(chunk_loader);
 
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
@@ -85,7 +98,7 @@ fn setup_scene(mut commands: Commands, asset_server: Res<AssetServer>) {
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
-        .insert_resource(ClearColor(Color::ALICE_BLUE))
+        .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(Update, (generate_chunks, load_chunks).chain())

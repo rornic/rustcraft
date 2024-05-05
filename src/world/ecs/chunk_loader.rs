@@ -5,6 +5,7 @@ use std::{
 
 use bevy::{
     asset::{AssetServer, Assets},
+    color::Color,
     ecs::{
         component::Component,
         entity::Entity,
@@ -15,8 +16,7 @@ use bevy::{
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
     render::{
-        color::Color, mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image,
-        view::NoFrustumCulling,
+        mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image, view::NoFrustumCulling,
     },
     transform::components::{GlobalTransform, Transform},
 };
@@ -28,7 +28,7 @@ use crate::{
     world::{Chunk, World, CHUNK_SIZE, WORLD_HEIGHT},
 };
 
-const GENERATE_DISTANCE: u32 = 16;
+const GENERATE_DISTANCE: u32 = 8;
 
 pub fn generate_chunks(mut query: Query<&mut World>) {
     let world = &mut query.get_single_mut().expect("could not find single world");
@@ -128,7 +128,6 @@ pub fn load_chunks(
         .collect::<Vec<(Vector2<i32>, Mesh)>>();
     for (chunk, mesh) in new_meshes {
         let (t, aabb) = chunk_components(chunk);
-        info!("chunk loaded at {:?}", t);
         chunk_loader.active_chunks.insert(chunk);
         let entity = commands
             .spawn((
