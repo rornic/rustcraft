@@ -4,7 +4,6 @@ use bevy::pbr::light_consts::lux;
 use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use settings::Settings;
 
-mod input;
 mod math;
 mod settings;
 mod util;
@@ -15,7 +14,7 @@ use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
 use world::ecs::player::{player_look, player_move};
 use world::World;
 
-use crate::world::ecs::player::{PlayerBundle, PlayerMovement};
+use crate::world::ecs::player::PlayerBundle;
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -33,7 +32,7 @@ fn setup_scene(
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             illuminance: lux::AMBIENT_DAYLIGHT,
-            shadows_enabled: false,
+            shadows_enabled: true,
             ..default()
         },
         ..default()
@@ -80,7 +79,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
-        .add_systems(Update, (generate_chunks, load_chunks).chain())
+        .add_systems(Update, (generate_chunks, load_chunks))
         .add_systems(Update, (player_move, player_look))
         .run();
 }

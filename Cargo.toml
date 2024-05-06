@@ -8,10 +8,7 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-glium = "0.32.1"
-image = "*"
-specs = { version = "0.16.1", features = [ "shred-derive", "parallel" ] }
-uuid = { version = "0.8.2", features = [ "v4" ]}
+specs = { version = "0.16.1", features = ["shred-derive", "parallel"] }
 cgmath = "0.18.0"
 noise = "0.8.2"
 rand = "0.8.5"

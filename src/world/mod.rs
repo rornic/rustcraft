@@ -38,7 +38,7 @@ impl BlockType {
 
 const BLOCK_COUNT: usize = 6;
 
-pub struct Chunk {
+pub struct ChunkData {
     blocks: Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>,
     dirty: bool,
 }
@@ -50,7 +50,7 @@ const MAX_SPAWN_HEIGHT: usize = WORLD_HEIGHT / 2;
 #[derive(Component)]
 pub struct World {
     generator: WorldGenerator,
-    chunks: HashMap<Vector2<i32>, Chunk>,
+    chunks: HashMap<Vector2<i32>, ChunkData>,
     spawn: Vector3<f32>,
 }
 
@@ -87,11 +87,11 @@ impl Default for World {
 }
 
 impl World {
-    pub fn cache_chunk(&mut self, chunk_position: Vector2<i32>, chunk: Chunk) {
+    pub fn cache_chunk(&mut self, chunk_position: Vector2<i32>, chunk: ChunkData) {
         self.chunks.insert(chunk_position, chunk);
     }
 
-    pub fn generate_chunk(&self, chunk_position: Vector2<i32>) -> Chunk {
+    pub fn generate_chunk(&self, chunk_position: Vector2<i32>) -> ChunkData {
         self.generator.generate_chunk(chunk_position)
     }
 
@@ -278,7 +278,7 @@ impl World {
         }
     }
 
-    fn chunk(&self, chunk_position: Vector2<i32>) -> Option<&Chunk> {
+    fn chunk(&self, chunk_position: Vector2<i32>) -> Option<&ChunkData> {
         self.chunks.get(&chunk_position)
     }
 
@@ -286,7 +286,7 @@ impl World {
         self.chunks.get_mut(&chunk_pos).unwrap().dirty = false;
     }
 
-    fn chunk_block<'a>(&self, chunk: &'a Chunk, block: Vector3<usize>) -> Option<BlockType> {
+    fn chunk_block<'a>(&self, chunk: &'a ChunkData, block: Vector3<usize>) -> Option<BlockType> {
         chunk
             .blocks
             .get(block.x)
@@ -347,7 +347,7 @@ impl Default for WorldGenerator {
 }
 
 impl WorldGenerator {
-    fn generate_chunk(&self, chunk_pos: Vector2<i32>) -> Chunk {
+    fn generate_chunk(&self, chunk_pos: Vector2<i32>) -> ChunkData {
         let mut blocks = [[[BlockType::Air; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE];
 
         let noise = generator::noise_generator(self.seed);
@@ -391,7 +391,7 @@ impl WorldGenerator {
             }
         }
 
-        Chunk {
+        ChunkData {
             blocks: Box::new(blocks),
             dirty: false,
         }

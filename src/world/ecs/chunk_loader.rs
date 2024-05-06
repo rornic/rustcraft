@@ -12,25 +12,24 @@ use bevy::{
         query::With,
         system::{Commands, Query, Res, ResMut},
     },
+    log::info,
     math::Vec3,
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
-    render::{
-        mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image, view::NoFrustumCulling,
-    },
-    transform::components::{GlobalTransform, Transform},
+    render::{mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image},
+    transform::components::Transform,
 };
 use cgmath::{InnerSpace, Vector2, Vector3, Zero};
 use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
     vector2, vector3,
-    world::{Chunk, World, CHUNK_SIZE, WORLD_HEIGHT},
+    world::{ChunkData, World, CHUNK_SIZE, WORLD_HEIGHT},
 };
 
 use super::player::Player;
 
-const GENERATE_DISTANCE: u32 = 48;
+const GENERATE_DISTANCE: u32 = 34;
 
 pub fn generate_chunks(
     mut world_query: Query<&mut World>,
@@ -61,10 +60,34 @@ pub fn generate_chunks(
         .collect::<Vec<&Vector2<i32>>>()
         .par_iter()
         .map(|chunk| (**chunk, world.generate_chunk(**chunk)))
-        .collect::<Vec<(Vector2<i32>, Chunk)>>();
+        .collect::<Vec<(Vector2<i32>, ChunkData)>>();
 
     for chunk in generated_chunks {
         world.cache_chunk(chunk.0, chunk.1);
+    }
+}
+
+#[derive(Component)]
+pub struct Chunk {
+    x: i32,
+    y: i32,
+    dirty: bool,
+}
+
+#[derive(Component)]
+pub struct ChunkLoader {
+    render_distance: u32,
+    chunk_meshes: HashMap<Vector2<i32>, Arc<Mesh>>,
+    chunk_entities: HashMap<Vector2<i32>, Entity>,
+}
+
+impl ChunkLoader {
+    pub fn new(render_distance: u32) -> Self {
+        Self {
+            render_distance,
+            chunk_meshes: HashMap::new(),
+            chunk_entities: HashMap::new(),
+        }
     }
 }
 
@@ -75,6 +98,7 @@ pub fn load_chunks(
     player_query: Query<&Transform, With<Player>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    loaded_chunks: Query<(Entity, &Chunk)>,
     asset_server: Res<AssetServer>,
 ) {
     let world = &mut world_query
@@ -91,23 +115,21 @@ pub fn load_chunks(
         player.translation.z
     ));
 
-    let all_chunks = all_chunks(camera_chunk, chunk_loader.render_distance)
+    let mut chunks_to_load = all_chunks(camera_chunk, chunk_loader.render_distance)
         .filter(|chunk| world.is_chunk_generated(*chunk))
         .filter(|chunk| world.are_neighbours_generated(*chunk))
         .collect::<HashSet<Vector2<i32>>>();
 
     // Unload old chunks
-    // for chunk in chunk_loader
-    //     .active_chunks
-    //     .difference(&all_chunks)
-    //     .cloned()
-    //     .collect::<Vec<Vector2<i32>>>()
-    // {
-    //     let e = chunk_loader.chunk_entities.remove(&chunk).unwrap();
-    //     commands.entity(e).despawn();
-    //     chunk_loader.active_chunks.remove(&chunk);
-    //     chunk_loader.chunk_meshes.remove(&chunk);
-    // }
+    for (entity, chunk) in loaded_chunks.iter() {
+        let chunk_coords = vector2!(chunk.x, chunk.y);
+        if chunks_to_load.contains(&chunk_coords) {
+            chunks_to_load.remove(&chunk_coords);
+        } else {
+            commands.entity(entity).despawn();
+        }
+        chunk_loader.chunk_meshes.remove(&chunk_coords);
+    }
 
     // Re-mesh dirty chunks
     // for chunk in chunk_loader
@@ -124,14 +146,9 @@ pub fn load_chunks(
     //     game_world.clear_chunk_dirty_bit(chunk);
     // }
 
-    // Load new chunks
-    let mut to_load = all_chunks
-        .difference(&chunk_loader.active_chunks)
-        .cloned()
-        .collect::<Vec<Vector2<i32>>>();
-
     let forward = vector3!(player.forward().x, player.forward().y, player.forward().z);
-    to_load.sort_by(|c1, c2| {
+    let mut chunks_to_load = chunks_to_load.into_iter().collect::<Vec<Vector2<i32>>>();
+    chunks_to_load.sort_by(|c1, c2| {
         chunk_camera_direction(camera_chunk, forward, *c1).total_cmp(&chunk_camera_direction(
             camera_chunk,
             forward,
@@ -139,7 +156,7 @@ pub fn load_chunks(
         ))
     });
 
-    let new_meshes = to_load
+    let new_meshes = chunks_to_load
         .iter()
         .cloned()
         .take(4)
@@ -150,7 +167,6 @@ pub fn load_chunks(
         .collect::<Vec<(Vector2<i32>, Mesh)>>();
     for (chunk, mesh) in new_meshes {
         let (t, aabb) = chunk_components(chunk);
-        chunk_loader.active_chunks.insert(chunk);
         let entity = commands
             .spawn((
                 PbrBundle {
@@ -166,39 +182,14 @@ pub fn load_chunks(
                     ..default()
                 },
                 aabb,
+                Chunk {
+                    x: chunk.x,
+                    y: chunk.y,
+                    dirty: false,
+                },
             ))
             .id();
         chunk_loader.chunk_entities.insert(chunk, entity);
-    }
-
-    // for chunk in to_load {
-    //     chunk_loader.active_chunks.insert(chunk);
-
-    //     if let Some(e) = chunk_loader.chunk_entities.get(&chunk) {
-    //         // render_meshes.get_mut(*e).unwrap().visible = true;
-    //         continue;
-    //     }
-
-    //     let mesh = chunk_loader.chunk_meshes.get(&chunk).unwrap();
-    // }
-}
-
-#[derive(Component)]
-pub struct ChunkLoader {
-    render_distance: u32,
-    active_chunks: HashSet<Vector2<i32>>,
-    chunk_meshes: HashMap<Vector2<i32>, Arc<Mesh>>,
-    chunk_entities: HashMap<Vector2<i32>, Entity>,
-}
-
-impl ChunkLoader {
-    pub fn new(render_distance: u32) -> Self {
-        Self {
-            render_distance,
-            active_chunks: HashSet::new(),
-            chunk_meshes: HashMap::new(),
-            chunk_entities: HashMap::new(),
-        }
     }
 }
 
