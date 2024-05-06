@@ -9,10 +9,10 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
+        query::With,
         system::{Commands, Query, Res, ResMut},
     },
-    log::info,
-    math::{Quat, Vec3},
+    math::Vec3,
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
     render::{
@@ -20,7 +20,7 @@ use bevy::{
     },
     transform::components::{GlobalTransform, Transform},
 };
-use cgmath::{InnerSpace, One, Quaternion, Vector2, Vector3, Zero};
+use cgmath::{InnerSpace, Vector2, Vector3, Zero};
 use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
@@ -28,13 +28,25 @@ use crate::{
     world::{Chunk, World, CHUNK_SIZE, WORLD_HEIGHT},
 };
 
-const GENERATE_DISTANCE: u32 = 8;
+use super::player::Player;
 
-pub fn generate_chunks(mut query: Query<&mut World>) {
-    let world = &mut query.get_single_mut().expect("could not find single world");
+const GENERATE_DISTANCE: u32 = 48;
 
-    let spawn = world.spawn();
-    let camera_chunk = world.world_to_chunk(spawn);
+pub fn generate_chunks(
+    mut world_query: Query<&mut World>,
+    player_query: Query<&Transform, With<Player>>,
+) {
+    let world = &mut world_query
+        .get_single_mut()
+        .expect("could not find single world");
+
+    let player = player_query.get_single().expect("could not find player");
+
+    let camera_chunk = world.world_to_chunk(vector3!(
+        player.translation.x,
+        player.translation.y,
+        player.translation.z
+    ));
 
     let mut chunks: Vec<Vector2<i32>> = all_chunks(camera_chunk, GENERATE_DISTANCE)
         .filter(|chunk| !world.is_chunk_generated(*chunk))
@@ -45,7 +57,7 @@ pub fn generate_chunks(mut query: Query<&mut World>) {
 
     let generated_chunks = chunks
         .iter()
-        .take(32)
+        .take(4)
         .collect::<Vec<&Vector2<i32>>>()
         .par_iter()
         .map(|chunk| (**chunk, world.generate_chunk(**chunk)))
@@ -60,6 +72,7 @@ pub fn load_chunks(
     mut commands: Commands,
     mut world_query: Query<&mut World>,
     mut chunk_loader_query: Query<&mut ChunkLoader>,
+    player_query: Query<&Transform, With<Player>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
@@ -71,8 +84,12 @@ pub fn load_chunks(
         .get_single_mut()
         .expect("could not find single chunk loader");
 
-    let spawn = world.spawn();
-    let camera_chunk = world.world_to_chunk(spawn);
+    let player = player_query.get_single().expect("could not find player");
+    let camera_chunk = world.world_to_chunk(vector3!(
+        player.translation.x,
+        player.translation.y,
+        player.translation.z
+    ));
 
     let all_chunks = all_chunks(camera_chunk, chunk_loader.render_distance)
         .filter(|chunk| world.is_chunk_generated(*chunk))
@@ -112,15 +129,20 @@ pub fn load_chunks(
         .difference(&chunk_loader.active_chunks)
         .cloned()
         .collect::<Vec<Vector2<i32>>>();
-    // to_load.sort_by(|c1, c2| {
-    //     chunk_camera_direction(camera_chunk, camera.look_direction(), *c1).total_cmp(
-    //         &chunk_camera_direction(camera_chunk, camera.look_direction(), *c2),
-    //     )
-    // });
+
+    let forward = vector3!(player.forward().x, player.forward().y, player.forward().z);
+    to_load.sort_by(|c1, c2| {
+        chunk_camera_direction(camera_chunk, forward, *c1).total_cmp(&chunk_camera_direction(
+            camera_chunk,
+            forward,
+            *c2,
+        ))
+    });
 
     let new_meshes = to_load
         .iter()
         .cloned()
+        .take(4)
         .filter(|chunk| !chunk_loader.chunk_meshes.contains_key(chunk))
         .collect::<Vec<Vector2<i32>>>()
         .par_iter()

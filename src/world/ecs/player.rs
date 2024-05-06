@@ -9,17 +9,21 @@ use bevy::{
     hierarchy::Parent,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
     math::{Dir3, Vec3},
-    render::camera::{self, Camera},
+    render::camera::Camera,
     time::Time,
     transform::{components::Transform, TransformBundle},
 };
 
 #[derive(Bundle, Default)]
 pub struct PlayerBundle {
+    pub marker: Player,
     pub movement: PlayerMovement,
     pub look: PlayerLook,
     pub transform_bundle: TransformBundle,
 }
+
+#[derive(Component, Default)]
+pub struct Player {}
 
 #[derive(Component)]
 pub struct PlayerMovement {

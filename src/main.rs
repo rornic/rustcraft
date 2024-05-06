@@ -3,6 +3,7 @@ extern crate glium;
 use std::error::Error;
 use std::f32::consts::PI;
 
+use bevy::pbr::light_consts::lux;
 use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use bevy::render::render_resource::Texture;
 use glium::glutin::dpi::LogicalSize;
@@ -66,6 +67,14 @@ fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    commands.spawn(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            illuminance: lux::AMBIENT_DAYLIGHT,
+            shadows_enabled: false,
+            ..default()
+        },
+        ..default()
+    });
     ambient_light.brightness = 5000.0;
 
     let game_world = World::default();
@@ -93,7 +102,7 @@ fn setup_scene(
         .id();
     commands.entity(player).push_children(&[camera]);
 
-    let chunk_loader = ChunkLoader::new(8);
+    let chunk_loader = ChunkLoader::new(32);
     commands.spawn(chunk_loader);
 
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
