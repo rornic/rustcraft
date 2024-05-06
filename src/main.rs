@@ -21,7 +21,7 @@ mod world;
 
 use bevy::prelude::*;
 use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
-use world::ecs::player::move_player;
+use world::ecs::player::{player_look, player_move};
 use world::World;
 
 use crate::world::ecs::player::{PlayerBundle, PlayerMovement};
@@ -66,20 +66,7 @@ fn setup_scene(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
-            illuminance: light_consts::lux::DIRECT_SUNLIGHT,
-            shadows_enabled: false,
-            ..default()
-        },
-        transform: Transform {
-            translation: Vec3::new(0.0, 2.0, 0.0),
-            rotation: Quat::from_rotation_x(-PI / 4.0),
-            ..default()
-        },
-        ..default()
-    });
-    ambient_light.brightness = 1000.0;
+    ambient_light.brightness = 5000.0;
 
     let game_world = World::default();
     let spawn = game_world.spawn();
@@ -122,7 +109,7 @@ fn main() {
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(Update, (generate_chunks, load_chunks).chain())
-        .add_systems(Update, move_player)
+        .add_systems(Update, (player_move, player_look))
         .run();
 }
 

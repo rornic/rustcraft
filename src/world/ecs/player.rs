@@ -2,12 +2,13 @@ use bevy::{
     ecs::{
         bundle::Bundle,
         component::Component,
+        event::EventReader,
         query::{With, Without},
         system::{Query, Res},
     },
     hierarchy::Parent,
-    input::{keyboard::KeyCode, ButtonInput},
-    math::Vec3,
+    input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
+    math::{Dir3, Vec3},
     render::camera::{self, Camera},
     time::Time,
     transform::{components::Transform, TransformBundle},
@@ -16,6 +17,7 @@ use bevy::{
 #[derive(Bundle, Default)]
 pub struct PlayerBundle {
     pub movement: PlayerMovement,
+    pub look: PlayerLook,
     pub transform_bundle: TransformBundle,
 }
 
@@ -26,11 +28,11 @@ pub struct PlayerMovement {
 
 impl Default for PlayerMovement {
     fn default() -> Self {
-        Self { move_speed: 5.0 }
+        Self { move_speed: 10.0 }
     }
 }
 
-pub fn move_player(
+pub fn player_move(
     time: Res<Time>,
     mut player_query: Query<(&PlayerMovement, &mut Transform)>,
     camera_query: Query<(&Parent, &Transform), (With<Camera>, Without<PlayerMovement>)>,
@@ -43,7 +45,7 @@ pub fn move_player(
 
     let move_speed = player_movement.move_speed;
 
-    let mut movement_vector = Vec3::new(0.0, 0.0, 0.0);
+    let mut movement_vector = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyA) {
         movement_vector.x = -move_speed;
     } else if keys.pressed(KeyCode::KeyD) {
@@ -56,21 +58,55 @@ pub fn move_player(
         movement_vector.z = move_speed;
     }
 
-    // movement_vector = Quaternion::from(Euler {
-    //     x: Deg(0.0),
-    //     y: 0.0,
-    //     z: Deg(0.0),
-    // }) * movement_vector;
+    let mut vertical_movement = Vec3::ZERO;
+    if keys.pressed(KeyCode::Space) {
+        vertical_movement.y = move_speed;
+    } else if keys.pressed(KeyCode::ShiftLeft) {
+        vertical_movement.y = -move_speed;
+    }
 
-    let final_movement = player_transform.rotation * movement_vector * time.delta_seconds();
+    let final_movement = player_transform.rotation
+        * camera_transform.rotation
+        * movement_vector
+        * time.delta_seconds()
+        + (vertical_movement * time.delta_seconds());
     player_transform.translation += final_movement;
+}
 
-    // rigidbody.velocity.x = movement_vector.x;
-    // rigidbody.velocity.z = movement_vector.z;
+#[derive(Component)]
+pub struct PlayerLook {
+    sensitivity: f32,
+}
 
-    // if input.keyboard.is_pressed(VirtualKeyCode::Space) && rigidbody.is_grounded() {
-    //     rigidbody.velocity.y = 4.0;
-    // }
+impl Default for PlayerLook {
+    fn default() -> Self {
+        Self { sensitivity: 0.1 }
+    }
+}
+
+pub fn player_look(
+    time: Res<Time>,
+    mut player_query: Query<(&PlayerLook, &mut Transform)>,
+    mut camera_query: Query<(&Parent, &mut Transform), (With<Camera>, Without<PlayerLook>)>,
+    mut motion_evr: EventReader<MouseMotion>,
+) {
+    let (parent, camera_transform) = &mut camera_query
+        .get_single_mut()
+        .expect("camera does not exist");
+    let (player_look, player_transform) = &mut player_query
+        .get_mut(parent.get())
+        .expect("player does not exist");
+
+    for ev in motion_evr.read() {
+        player_transform.rotate_axis(
+            Dir3::Y,
+            -ev.delta.x * player_look.sensitivity * time.delta_seconds(),
+        );
+        camera_transform.rotate_axis(
+            Dir3::X,
+            -ev.delta.y * player_look.sensitivity * time.delta_seconds(),
+        );
+    }
 }
 
 // #[derive(Default)]
