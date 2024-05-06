@@ -12,15 +12,14 @@ use bevy::{
         query::With,
         system::{Commands, Query, Res, ResMut},
     },
-    log::info,
     math::Vec3,
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
     render::{mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image},
+    tasks::{AsyncComputeTaskPool, ParallelSlice},
     transform::components::Transform,
 };
 use cgmath::{InnerSpace, Vector2, Vector3, Zero};
-use specs::{prelude::*, rayon::prelude::IntoParallelRefIterator};
 
 use crate::{
     vector2, vector3,
@@ -29,7 +28,7 @@ use crate::{
 
 use super::player::Player;
 
-const GENERATE_DISTANCE: u32 = 34;
+const GENERATE_DISTANCE: u32 = 32;
 
 pub fn generate_chunks(
     mut world_query: Query<&mut World>,
@@ -54,16 +53,17 @@ pub fn generate_chunks(
         chunk_distance(camera_chunk, *c1).total_cmp(&chunk_distance(camera_chunk, *c2))
     });
 
-    let generated_chunks = chunks
-        .iter()
-        .take(4)
-        .collect::<Vec<&Vector2<i32>>>()
-        .par_iter()
-        .map(|chunk| (**chunk, world.generate_chunk(**chunk)))
-        .collect::<Vec<(Vector2<i32>, ChunkData)>>();
+    let chunks_to_generate: Vec<Vector2<i32>> = chunks.into_iter().take(8).collect();
+    let thread_pool = AsyncComputeTaskPool::get();
+    let generated_chunks = chunks_to_generate.par_chunk_map(thread_pool, 2, |_index, chunks| {
+        chunks
+            .iter()
+            .map(|chunk| (*chunk, world.generate_chunk(*chunk)))
+            .collect::<Vec<(Vector2<i32>, ChunkData)>>()
+    });
 
-    for chunk in generated_chunks {
-        world.cache_chunk(chunk.0, chunk.1);
+    for (pos, chunk_data) in generated_chunks.into_iter().flatten() {
+        world.cache_chunk(pos, chunk_data);
     }
 }
 
@@ -147,7 +147,10 @@ pub fn load_chunks(
     // }
 
     let forward = vector3!(player.forward().x, player.forward().y, player.forward().z);
-    let mut chunks_to_load = chunks_to_load.into_iter().collect::<Vec<Vector2<i32>>>();
+    let mut chunks_to_load = chunks_to_load
+        .into_iter()
+        .filter(|chunk| !chunk_loader.chunk_meshes.contains_key(chunk))
+        .collect::<Vec<Vector2<i32>>>();
     chunks_to_load.sort_by(|c1, c2| {
         chunk_camera_direction(camera_chunk, forward, *c1).total_cmp(&chunk_camera_direction(
             camera_chunk,
@@ -156,16 +159,16 @@ pub fn load_chunks(
         ))
     });
 
-    let new_meshes = chunks_to_load
-        .iter()
-        .cloned()
-        .take(4)
-        .filter(|chunk| !chunk_loader.chunk_meshes.contains_key(chunk))
-        .collect::<Vec<Vector2<i32>>>()
-        .par_iter()
-        .map(|chunk| (*chunk, world.generate_chunk_mesh(*chunk)))
-        .collect::<Vec<(Vector2<i32>, Mesh)>>();
-    for (chunk, mesh) in new_meshes {
+    let chunks_to_load: Vec<Vector2<i32>> = chunks_to_load.into_iter().take(8).collect();
+    let thread_pool = AsyncComputeTaskPool::get();
+    let generated_meshes = chunks_to_load.par_chunk_map(thread_pool, 2, |_index, chunks| {
+        chunks
+            .iter()
+            .map(|chunk| (*chunk, world.generate_chunk_mesh(*chunk)))
+            .collect::<Vec<(Vector2<i32>, Mesh)>>()
+    });
+
+    for (chunk, mesh) in generated_meshes.into_iter().flatten() {
         let (t, aabb) = chunk_components(chunk);
         let entity = commands
             .spawn((

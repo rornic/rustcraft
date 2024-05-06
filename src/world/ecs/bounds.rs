@@ -1,5 +1,4 @@
 use cgmath::Vector3;
-use specs::{Component, VecStorage};
 
 use crate::vector3;
 
@@ -128,9 +127,9 @@ impl Bounds {
     }
 }
 
-impl Component for Bounds {
-    type Storage = VecStorage<Self>;
-}
+// impl Component for Bounds {
+//     type Storage = VecStorage<Self>;
+// }
 
 #[cfg(test)]
 mod tests {

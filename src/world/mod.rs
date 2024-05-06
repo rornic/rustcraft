@@ -38,6 +38,11 @@ impl BlockType {
 
 const BLOCK_COUNT: usize = 6;
 
+pub struct ChunkCoords {
+    x: i32,
+    y: i32,
+}
+
 pub struct ChunkData {
     blocks: Box<[[[BlockType; CHUNK_SIZE]; WORLD_HEIGHT]; CHUNK_SIZE]>,
     dirty: bool,

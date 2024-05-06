@@ -15,6 +15,7 @@ use world::ecs::player::{player_look, player_move};
 use world::World;
 
 use crate::world::ecs::player::PlayerBundle;
+use crate::world::CHUNK_SIZE;
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -26,8 +27,6 @@ fn setup_scene(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut ambient_light: ResMut<AmbientLight>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
@@ -55,16 +54,27 @@ fn setup_scene(
         })
         .id();
 
+    let render_distance = 24;
     let camera = commands
-        .spawn(Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 2.0, 0.0),
-            ..default()
-        })
+        .spawn((
+            Camera3dBundle {
+                transform: Transform::from_xyz(0.0, 2.0, 0.0),
+                ..default()
+            },
+            FogSettings {
+                color: Color::srgb_u8(135, 206, 235),
+                falloff: FogFalloff::Linear {
+                    start: ((render_distance - 1) * CHUNK_SIZE) as f32,
+                    end: (render_distance * CHUNK_SIZE) as f32,
+                },
+                ..default()
+            },
+        ))
         .insert(ScreenSpaceAmbientOcclusionBundle::default())
         .id();
     commands.entity(player).push_children(&[camera]);
 
-    let chunk_loader = ChunkLoader::new(32);
+    let chunk_loader = ChunkLoader::new(render_distance as u32);
     commands.spawn(chunk_loader);
 
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
@@ -79,8 +89,10 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
-        .add_systems(Update, (generate_chunks, load_chunks))
-        .add_systems(Update, (player_move, player_look))
+        .add_systems(
+            Update,
+            (generate_chunks, load_chunks, player_move, player_look),
+        )
         .run();
 }
 
