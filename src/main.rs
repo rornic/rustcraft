@@ -1,21 +1,11 @@
-#[macro_use]
-extern crate glium;
 use std::error::Error;
-use std::f32::consts::PI;
 
 use bevy::pbr::light_consts::lux;
 use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
-use bevy::render::render_resource::Texture;
-use glium::glutin::dpi::LogicalSize;
-use glium::glutin::event::Event;
-use glium::glutin::event_loop::{ControlFlow, EventLoop};
-use glium::Display;
-use input::InputEvent;
 use settings::Settings;
 
 mod input;
 mod math;
-mod render;
 mod settings;
 mod util;
 mod world;
@@ -26,33 +16,6 @@ use world::ecs::player::{player_look, player_move};
 use world::World;
 
 use crate::world::ecs::player::{PlayerBundle, PlayerMovement};
-
-fn process_event(ev: Event<()>, control_flow: &mut ControlFlow) -> Option<InputEvent> {
-    use glium::glutin;
-
-    match ev {
-        glutin::event::Event::WindowEvent { event, .. } => match event {
-            glutin::event::WindowEvent::CloseRequested => {
-                *control_flow = glutin::event_loop::ControlFlow::Exit;
-                None
-            }
-            glutin::event::WindowEvent::KeyboardInput { input, .. } => {
-                Some(InputEvent::Keyboard(input))
-            }
-            glutin::event::WindowEvent::MouseInput { state, button, .. } => {
-                Some(InputEvent::MouseButton { button, state })
-            }
-            _ => None,
-        },
-        glutin::event::Event::DeviceEvent { event, .. } => match event {
-            glutin::event::DeviceEvent::MouseMotion { delta: d } => {
-                Some(InputEvent::MouseMotion { delta: d })
-            }
-            _ => None,
-        },
-        _ => None,
-    }
-}
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;

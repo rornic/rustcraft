@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use bevy::ecs::component::Component;
-use bevy::render::mesh::{Indices, Mesh, MeshVertexAttribute, VertexAttributeValues};
+use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
 use bevy::render::render_asset::RenderAssetUsages;
 use cgmath::{Vector2, Vector3};
 use noise::NoiseFn;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use crate::render::mesh::Vertex;
+use crate::util::primitives::Vertex;
 use crate::{vector2, vector3};
 
 pub mod ecs;
@@ -167,14 +167,14 @@ impl World {
             ]);
         };
 
-        let cube = super::render::primitives::cube();
+        let cube_vertices = super::util::primitives::cube();
         let face_vertices = [
-            &cube.vertices[0..4],   // front
-            &cube.vertices[4..8],   // right
-            &cube.vertices[8..12],  // left
-            &cube.vertices[12..16], // back
-            &cube.vertices[16..20], // top
-            &cube.vertices[20..24], // bottom
+            &cube_vertices[0..4],   // front
+            &cube_vertices[4..8],   // right
+            &cube_vertices[8..12],  // left
+            &cube_vertices[12..16], // back
+            &cube_vertices[16..20], // top
+            &cube_vertices[20..24], // bottom
         ];
 
         let chunk = self.chunk(chunk_pos).unwrap();
