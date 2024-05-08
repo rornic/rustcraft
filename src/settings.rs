@@ -1,6 +1,7 @@
+use bevy::ecs::component::Component;
 use serde::Deserialize;
 
-#[derive(Default, Deserialize, Clone, Copy)]
+#[derive(Default, Deserialize, Clone, Copy, Component)]
 pub struct Settings {
     pub renderer: RendererSettings,
 }

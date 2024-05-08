@@ -2,18 +2,22 @@
 name = "rustcraft"
 version = "0.1.0"
 authors = ["rornic"]
-edition = "2018"
+edition = "2021"
 license = "MIT OR Apache-2.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-glium = "0.32.1"
-image = "*"
-specs = { version = "0.16.1", features = [ "shred-derive", "parallel" ] }
-uuid = { version = "0.8.2", features = [ "v4" ]}
-cgmath = "0.18.0"
 noise = "0.8.2"
 rand = "0.8.5"
 toml = "0.7.0"
 serde = { version = "1.0", features = ["serde_derive"] }
+bevy = { git = "https://github.com/bevyengine/bevy" }
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3

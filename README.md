@@ -1,25 +1,18 @@
 # rustcraft
 
-Another Minecraft clone, using [specs](https://github.com/amethyst/specs) and [glium](https://github.com/glium/glium).
+Another Minecraft clone, originally written using [specs](https://github.com/amethyst/specs) and [glium](https://github.com/glium/glium) but recently migrated to Bevy.
 
 ```
 cargo run --release
 ```
-NB: currently only works on Windows 10. 
 
 ![Image of rustcraft](images/readme.jpg)
 
-## Features
-
-- Player controller with gravity and collision detection.
-- Procedurally generated world with varying terrain.
-- Hand-written OpenGL renderer.
-
 ## Planned work
 
-- Renderer capable of simple lighting.
-- Occlusion culling.
-- Trees!
+- Chunk LODs for vastly improved render distance.
+- Better terrain generation and features.
+- Player controller.
 
 ## License
 
@@ -34,7 +27,7 @@ at your option.
 
 ## Contribution
 
-All contributions are welcome. Feel free to open issues for fixes or discussing changes. I am particularly interested in any optimisations on the rendering code.
+All contributions are welcome. Feel free to open issues for fixes or discussing changes.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
