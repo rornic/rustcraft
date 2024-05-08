@@ -4,7 +4,6 @@ use bevy::pbr::light_consts::lux;
 use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use settings::Settings;
 
-mod math;
 mod settings;
 mod util;
 mod world;
@@ -95,9 +94,3 @@ fn main() {
         )
         .run();
 }
-
-#[derive(Default)]
-pub struct DeltaTime(f32);
-
-#[derive(Default)]
-pub struct ElapsedTime(f32);

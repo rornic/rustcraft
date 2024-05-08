@@ -19,12 +19,8 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, ParallelSlice},
     transform::components::Transform,
 };
-use cgmath::{InnerSpace, Vector2, Vector3, Zero};
 
-use crate::{
-    vector2, vector3,
-    world::{ChunkData, World, CHUNK_SIZE, WORLD_HEIGHT},
-};
+use crate::world::{ChunkCoordinate, ChunkData, World, CHUNK_SIZE, WORLD_HEIGHT};
 
 use super::player::Player;
 
@@ -40,26 +36,26 @@ pub fn generate_chunks(
 
     let player = player_query.get_single().expect("could not find player");
 
-    let camera_chunk = world.world_to_chunk(vector3!(
+    let camera_chunk = world.world_to_chunk(Vec3::new(
         player.translation.x,
         player.translation.y,
-        player.translation.z
+        player.translation.z,
     ));
 
-    let mut chunks: Vec<Vector2<i32>> = all_chunks(camera_chunk, GENERATE_DISTANCE)
+    let mut chunks: Vec<ChunkCoordinate> = all_chunks(camera_chunk, GENERATE_DISTANCE)
         .filter(|chunk| !world.is_chunk_generated(*chunk))
         .collect();
     chunks.sort_by(|c1, c2| {
         chunk_distance(camera_chunk, *c1).total_cmp(&chunk_distance(camera_chunk, *c2))
     });
 
-    let chunks_to_generate: Vec<Vector2<i32>> = chunks.into_iter().take(8).collect();
+    let chunks_to_generate: Vec<ChunkCoordinate> = chunks.into_iter().take(8).collect();
     let thread_pool = AsyncComputeTaskPool::get();
     let generated_chunks = chunks_to_generate.par_chunk_map(thread_pool, 2, |_index, chunks| {
         chunks
             .iter()
             .map(|chunk| (*chunk, world.generate_chunk(*chunk)))
-            .collect::<Vec<(Vector2<i32>, ChunkData)>>()
+            .collect::<Vec<(ChunkCoordinate, ChunkData)>>()
     });
 
     for (pos, chunk_data) in generated_chunks.into_iter().flatten() {
@@ -69,16 +65,15 @@ pub fn generate_chunks(
 
 #[derive(Component)]
 pub struct Chunk {
-    x: i32,
-    y: i32,
+    coord: ChunkCoordinate,
     dirty: bool,
 }
 
 #[derive(Component)]
 pub struct ChunkLoader {
     render_distance: u32,
-    chunk_meshes: HashMap<Vector2<i32>, Arc<Mesh>>,
-    chunk_entities: HashMap<Vector2<i32>, Entity>,
+    chunk_meshes: HashMap<ChunkCoordinate, Arc<Mesh>>,
+    chunk_entities: HashMap<ChunkCoordinate, Entity>,
 }
 
 impl ChunkLoader {
@@ -109,20 +104,20 @@ pub fn load_chunks(
         .expect("could not find single chunk loader");
 
     let player = player_query.get_single().expect("could not find player");
-    let camera_chunk = world.world_to_chunk(vector3!(
+    let camera_chunk = world.world_to_chunk(Vec3::new(
         player.translation.x,
         player.translation.y,
-        player.translation.z
+        player.translation.z,
     ));
 
     let mut chunks_to_load = all_chunks(camera_chunk, chunk_loader.render_distance)
         .filter(|chunk| world.is_chunk_generated(*chunk))
         .filter(|chunk| world.are_neighbours_generated(*chunk))
-        .collect::<HashSet<Vector2<i32>>>();
+        .collect::<HashSet<ChunkCoordinate>>();
 
     // Unload old chunks
     for (entity, chunk) in loaded_chunks.iter() {
-        let chunk_coords = vector2!(chunk.x, chunk.y);
+        let chunk_coords = chunk.coord;
         if chunks_to_load.contains(&chunk_coords) {
             chunks_to_load.remove(&chunk_coords);
         } else {
@@ -146,11 +141,11 @@ pub fn load_chunks(
     //     game_world.clear_chunk_dirty_bit(chunk);
     // }
 
-    let forward = vector3!(player.forward().x, player.forward().y, player.forward().z);
+    let forward = Vec3::new(player.forward().x, player.forward().y, player.forward().z);
     let mut chunks_to_load = chunks_to_load
         .into_iter()
         .filter(|chunk| !chunk_loader.chunk_meshes.contains_key(chunk))
-        .collect::<Vec<Vector2<i32>>>();
+        .collect::<Vec<ChunkCoordinate>>();
     chunks_to_load.sort_by(|c1, c2| {
         chunk_camera_direction(camera_chunk, forward, *c1).total_cmp(&chunk_camera_direction(
             camera_chunk,
@@ -159,13 +154,13 @@ pub fn load_chunks(
         ))
     });
 
-    let chunks_to_load: Vec<Vector2<i32>> = chunks_to_load.into_iter().take(8).collect();
+    let chunks_to_load: Vec<ChunkCoordinate> = chunks_to_load.into_iter().take(8).collect();
     let thread_pool = AsyncComputeTaskPool::get();
     let generated_meshes = chunks_to_load.par_chunk_map(thread_pool, 2, |_index, chunks| {
         chunks
             .iter()
             .map(|chunk| (*chunk, world.generate_chunk_mesh(*chunk)))
-            .collect::<Vec<(Vector2<i32>, Mesh)>>()
+            .collect::<Vec<(ChunkCoordinate, Mesh)>>()
     });
 
     for (chunk, mesh) in generated_meshes.into_iter().flatten() {
@@ -186,8 +181,7 @@ pub fn load_chunks(
                 },
                 aabb,
                 Chunk {
-                    x: chunk.x,
-                    y: chunk.y,
+                    coord: chunk,
                     dirty: false,
                 },
             ))
@@ -196,39 +190,39 @@ pub fn load_chunks(
     }
 }
 
-fn all_chunks(centre: Vector2<i32>, distance: u32) -> impl Iterator<Item = Vector2<i32>> {
-    let (x_min, x_max) = (centre.x - distance as i32, centre.x + distance as i32);
-    let (z_min, z_max) = (centre.y - distance as i32, centre.y + distance as i32);
-    (x_min..x_max).flat_map(move |a| (z_min..z_max).map(move |b| vector2!(a, b)))
+fn all_chunks(centre: ChunkCoordinate, distance: u32) -> impl Iterator<Item = ChunkCoordinate> {
+    let (x_min, x_max) = (centre.x - distance as i64, centre.x + distance as i64);
+    let (z_min, z_max) = (centre.y - distance as i64, centre.y + distance as i64);
+    (x_min..x_max).flat_map(move |a| (z_min..z_max).map(move |b| ChunkCoordinate::new(a, b)))
 }
 
-fn chunk_distance(chunk1: Vector2<i32>, chunk2: Vector2<i32>) -> f32 {
+fn chunk_distance(chunk1: ChunkCoordinate, chunk2: ChunkCoordinate) -> f32 {
     (((chunk2.x - chunk1.x).abs().pow(2) + (chunk2.y - chunk1.y).abs().pow(2)) as f32).sqrt()
 }
 
 fn chunk_camera_direction(
-    camera_chunk: Vector2<i32>,
-    camera_forward: Vector3<f32>,
-    chunk: Vector2<i32>,
+    camera_chunk: ChunkCoordinate,
+    camera_forward: Vec3,
+    chunk: ChunkCoordinate,
 ) -> f32 {
     let camera_dir = (chunk_world_pos(camera_chunk) - chunk_world_pos(chunk)).normalize();
     let dot = camera_forward.dot(camera_dir);
     let dist = chunk_distance(camera_chunk, chunk) as f32;
-    if dist.is_zero() {
+    if dist == 0.0 {
         return -f32::INFINITY;
     }
     dot / dist
 }
 
-fn chunk_world_pos(chunk: Vector2<i32>) -> Vector3<f32> {
-    vector3!(
-        (chunk.x * CHUNK_SIZE as i32) as f32,
+fn chunk_world_pos(chunk: ChunkCoordinate) -> Vec3 {
+    Vec3::new(
+        (chunk.x * CHUNK_SIZE as i64) as f32,
         0.0,
-        (chunk.y * CHUNK_SIZE as i32) as f32
+        (chunk.y * CHUNK_SIZE as i64) as f32,
     )
 }
 
-fn chunk_components(chunk: Vector2<i32>) -> (Transform, Aabb) {
+fn chunk_components(chunk: ChunkCoordinate) -> (Transform, Aabb) {
     let pos = chunk_world_pos(chunk);
     let t = Transform::from_translation(Vec3::new(pos.x, pos.y, pos.z));
     let aabb = Aabb::from_min_max(
@@ -240,28 +234,30 @@ fn chunk_components(chunk: Vector2<i32>) -> (Transform, Aabb) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{vector2, vector3};
+    use bevy::math::Vec3;
+
+    use crate::world::ChunkCoordinate;
 
     use super::chunk_camera_direction;
 
     #[test]
     fn test_chunk_sorting() {
         let mut chunks = vec![
-            vector2!(-5, 5),
-            vector2!(-1, 0),
-            vector2!(0, 0),
-            vector2!(1, 0),
-            vector2!(1, 1),
-            vector2!(5, 0),
+            ChunkCoordinate::new(-5, 5),
+            ChunkCoordinate::new(-1, 0),
+            ChunkCoordinate::new(0, 0),
+            ChunkCoordinate::new(1, 0),
+            ChunkCoordinate::new(1, 1),
+            ChunkCoordinate::new(5, 0),
         ];
-        let camera_chunk = vector2!(0, 0);
-        let camera_dir = vector3!(1.0, 0.0, 0.0);
+        let camera_chunk = ChunkCoordinate::new(0, 0);
+        let camera_dir = Vec3::new(1.0, 0.0, 0.0);
         chunks.sort_by(|c1, c2| {
             chunk_camera_direction(camera_chunk, camera_dir, *c1)
                 .total_cmp(&chunk_camera_direction(camera_chunk, camera_dir, *c2))
         });
 
-        assert_eq!(chunks[0], vector2!(0, 0));
-        assert_eq!(chunks[1], vector2!(1, 0));
+        assert_eq!(chunks[0], ChunkCoordinate::new(0, 0));
+        assert_eq!(chunks[1], ChunkCoordinate::new(1, 0));
     }
 }
