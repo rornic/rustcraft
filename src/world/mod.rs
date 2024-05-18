@@ -379,9 +379,9 @@ impl WorldGenerator {
                 // Height must be at least 1!
                 let height = height.min(WORLD_HEIGHT as usize - 1).max(1);
                 for y in 0..height {
-                    if height >= 180 && ((gradient_x + gradient_z) <= 3.0) {
+                    if height >= 180 && ((gradient_x + gradient_z) <= 2.0) {
                         blocks[x][y][z] = BlockType::Snow;
-                    } else if y >= 10 && ((gradient_x + gradient_z) >= 3.0) {
+                    } else if y >= 10 && ((gradient_x + gradient_z) >= 2.0) {
                         blocks[x][y][z] = BlockType::Stone;
                     } else if y < 10 {
                         blocks[x][y][z] = BlockType::Sand;

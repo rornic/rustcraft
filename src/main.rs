@@ -4,6 +4,7 @@ use bevy::pbr::light_consts::lux;
 use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use settings::Settings;
 
+mod new_world;
 mod settings;
 mod util;
 mod world;
@@ -11,7 +12,6 @@ mod world;
 use bevy::prelude::*;
 use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
 use world::ecs::player::{player_look, player_move};
-use world::World;
 
 use crate::world::ecs::player::PlayerBundle;
 use crate::world::CHUNK_SIZE;
@@ -37,9 +37,9 @@ fn setup_scene(
     });
     ambient_light.brightness = 5000.0;
 
-    let game_world = World::default();
-    let spawn = game_world.spawn();
-    commands.spawn(game_world);
+    let game_world = crate::new_world::world::World::new();
+    let spawn = Vec3::ZERO;
+    commands.insert_resource(game_world);
 
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
 
@@ -53,7 +53,7 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 24;
+    let render_distance = 16;
     let camera = commands
         .spawn((
             Camera3dBundle {
@@ -63,7 +63,7 @@ fn setup_scene(
             FogSettings {
                 color: Color::srgb_u8(135, 206, 235),
                 falloff: FogFalloff::Linear {
-                    start: ((render_distance - 1) * CHUNK_SIZE) as f32,
+                    start: (render_distance * CHUNK_SIZE) as f32 - 8.0,
                     end: (render_distance * CHUNK_SIZE) as f32,
                 },
                 ..default()
