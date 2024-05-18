@@ -10,7 +10,6 @@ use noise::NoiseFn;
 use crate::new_world::{
     block::{BlockType, BLOCK_COUNT},
     chunk::ChunkData,
-    world::World,
 };
 use crate::{new_world::chunk::ChunkCoordinate, util::primitives::Vertex};
 
@@ -201,7 +200,8 @@ impl WorldGenerator {
                 let noise_val = noise.get([world_x as f64, world_z as f64]);
 
                 let world_height = (noise_val * self.world_height as f64).round() as u64;
-                let mut chunk_height = (world_height - world_y).min(chunk_data.size as u64 - 1);
+                let mut chunk_height =
+                    (world_height - world_y.min(world_height)).min(chunk_data.size as u64 - 1);
                 if chunk_height == 0 && world_y == 0 {
                     chunk_height = 1;
                 }

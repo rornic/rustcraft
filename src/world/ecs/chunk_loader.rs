@@ -16,7 +16,6 @@ use bevy::{
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
     render::{mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image},
-    tasks::{AsyncComputeTaskPool, ParallelSlice},
     transform::components::Transform,
 };
 
@@ -24,7 +23,7 @@ use crate::new_world::{chunk::ChunkCoordinate, world::World};
 
 use super::player::Player;
 
-const GENERATE_DISTANCE: u32 = 2;
+const GENERATE_DISTANCE: u32 = 8;
 
 pub fn generate_chunks(mut world: ResMut<World>, player_query: Query<&Transform, With<Player>>) {
     let player = player_query.get_single().expect("could not find player");
@@ -191,8 +190,10 @@ fn all_chunks(centre: ChunkCoordinate, distance: u32) -> impl Iterator<Item = Ch
 
     let mut chunks = vec![];
     for x in x_min..x_max {
-        for z in z_min..z_max {
-            chunks.push(ChunkCoordinate(I64Vec3::new(x, 0, z)));
+        for y in 0..4 {
+            for z in z_min..z_max {
+                chunks.push(ChunkCoordinate(I64Vec3::new(x, y, z)));
+            }
         }
     }
     chunks.into_iter()
