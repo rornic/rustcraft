@@ -22,6 +22,19 @@ impl From<I64Vec3> for ChunkCoordinate {
     }
 }
 
+impl ChunkCoordinate {
+    pub fn adjacent(&self) -> Vec<ChunkCoordinate> {
+        vec![
+            ChunkCoordinate(self.0 + I64Vec3::new(0, 0, 1)),
+            ChunkCoordinate(self.0 + I64Vec3::new(0, 0, -1)),
+            ChunkCoordinate(self.0 + I64Vec3::new(1, 0, 0)),
+            ChunkCoordinate(self.0 + I64Vec3::new(-1, 0, 0)),
+            ChunkCoordinate(self.0 + I64Vec3::new(0, 1, 0)),
+            ChunkCoordinate(self.0 + I64Vec3::new(0, -1, 0)),
+        ]
+    }
+}
+
 type BlockPalette = HashMap<U16Vec3, BlockType>;
 
 pub struct ChunkData {
@@ -45,6 +58,10 @@ impl ChunkData {
         return block_coord.x < self.size && block_coord.y < self.size && block_coord.z < self.size;
     }
 
+    pub fn empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+
     pub fn get_block_at(&self, block_coord: U16Vec3) -> BlockType {
         if !self.is_block_in_chunk(block_coord) {
             panic!("get block {:?} not in chunk", block_coord);
@@ -65,6 +82,7 @@ impl ChunkData {
 
 pub struct ChunkOctree {
     octree: Octree<ChunkData>,
+    cache: HashMap<ChunkCoordinate, usize>,
     pub chunk_size: u16,
 }
 
@@ -74,6 +92,7 @@ impl Default for ChunkOctree {
         let size = 32;
         Self {
             octree: Octree::new(1024.0, 7),
+            cache: HashMap::new(),
             chunk_size,
         }
     }
@@ -81,9 +100,14 @@ impl Default for ChunkOctree {
 
 impl ChunkOctree {
     pub fn get_chunk_data(&mut self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
-        let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
+        let octant = if self.cache.contains_key(&coord) {
+            self.octree.get_node_by_id(*self.cache.get(&coord).unwrap())
+        } else {
+            self.octree.query_octant(self.chunk_centre(coord))
+        };
 
-        let read = chunk_octant.read().unwrap();
+        let read = octant.read().unwrap();
+        self.cache.insert(coord, read.id());
         read.get_data()
     }
 
@@ -94,7 +118,7 @@ impl ChunkOctree {
         write.set_data(Arc::new(chunk_data));
     }
 
-    fn chunk_centre(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
+    pub fn chunk_centre(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
         let chunk_size = self.chunk_size as f32;
         Vec3::new(
             chunk_coord.0.x as f32 * chunk_size + chunk_size / 2.0,

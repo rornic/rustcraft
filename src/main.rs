@@ -10,7 +10,9 @@ mod util;
 mod world;
 
 use bevy::prelude::*;
-use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
+use world::ecs::chunk_loader::{
+    gather_chunks, generate_chunks, load_chunks, unload_chunks, ChunkLoader,
+};
 use world::ecs::player::{player_look, player_move};
 
 use crate::world::ecs::player::PlayerBundle;
@@ -38,7 +40,7 @@ fn setup_scene(
     ambient_light.brightness = 5000.0;
 
     let game_world = crate::new_world::world::World::new();
-    let spawn = Vec3::ZERO;
+    let spawn = Vec3::new(0.0, 20.0, 0.0);
     commands.insert_resource(game_world);
 
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
@@ -74,7 +76,7 @@ fn setup_scene(
     commands.entity(player).push_children(&[camera]);
 
     let chunk_loader = ChunkLoader::new(render_distance as u32);
-    commands.spawn(chunk_loader);
+    commands.insert_resource(chunk_loader);
 
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     commands.spawn(settings);
@@ -90,7 +92,11 @@ fn main() {
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
-            (generate_chunks, load_chunks, player_move, player_look),
+            (
+                (gather_chunks, generate_chunks, load_chunks, unload_chunks).chain(),
+                player_move,
+                player_look,
+            ),
         )
         .run();
 }

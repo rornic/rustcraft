@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use bevy::{
-    math::{I64Vec2, U16Vec3, Vec3},
+    math::{I64Vec2, I64Vec3, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
         render_asset::RenderAssetUsages,
@@ -10,6 +12,7 @@ use noise::NoiseFn;
 use crate::new_world::{
     block::{BlockType, BLOCK_COUNT},
     chunk::ChunkData,
+    world::World,
 };
 use crate::{new_world::chunk::ChunkCoordinate, util::primitives::Vertex};
 
@@ -30,7 +33,12 @@ impl Default for WorldGenerator {
 }
 
 impl WorldGenerator {
-    pub fn generate_chunk_mesh(&self, chunk: &ChunkData, chunk_coord: ChunkCoordinate) -> Mesh {
+    pub fn generate_chunk_mesh(
+        &self,
+        chunk: &ChunkData,
+        adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
+        chunk_coord: ChunkCoordinate,
+    ) -> Mesh {
         let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];
 
@@ -66,18 +74,11 @@ impl WorldGenerator {
             &cube_vertices[20..24], // bottom
         ];
 
-        // let adjacent_chunks = [
-        //     self.chunk(chunk_coord + I64Vec2::new(0, 1)),
-        //     self.chunk(chunk_coord + I64Vec2::new(0, -1)),
-        //     self.chunk(chunk_coord + I64Vec2::new(1, 0)),
-        //     self.chunk(chunk_coord + I64Vec2::new(-1, 0)),
-        // ];
-
         // let chunk = world.get_chunk_data(chunk_coord).unwrap();
         // TODO: get chunk boundaries working properly, remove -1
-        for x in 0..chunk.size - 1 {
-            for z in 0..chunk.size - 1 {
-                for y in 0..chunk.size - 1 {
+        for x in 0..chunk.size {
+            for z in 0..chunk.size {
+                for y in 0..chunk.size {
                     let block = chunk.get_block_at(U16Vec3::new(x, y, z));
                     if block == BlockType::Air {
                         continue;
@@ -85,68 +86,47 @@ impl WorldGenerator {
 
                     let world_position = Vec3::new(x as f32, y as f32, z as f32);
 
-                    let front = if let Some(z) = z.checked_sub(1) {
-                        chunk.get_block_at(U16Vec3::new(x, y, z))
+                    let front = if z > 0 {
+                        chunk.get_block_at(U16Vec3::new(x, y, z - 1))
                     } else {
-                        BlockType::Air
+                        let adjacent = &adjacent_chunks[1].as_ref().unwrap();
+                        adjacent.get_block_at(U16Vec3::new(x, y, adjacent.size - 1))
                     };
-                    let back = if let Some(z) = z.checked_add(1) {
-                        chunk.get_block_at(U16Vec3::new(x, y, z))
+
+                    let back = if z < chunk.size - 1 {
+                        chunk.get_block_at(U16Vec3::new(x, y, z + 1))
                     } else {
-                        BlockType::Air
+                        let adjacent = &adjacent_chunks[0].as_ref().unwrap();
+                        adjacent.get_block_at(U16Vec3::new(x, y, 0))
                     };
-                    let left = if let Some(x) = x.checked_sub(1) {
-                        chunk.get_block_at(U16Vec3::new(x, y, z))
+
+                    let left = if x > 0 {
+                        chunk.get_block_at(U16Vec3::new(x - 1, y, z))
                     } else {
-                        BlockType::Air
+                        let adjacent = &adjacent_chunks[3].as_ref().unwrap();
+                        adjacent.get_block_at(U16Vec3::new(adjacent.size - 1, y, z))
                     };
-                    let right = if let Some(x) = x.checked_add(1) {
-                        chunk.get_block_at(U16Vec3::new(x, y, z))
+
+                    let right = if x < chunk.size - 1 {
+                        chunk.get_block_at(U16Vec3::new(x + 1, y, z))
                     } else {
-                        BlockType::Air
+                        let adjacent = &adjacent_chunks[2].as_ref().unwrap();
+                        adjacent.get_block_at(U16Vec3::new(0, y, z))
                     };
 
                     let top = if y < chunk.size - 1 {
-                        if let Some(y) = y.checked_add(1) {
-                            chunk.get_block_at(U16Vec3::new(x, y, z))
-                        } else {
-                            BlockType::Air
-                        }
+                        chunk.get_block_at(U16Vec3::new(x, y + 1, z))
                     } else {
-                        BlockType::Air
+                        let adjacent = &adjacent_chunks[4].as_ref().unwrap();
+                        adjacent.get_block_at(U16Vec3::new(x, 0, z))
                     };
-                    let bottom = if let Some(y) = y.checked_sub(1) {
-                        chunk.get_block_at(U16Vec3::new(x, y, z))
+
+                    let bottom = if y > 0 {
+                        chunk.get_block_at(U16Vec3::new(x, y - 1, z))
                     } else {
-                        BlockType::Air
+                        let adjacent = &adjacent_chunks[5].as_ref().unwrap();
+                        adjacent.get_block_at(U16Vec3::new(x, adjacent.size - 1, z))
                     };
-                    // let front = z
-                    //     .checked_sub(1)
-                    //     .and_then(|z| chunk.get_block_at(U16Vec3::new(x, y, z)).unwrap());
-                    // .or(adjacent_chunks[1]
-                    //     .and_then(|c| self.chunk_block(c, U16Vec3::new(x, y, CHUNK_SIZE - 1))));
-
-                    // let back = self
-                    //     .chunk_block(chunk, U16Vec3::new(x, y, z + 1))
-                    //     .or(adjacent_chunks[0]
-                    //         .and_then(|c| self.chunk_block(c, U16Vec3::new(x, y, 0))));
-                    // let left = x
-                    //     .checked_sub(1)
-                    //     .and_then(|x| self.chunk_block(chunk, U16Vec3::new(x, y, z)))
-                    //     .or(adjacent_chunks[3]
-                    //         .and_then(|c| self.chunk_block(c, U16Vec3::new(CHUNK_SIZE - 1, y, z))));
-                    // let right = self
-                    //     .chunk_block(chunk, U16Vec3::new(x + 1, y, z))
-                    //     .or(adjacent_chunks[2]
-                    //         .and_then(|c| self.chunk_block(c, U16Vec3::new(0, y, z))));
-                    // let top = self.chunk_block(chunk, U16Vec3::new(x, y + 1, z));
-
-                    // let bottom = if y == 0 {
-                    //     Some(BlockType::Stone)
-                    // } else {
-                    //     y.checked_sub(1)
-                    //         .and_then(|y| self.chunk_block(chunk, U16Vec3::new(x, y, z)))
-                    // };
 
                     let sides = [front, right, left, back, top, bottom];
                     for (i, side) in sides.iter().enumerate() {
@@ -194,17 +174,18 @@ impl WorldGenerator {
             for z in 0..chunk_data.size {
                 let (world_x, world_y, world_z) = (
                     chunk_pos.0.x * chunk_data.size as i64 + x as i64,
-                    chunk_pos.0.y as u64 * chunk_data.size as u64,
+                    chunk_pos.0.y * chunk_data.size as i64,
                     chunk_pos.0.z * chunk_data.size as i64 + z as i64,
                 );
                 let noise_val = noise.get([world_x as f64, world_z as f64]);
 
                 let world_height = (noise_val * self.world_height as f64).round() as u64;
-                let mut chunk_height =
-                    (world_height - world_y.min(world_height)).min(chunk_data.size as u64 - 1);
-                if chunk_height == 0 && world_y == 0 {
-                    chunk_height = 1;
-                }
+                let chunk_height = if world_y > 0 {
+                    let positive_y = world_y as u64;
+                    (world_height - positive_y.min(world_height)).min(chunk_data.size as u64)
+                } else {
+                    chunk_data.size as u64
+                };
 
                 // let gradient_x = (WORLD_HEIGHT as f64
                 //     * (noise.get([(world_x + 1) as f64, world_z as f64])
