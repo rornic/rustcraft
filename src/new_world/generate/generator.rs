@@ -187,31 +187,29 @@ impl WorldGenerator {
                     chunk_data.size as u64
                 };
 
-                // let gradient_x = (WORLD_HEIGHT as f64
-                //     * (noise.get([(world_x + 1) as f64, world_z as f64])
-                //         - noise.get([(world_x - 1) as f64, world_z as f64])))
-                // .abs();
-                // let gradient_z = (WORLD_HEIGHT as f64
-                //     * (noise.get([world_x as f64, (world_z + 1) as f64])
-                //         - noise.get([world_x as f64, (world_z - 1) as f64])))
-                // .abs();
+                let gradient_x = (self.world_height as f64
+                    * (noise.get([(world_x + 1) as f64, world_z as f64])
+                        - noise.get([(world_x - 1) as f64, world_z as f64])))
+                .abs();
+                let gradient_z = (self.world_height as f64
+                    * (noise.get([world_x as f64, (world_z + 1) as f64])
+                        - noise.get([world_x as f64, (world_z - 1) as f64])))
+                .abs();
 
                 for y in 0..chunk_height {
-                    // if height >= 180 && ((gradient_x + gradient_z) <= 2.0) {
-                    //     blocks[x][y][z] = BlockType::Snow;
-                    // } else if y >= 10 && ((gradient_x + gradient_z) >= 2.0) {
-                    //     blocks[x][y][z] = BlockType::Stone;
-                    // } else if y < 10 {
-                    //     blocks[x][y][z] = BlockType::Sand;
-                    // } else {
-                    //     blocks[x][y][z] = BlockType::Grass;
-                    // }
-                    chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), BlockType::Grass);
+                    let block = if world_y >= 90 && ((gradient_x + gradient_z) <= 2.0) {
+                        BlockType::Snow
+                    } else if world_y >= 70 && ((gradient_x + gradient_z) >= 2.0) {
+                        BlockType::Stone
+                    } else if world_y == 0 {
+                        BlockType::Water
+                    } else if world_y <= 10 {
+                        BlockType::Sand
+                    } else {
+                        BlockType::Grass
+                    };
+                    chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), block);
                 }
-
-                // for y in height..5 {
-                //     blocks[x][y][z] = BlockType::Water;
-                // }
             }
         }
 

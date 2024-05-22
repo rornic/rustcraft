@@ -88,17 +88,12 @@ pub fn gather_chunks(
         .cloned()
         .collect::<HashSet<ChunkCoordinate>>();
 
-    let max_loaded_chunks = chunk_loader.render_distance.pow(3) as usize;
+    let to_unload = loaded
+        .difference(&all_chunks_set)
+        .filter(|chunk| !queued_for_unload.contains(chunk));
 
-    if loaded.len() > max_loaded_chunks {
-        let to_unload = loaded
-            .difference(&all_chunks_set)
-            .filter(|chunk| !queued_for_unload.contains(chunk))
-            .take(loaded.len() - max_loaded_chunks);
-
-        for chunk in to_unload {
-            chunk_loader.unload_queue.push_back(*chunk);
-        }
+    for chunk in to_unload {
+        chunk_loader.unload_queue.push_back(*chunk);
     }
 
     let to_generate = all_chunks

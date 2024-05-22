@@ -1,7 +1,7 @@
 use noise::{Cache, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence};
 
 pub fn noise_generator(seed: u32) -> impl NoiseFn<f64, 2> {
-    let scale: f64 = 1.0 / 4096.0;
+    let scale: f64 = 1.0 / 1024.0;
 
     let freq = 0.2;
     let lacunarity = 2.2089;
@@ -22,10 +22,6 @@ pub fn noise_generator(seed: u32) -> impl NoiseFn<f64, 2> {
         .set_frequency(freq * 5.0)
         .set_octaves(32);
 
-    let combined = Select::new(base_continents_tu, mountains, base_continents)
-        .set_bounds(0.2, 1.0)
-        .set_falloff(0.1);
-
-    let generator = ScalePoint::new(combined).set_scale(scale);
+    let generator = ScalePoint::new(mountains).set_scale(scale);
     Cache::new(generator)
 }
