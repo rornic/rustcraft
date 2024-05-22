@@ -93,7 +93,7 @@ pub fn gather_chunks(
         .filter(|chunk| !queued_for_unload.contains(chunk));
 
     for chunk in to_unload {
-        chunk_loader.unload_queue.push_back(*chunk);
+        chunk_loader.unload_queue.push_front(*chunk);
     }
 
     let to_generate = all_chunks
@@ -102,7 +102,7 @@ pub fn gather_chunks(
         .filter(|chunk| !queued_for_loading.contains(chunk))
         .filter(|chunk| !loaded.contains(*chunk))
         .filter(|chunk| !world.is_chunk_empty(**chunk))
-        .take(4);
+        .take(8);
 
     for chunk in to_generate {
         chunk_loader.generate_queue.push_front(*chunk);
@@ -111,10 +111,10 @@ pub fn gather_chunks(
 
 pub fn generate_chunks(mut world: ResMut<World>, mut chunk_loader: ResMut<ChunkLoader>) {
     while let Some(chunk) = chunk_loader.generate_queue.pop_front() {
-        world.generate_chunk(chunk);
-        for neighbour in chunk.adjacent() {
-            world.generate_chunk(neighbour);
-        }
+        let mut chunks = vec![chunk];
+        chunks.extend(chunk.adjacent());
+
+        world.generate_chunks(chunks);
 
         chunk_loader.load_queue.push_front(chunk);
     }

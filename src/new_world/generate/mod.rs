@@ -1,2 +1,2 @@
 pub mod generator;
-mod noise;
+pub mod noise;

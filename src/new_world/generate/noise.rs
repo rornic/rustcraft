@@ -1,7 +1,8 @@
+use bevy::{math::I64Vec2, utils::HashMap};
 use noise::{Cache, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence};
 
-pub fn noise_generator(seed: u32) -> impl NoiseFn<f64, 2> {
-    let scale: f64 = 1.0 / 1024.0;
+pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
+    let scale: f64 = 1.0 / 4096.0;
 
     let freq = 0.2;
     let lacunarity = 2.2089;
@@ -20,8 +21,33 @@ pub fn noise_generator(seed: u32) -> impl NoiseFn<f64, 2> {
     let mountains = base_continents
         .clone()
         .set_frequency(freq * 5.0)
+        .set_lacunarity(lacunarity)
         .set_octaves(32);
 
     let generator = ScalePoint::new(mountains).set_scale(scale);
     Cache::new(generator)
+}
+
+pub struct NoiseGenerator {
+    noise_cache: HashMap<I64Vec2, f64>,
+}
+
+impl Default for NoiseGenerator {
+    fn default() -> Self {
+        Self {
+            noise_cache: HashMap::new(),
+        }
+    }
+}
+
+impl NoiseGenerator {
+    pub fn get(&mut self, pos: I64Vec2, noise_fn: &impl NoiseFn<f64, 2>) -> f64 {
+        if self.noise_cache.contains_key(&pos) {
+            return *self.noise_cache.get(&pos).unwrap();
+        }
+
+        let value = noise_fn.get([pos.x as f64, pos.y as f64]);
+        self.noise_cache.insert(pos, value);
+        value
+    }
 }

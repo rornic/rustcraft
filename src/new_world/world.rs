@@ -6,14 +6,16 @@ use bevy::{
     math::{I64Vec3, Vec3},
     render::mesh::Mesh,
 };
+use noise::NoiseFn;
 
 use super::{
     chunk::{ChunkCoordinate, ChunkData, ChunkOctree},
-    generate::generator::WorldGenerator,
+    generate::{generator::WorldGenerator, noise::world_noise},
 };
 
 #[derive(Resource)]
 pub struct World {
+    seed: u32,
     chunks: ChunkOctree,
     generator: WorldGenerator,
 }
@@ -21,9 +23,14 @@ pub struct World {
 impl World {
     pub fn new() -> Self {
         Self {
+            seed: rand::random(),
             chunks: ChunkOctree::default(),
             generator: WorldGenerator::default(),
         }
+    }
+
+    pub fn seed(&self) -> u32 {
+        self.seed
     }
 
     // pub fn get_block_at(&mut self, block_coord: I64Vec3) -> BlockType {
@@ -37,14 +44,25 @@ impl World {
     // }
     //
 
-    pub fn generate_chunk(&mut self, chunk_coord: ChunkCoordinate) {
+    pub fn generate_chunk(
+        &mut self,
+        chunk_coord: ChunkCoordinate,
+        noise_fn: &impl NoiseFn<f64, 2>,
+    ) {
         let span = info_span!("generate_chunk").entered();
         if self.is_chunk_generated(chunk_coord) {
             return;
         }
 
-        let chunk_data = self.generator.generate_chunk(chunk_coord);
+        let chunk_data = self.generator.generate_chunk(chunk_coord, noise_fn);
         self.chunks.set_chunk_data(chunk_coord, chunk_data);
+    }
+
+    pub fn generate_chunks(&mut self, chunk_coords: Vec<ChunkCoordinate>) {
+        let noise_fn = world_noise(self.seed);
+        for chunk in chunk_coords {
+            self.generate_chunk(chunk, &noise_fn);
+        }
     }
 
     pub fn can_generate_chunk_mesh(&mut self, chunk_coord: ChunkCoordinate) -> bool {
