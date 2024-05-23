@@ -16,9 +16,10 @@ use bevy::{
     transform::components::Transform,
 };
 
-use crate::new_world::{chunk::ChunkCoordinate, world::World};
+use super::chunk::ChunkCoordinate;
+use crate::world::world::World;
 
-use super::player::Player;
+use crate::world::player::Player;
 
 #[derive(Component)]
 pub struct Chunk {
@@ -205,7 +206,8 @@ fn all_chunks(
 
         for neighbour in next.adjacent().into_iter() {
             let direction = (world.chunk_to_world(neighbour) - camera_pos).normalize();
-            if !seen.contains(&neighbour) && direction.dot(camera_forward.as_vec3()) > 0.0 {
+            let dot = direction.dot(camera_forward.as_vec3());
+            if !seen.contains(&neighbour) && dot > 0.0 {
                 stack.push_back((neighbour, distance + 1));
                 seen.insert(neighbour);
             }

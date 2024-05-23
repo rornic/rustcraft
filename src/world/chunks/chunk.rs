@@ -5,7 +5,8 @@ use bevy::{
     utils::HashMap,
 };
 
-use super::{block::BlockType, octree::Octree};
+use crate::util::octree::Octree;
+use crate::world::block::BlockType;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ChunkCoordinate(pub I64Vec3);
@@ -43,11 +44,13 @@ pub struct ChunkData {
     pub dirty: bool,
 }
 
+pub const CHUNK_SIZE: u16 = 16;
+
 impl Default for ChunkData {
     fn default() -> Self {
         Self {
             blocks: HashMap::new(),
-            size: 16,
+            size: CHUNK_SIZE,
             dirty: false,
         }
     }
@@ -132,7 +135,7 @@ impl ChunkOctree {
 mod tests {
     use bevy::math::{I64Vec3, U16Vec3};
 
-    use crate::new_world::chunk::BlockType;
+    use crate::world::chunk::BlockType;
 
     use super::{ChunkCoordinate, ChunkData, ChunkOctree};
 

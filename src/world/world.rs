@@ -9,8 +9,8 @@ use bevy::{
 use noise::NoiseFn;
 
 use super::{
-    chunk::{ChunkCoordinate, ChunkData, ChunkOctree},
-    generate::{generator::WorldGenerator, noise::world_noise},
+    chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree},
+    chunks::generate::{generator::WorldGenerator, noise::world_noise},
 };
 
 #[derive(Resource)]
