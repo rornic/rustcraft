@@ -65,6 +65,10 @@ impl ChunkData {
         self.blocks.is_empty()
     }
 
+    pub fn blocks(&self) -> &BlockPalette {
+        &self.blocks
+    }
+
     pub fn get_block_at(&self, block_coord: U16Vec3) -> BlockType {
         if !self.is_block_in_chunk(block_coord) {
             panic!("get block {:?} not in chunk", block_coord);
@@ -92,7 +96,6 @@ pub struct ChunkOctree {
 impl Default for ChunkOctree {
     fn default() -> Self {
         let chunk_size = 16;
-        let size = 32;
         Self {
             octree: Octree::new(1024.0, 7),
             cache: HashMap::new(),

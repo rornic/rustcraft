@@ -72,75 +72,63 @@ impl WorldGenerator {
             &cube_vertices[20..24], // bottom
         ];
 
-        // let chunk = world.get_chunk_data(chunk_coord).unwrap();
-        // TODO: get chunk boundaries working properly, remove -1
-        for x in 0..chunk.size {
-            for z in 0..chunk.size {
-                for y in 0..chunk.size {
-                    let block = chunk.get_block_at(U16Vec3::new(x, y, z));
-                    if block == BlockType::Air {
-                        continue;
+        for (coord, block) in chunk.blocks().iter() {
+            let (x, y, z) = (coord.x, coord.y, coord.z);
+            let world_position = Vec3::new(x as f32, y as f32, z as f32);
+
+            let front = if z > 0 {
+                chunk.get_block_at(U16Vec3::new(x, y, z - 1))
+            } else {
+                let adjacent = &adjacent_chunks[1].as_ref().unwrap();
+                adjacent.get_block_at(U16Vec3::new(x, y, adjacent.size - 1))
+            };
+
+            let back = if z < chunk.size - 1 {
+                chunk.get_block_at(U16Vec3::new(x, y, z + 1))
+            } else {
+                let adjacent = &adjacent_chunks[0].as_ref().unwrap();
+                adjacent.get_block_at(U16Vec3::new(x, y, 0))
+            };
+
+            let left = if x > 0 {
+                chunk.get_block_at(U16Vec3::new(x - 1, y, z))
+            } else {
+                let adjacent = &adjacent_chunks[3].as_ref().unwrap();
+                adjacent.get_block_at(U16Vec3::new(adjacent.size - 1, y, z))
+            };
+
+            let right = if x < chunk.size - 1 {
+                chunk.get_block_at(U16Vec3::new(x + 1, y, z))
+            } else {
+                let adjacent = &adjacent_chunks[2].as_ref().unwrap();
+                adjacent.get_block_at(U16Vec3::new(0, y, z))
+            };
+
+            let top = if y < chunk.size - 1 {
+                chunk.get_block_at(U16Vec3::new(x, y + 1, z))
+            } else {
+                let adjacent = &adjacent_chunks[4].as_ref().unwrap();
+                adjacent.get_block_at(U16Vec3::new(x, 0, z))
+            };
+
+            let bottom = if y > 0 {
+                chunk.get_block_at(U16Vec3::new(x, y - 1, z))
+            } else {
+                let adjacent = &adjacent_chunks[5].as_ref().unwrap();
+                adjacent.get_block_at(U16Vec3::new(x, adjacent.size - 1, z))
+            };
+
+            let sides = [front, right, left, back, top, bottom];
+            for (i, side) in sides.iter().enumerate() {
+                match side {
+                    BlockType::Water => {
+                        if *block != BlockType::Water {
+                            add_vertices(&face_vertices[i], world_position, *block)
+                        }
                     }
-
-                    let world_position = Vec3::new(x as f32, y as f32, z as f32);
-
-                    let front = if z > 0 {
-                        chunk.get_block_at(U16Vec3::new(x, y, z - 1))
-                    } else {
-                        let adjacent = &adjacent_chunks[1].as_ref().unwrap();
-                        adjacent.get_block_at(U16Vec3::new(x, y, adjacent.size - 1))
-                    };
-
-                    let back = if z < chunk.size - 1 {
-                        chunk.get_block_at(U16Vec3::new(x, y, z + 1))
-                    } else {
-                        let adjacent = &adjacent_chunks[0].as_ref().unwrap();
-                        adjacent.get_block_at(U16Vec3::new(x, y, 0))
-                    };
-
-                    let left = if x > 0 {
-                        chunk.get_block_at(U16Vec3::new(x - 1, y, z))
-                    } else {
-                        let adjacent = &adjacent_chunks[3].as_ref().unwrap();
-                        adjacent.get_block_at(U16Vec3::new(adjacent.size - 1, y, z))
-                    };
-
-                    let right = if x < chunk.size - 1 {
-                        chunk.get_block_at(U16Vec3::new(x + 1, y, z))
-                    } else {
-                        let adjacent = &adjacent_chunks[2].as_ref().unwrap();
-                        adjacent.get_block_at(U16Vec3::new(0, y, z))
-                    };
-
-                    let top = if y < chunk.size - 1 {
-                        chunk.get_block_at(U16Vec3::new(x, y + 1, z))
-                    } else {
-                        let adjacent = &adjacent_chunks[4].as_ref().unwrap();
-                        adjacent.get_block_at(U16Vec3::new(x, 0, z))
-                    };
-
-                    let bottom = if y > 0 {
-                        chunk.get_block_at(U16Vec3::new(x, y - 1, z))
-                    } else {
-                        let adjacent = &adjacent_chunks[5].as_ref().unwrap();
-                        adjacent.get_block_at(U16Vec3::new(x, adjacent.size - 1, z))
-                    };
-
-                    let sides = [front, right, left, back, top, bottom];
-                    for (i, side) in sides.iter().enumerate() {
-                        match side {
-                            BlockType::Water => {
-                                if block != BlockType::Water {
-                                    add_vertices(&face_vertices[i], world_position, block)
-                                }
-                            }
-                            BlockType::Air => {
-                                add_vertices(&face_vertices[i], world_position, block)
-                            }
-                            _ => (),
-                        };
-                    }
-                }
+                    BlockType::Air => add_vertices(&face_vertices[i], world_position, *block),
+                    _ => (),
+                };
             }
         }
 
