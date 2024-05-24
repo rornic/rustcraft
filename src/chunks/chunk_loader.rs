@@ -158,6 +158,7 @@ pub fn load_chunks(
                         base_color_texture: Some(asset_server.load::<Image>("textures/blocks.png")),
                         reflectance: 0.0,
                         cull_mode: Some(Face::Front),
+                        alpha_mode: bevy::render::alpha::AlphaMode::Blend,
                         ..default()
                     }),
                     transform: t,
@@ -209,7 +210,7 @@ fn all_chunks(
         all_chunks.push(next);
         seen.insert(next);
 
-        if distance == max_distance {
+        if distance >= max_distance {
             continue;
         }
 
@@ -218,7 +219,10 @@ fn all_chunks(
                 (world.chunk_to_world(neighbour) - world.chunk_to_world(camera_chunk)).normalize();
             let dot = camera_forward.dot(direction);
             if !seen.contains(&neighbour) && dot > 0.0 {
-                stack.push_back((neighbour, distance + 1));
+                stack.push_back((
+                    neighbour,
+                    (neighbour.0 - camera_chunk.0).abs().max_element() as u32,
+                ));
             }
             seen.insert(neighbour);
         }

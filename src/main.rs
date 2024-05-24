@@ -64,15 +64,14 @@ fn setup_scene(
                 ..default()
             },
             FogSettings {
-                color: Color::srgb_u8(135, 206, 235),
+                color: Color::srgba_u8(135, 206, 235, 255),
                 falloff: FogFalloff::Linear {
-                    start: (render_distance * CHUNK_SIZE) as f32 - 8.0,
+                    start: (render_distance * CHUNK_SIZE) as f32 - 32.0,
                     end: (render_distance * CHUNK_SIZE) as f32,
                 },
                 ..default()
             },
         ))
-        .insert(ScreenSpaceAmbientOcclusionBundle::default())
         .id();
     commands.entity(player).push_children(&[camera]);
 
