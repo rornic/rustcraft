@@ -56,7 +56,7 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 32;
+    let render_distance = 16;
     let camera = commands
         .spawn((
             Camera3dBundle {

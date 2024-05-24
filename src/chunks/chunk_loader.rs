@@ -6,18 +6,25 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::With,
+        query::{With, Without},
         system::{Commands, Query, Res, ResMut, Resource},
     },
+    hierarchy::Parent,
     math::{Dir3, I64Vec3, Vec3},
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
-    render::{mesh::Mesh, primitives::Aabb, render_resource::Face, texture::Image},
-    transform::components::Transform,
+    render::{
+        camera::{self, Camera},
+        mesh::Mesh,
+        primitives::Aabb,
+        render_resource::Face,
+        texture::Image,
+    },
+    transform::components::{GlobalTransform, Transform},
 };
 
 use super::chunk::ChunkCoordinate;
-use crate::world::World;
+use crate::{player::PlayerLook, world::World};
 
 use crate::player::Player;
 
@@ -52,8 +59,10 @@ pub fn gather_chunks(
     mut chunk_loader: ResMut<ChunkLoader>,
     mut world: ResMut<World>,
     player_query: Query<&Transform, With<Player>>,
+    camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
 ) {
     let player = player_query.get_single().expect("could not find player");
+    let (_, camera) = camera_query.get_single().expect("could not find camera");
 
     let queued_for_generation = chunk_loader
         .generate_queue
@@ -75,10 +84,11 @@ pub fn gather_chunks(
 
     let all_chunks: Vec<ChunkCoordinate> = all_chunks(
         player.translation,
-        player.forward(),
+        camera.forward(),
         chunk_loader.render_distance,
         &world,
     )
+    .filter(|chunk| !world.is_chunk_empty(*chunk))
     .collect();
 
     let all_chunks_set: HashSet<ChunkCoordinate> = all_chunks.iter().cloned().collect();
@@ -102,8 +112,7 @@ pub fn gather_chunks(
         .filter(|chunk| !queued_for_generation.contains(chunk))
         .filter(|chunk| !queued_for_loading.contains(chunk))
         .filter(|chunk| !loaded.contains(*chunk))
-        .filter(|chunk| !world.is_chunk_empty(**chunk))
-        .take(8);
+        .take(16);
 
     for chunk in to_generate {
         chunk_loader.generate_queue.push_front(*chunk);
@@ -205,12 +214,13 @@ fn all_chunks(
         }
 
         for neighbour in next.adjacent().into_iter() {
-            let direction = (world.chunk_to_world(neighbour) - camera_pos).normalize();
-            let dot = direction.dot(camera_forward.as_vec3());
+            let direction: Vec3 =
+                (world.chunk_to_world(neighbour) - world.chunk_to_world(camera_chunk)).normalize();
+            let dot = camera_forward.dot(direction);
             if !seen.contains(&neighbour) && dot > 0.0 {
                 stack.push_back((neighbour, distance + 1));
-                seen.insert(neighbour);
             }
+            seen.insert(neighbour);
         }
     }
     all_chunks.into_iter()
@@ -235,9 +245,9 @@ fn chunk_components(chunk: ChunkCoordinate) -> (Transform, Aabb) {
 mod tests {
     use bevy::math::Vec3;
 
-    use crate::world::ChunkCoordinate;
+    // use crate::world::ChunkCoordinate;
 
-    use super::chunk_camera_direction;
+    // use super::chunk_camera_direction;
 
     // #[test]
     // fn test_chunk_sorting() {

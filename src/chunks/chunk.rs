@@ -136,9 +136,9 @@ impl ChunkOctree {
 
 #[cfg(test)]
 mod tests {
-    use bevy::math::{I64Vec3, U16Vec3};
+    use bevy::math::{I64Vec3, U16Vec3, Vec3};
 
-    use crate::world::chunk::BlockType;
+    use crate::block::BlockType;
 
     use super::{ChunkCoordinate, ChunkData, ChunkOctree};
 
@@ -197,5 +197,23 @@ mod tests {
             BlockType::Air,
             queried_chunk_data.get_block_at(U16Vec3::new(0, 4, 9))
         );
+    }
+
+    #[test]
+    fn test_chunk_centre() {
+        let octree = ChunkOctree::default();
+
+        assert_eq!(
+            Vec3::new(8.0, 8.0, 8.0),
+            octree.chunk_centre(ChunkCoordinate(I64Vec3::new(0, 0, 0)))
+        );
+        assert_eq!(
+            Vec3::new(-8.0, -8.0, 8.0),
+            octree.chunk_centre(ChunkCoordinate(I64Vec3::new(-1, -1, 0)))
+        );
+        assert_eq!(
+            Vec3::new(-680.0, 360.0, -1592.0),
+            octree.chunk_centre(ChunkCoordinate(I64Vec3::new(-43, 22, -100)))
+        )
     }
 }
