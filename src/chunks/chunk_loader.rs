@@ -17,9 +17,9 @@ use bevy::{
 };
 
 use super::chunk::ChunkCoordinate;
-use crate::world::world::World;
+use crate::world::World;
 
-use crate::world::player::Player;
+use crate::player::Player;
 
 #[derive(Component)]
 pub struct Chunk {

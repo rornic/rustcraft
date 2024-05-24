@@ -5,8 +5,8 @@ use bevy::{
     utils::HashMap,
 };
 
+use crate::block::BlockType;
 use crate::util::octree::Octree;
-use crate::world::block::BlockType;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ChunkCoordinate(pub I64Vec3);

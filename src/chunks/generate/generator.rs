@@ -9,12 +9,10 @@ use bevy::{
 };
 use noise::NoiseFn;
 
+use crate::block::{BlockType, BLOCK_COUNT};
+use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
 use crate::util::primitives::Vertex;
-use crate::world::chunks::chunk::{ChunkCoordinate, ChunkData};
-use crate::world::{
-    block::{BlockType, BLOCK_COUNT},
-    world::World,
-};
+use crate::world::World;
 
 use super::noise::NoiseGenerator;
 

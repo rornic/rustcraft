@@ -4,17 +4,20 @@ use bevy::pbr::light_consts::lux;
 use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use settings::Settings;
 
+mod block;
+mod chunks;
+mod player;
 mod settings;
 mod util;
 mod world;
 
 use bevy::prelude::*;
-use world::chunks::chunk_loader::{
+use chunks::chunk_loader::{
     gather_chunks, generate_chunks, load_chunks, unload_chunks, ChunkLoader,
 };
-use world::player::{player_look, player_move, PlayerBundle};
+use player::{player_look, player_move, PlayerBundle};
 
-use crate::world::chunks::chunk::CHUNK_SIZE;
+use chunks::chunk::CHUNK_SIZE;
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -37,7 +40,7 @@ fn setup_scene(
     });
     ambient_light.brightness = 5000.0;
 
-    let game_world = crate::world::world::World::new();
+    let game_world = crate::world::World::new();
     let spawn = Vec3::new(0.0, 20.0, 0.0);
     commands.insert_resource(game_world);
 
