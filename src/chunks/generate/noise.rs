@@ -1,5 +1,5 @@
 use bevy::{math::I64Vec2, utils::HashMap};
-use noise::{Cache, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence};
+use noise::{Cache, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Turbulence};
 
 pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
     let scale: f64 = 1.0 / 4096.0;
@@ -12,7 +12,7 @@ pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
         .set_octaves(7)
         .set_persistence(0.5);
 
-    let base_continents_tu = Turbulence::<_, Perlin>::new(base_continents.clone())
+    let _ = Turbulence::<_, Perlin>::new(base_continents.clone())
         .set_seed(seed)
         .set_frequency(freq * 15.25)
         .set_power(1.0 / 40.75)

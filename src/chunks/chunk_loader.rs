@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bevy::{
     asset::{AssetServer, Assets},
-    color::Color,
     ecs::{
         component::Component,
         entity::Entity,
@@ -10,14 +9,11 @@ use bevy::{
         system::{Commands, Query, Res, ResMut, Resource},
     },
     hierarchy::Parent,
-    math::{Dir3, I64Vec3, Vec3},
+    math::{I64Vec3, Vec3},
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
     render::{
-        camera::{self, Camera},
-        mesh::Mesh,
-        primitives::Aabb,
-        render_resource::Face,
+        camera::Camera, color::Color, mesh::Mesh, primitives::Aabb, render_resource::Face,
         texture::Image,
     },
     transform::components::{GlobalTransform, Transform},
@@ -158,7 +154,7 @@ pub fn load_chunks(
                         base_color_texture: Some(asset_server.load::<Image>("textures/blocks.png")),
                         reflectance: 0.0,
                         cull_mode: Some(Face::Front),
-                        alpha_mode: bevy::render::alpha::AlphaMode::Blend,
+                        alpha_mode: bevy::pbr::AlphaMode::Blend,
                         ..default()
                     }),
                     transform: t,
@@ -175,11 +171,7 @@ pub fn load_chunks(
     }
 }
 
-pub fn unload_chunks(
-    mut commands: Commands,
-    mut chunk_loader: ResMut<ChunkLoader>,
-    mut world: ResMut<World>,
-) {
+pub fn unload_chunks(mut commands: Commands, mut chunk_loader: ResMut<ChunkLoader>) {
     while let Some(chunk) = chunk_loader.unload_queue.pop_front() {
         if let Some(entity) = chunk_loader.loaded.get(&chunk) {
             commands.entity(*entity).despawn();
@@ -191,7 +183,7 @@ pub fn unload_chunks(
 #[tracing::instrument]
 fn all_chunks(
     camera_pos: Vec3,
-    camera_forward: Dir3,
+    camera_forward: Vec3,
     max_distance: u32,
     world: &World,
 ) -> impl Iterator<Item = ChunkCoordinate> {
@@ -244,34 +236,4 @@ fn chunk_components(chunk: ChunkCoordinate) -> (Transform, Aabb) {
     let t = Transform::from_translation(Vec3::new(pos.x, pos.y, pos.z));
     let aabb = Aabb::from_min_max(Vec3::new(0.0, 0.0, 0.0), Vec3::new(16.0, 16.0, 16.0));
     (t, aabb)
-}
-
-#[cfg(test)]
-mod tests {
-    use bevy::math::Vec3;
-
-    // use crate::world::ChunkCoordinate;
-
-    // use super::chunk_camera_direction;
-
-    // #[test]
-    // fn test_chunk_sorting() {
-    //     let mut chunks = vec![
-    //         ChunkCoordinate::new(-5, 5),
-    //         ChunkCoordinate::new(-1, 0),
-    //         ChunkCoordinate::new(0, 0),
-    //         ChunkCoordinate::new(1, 0),
-    //         ChunkCoordinate::new(1, 1),
-    //         ChunkCoordinate::new(5, 0),
-    //     ];
-    //     let camera_chunk = ChunkCoordinate::new(0, 0);
-    //     let camera_dir = Vec3::new(1.0, 0.0, 0.0);
-    //     chunks.sort_by(|c1, c2| {
-    //         chunk_camera_direction(camera_chunk, camera_dir, *c1)
-    //             .total_cmp(&chunk_camera_direction(camera_chunk, camera_dir, *c2))
-    //     });
-
-    //     assert_eq!(chunks[0], ChunkCoordinate::new(0, 0));
-    //     assert_eq!(chunks[1], ChunkCoordinate::new(1, 0));
-    // }
 }

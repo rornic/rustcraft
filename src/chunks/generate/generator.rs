@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bevy::{
-    math::{I64Vec2, I64Vec3, U16Vec3, Vec3},
+    math::{I64Vec2, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
         render_asset::RenderAssetUsages,
@@ -9,12 +9,10 @@ use bevy::{
 };
 use noise::NoiseFn;
 
+use super::noise::NoiseGenerator;
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
 use crate::util::primitives::Vertex;
-use crate::world::World;
-
-use super::noise::NoiseGenerator;
 
 pub struct WorldGenerator {
     world_height: u64,
@@ -35,7 +33,6 @@ impl WorldGenerator {
         &self,
         chunk: &ChunkData,
         adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
-        chunk_coord: ChunkCoordinate,
     ) -> Mesh {
         let mut vertices: Vec<Vertex> = vec![];
         let mut indices: Vec<u32> = vec![];

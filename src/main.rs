@@ -1,7 +1,6 @@
 use std::error::Error;
 
 use bevy::pbr::light_consts::lux;
-use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use settings::Settings;
 
 mod block;
@@ -49,7 +48,8 @@ fn setup_scene(
     let player = commands
         .spawn(PlayerBundle {
             transform_bundle: TransformBundle {
-                local: Transform::from_xyz(spawn.x, spawn.y, spawn.z).looking_to(Dir3::Z, Dir3::Y),
+                local: Transform::from_xyz(spawn.x, spawn.y, spawn.z)
+                    .looking_to(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)),
                 ..default()
             },
             ..default()
@@ -64,7 +64,7 @@ fn setup_scene(
                 ..default()
             },
             FogSettings {
-                color: Color::srgba_u8(135, 206, 235, 255),
+                color: Color::rgba_u8(135, 206, 235, 255),
                 falloff: FogFalloff::Linear {
                     start: (render_distance * CHUNK_SIZE) as f32 - 32.0,
                     end: (render_distance * CHUNK_SIZE) as f32,
@@ -87,7 +87,7 @@ fn setup_scene(
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
-        .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
+        .insert_resource(ClearColor(Color::rgb_u8(135, 206, 235)))
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(

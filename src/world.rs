@@ -1,7 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 
 use bevy::{
-    ecs::{component::Component, system::Resource},
+    ecs::system::Resource,
     log::info_span,
     math::{I64Vec3, Vec3},
     render::mesh::Mesh,
@@ -29,27 +29,12 @@ impl World {
         }
     }
 
-    pub fn seed(&self) -> u32 {
-        self.seed
-    }
-
-    // pub fn get_block_at(&mut self, block_coord: I64Vec3) -> BlockType {
-    //     let chunk = self.block_to_chunk_coordinate(block_coord);
-
-    //     if let Some(chunk_data) = self.chunks.get_chunk_data(chunk) {
-    //         return chunk_data.get_block_at(self.block_to_chunk_local(block_coord));
-    //     }
-
-    //     BlockType::Air
-    // }
-    //
-
     pub fn generate_chunk(
         &mut self,
         chunk_coord: ChunkCoordinate,
         noise_fn: &impl NoiseFn<f64, 2>,
     ) {
-        let span = info_span!("generate_chunk").entered();
+        let _ = info_span!("generate_chunk").entered();
         if self.is_chunk_generated(chunk_coord) {
             return;
         }
@@ -65,26 +50,12 @@ impl World {
         }
     }
 
-    pub fn can_generate_chunk_mesh(&mut self, chunk_coord: ChunkCoordinate) -> bool {
-        let chunk_data = self.chunks.get_chunk_data(chunk_coord);
-        match chunk_data {
-            Some(chunk_data) => {
-                !chunk_data.empty()
-                    && chunk_coord
-                        .adjacent()
-                        .iter()
-                        .all(|coord| self.is_chunk_generated(*coord))
-            }
-            None => false,
-        }
-    }
-
     pub fn generate_chunk_mesh(&mut self, chunk_coord: ChunkCoordinate) -> Mesh {
-        let span = info_span!("generate_chunk_mesh").entered();
+        let _ = info_span!("generate_chunk_mesh").entered();
         let chunk_data = self.chunks.get_chunk_data(chunk_coord).unwrap();
         let adjacent_chunks = self.adjacent_chunk_data(chunk_coord);
         self.generator
-            .generate_chunk_mesh(&chunk_data, adjacent_chunks, chunk_coord)
+            .generate_chunk_mesh(&chunk_data, adjacent_chunks)
     }
 
     pub fn get_chunk_data(&mut self, chunk_coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
@@ -108,20 +79,6 @@ impl World {
             .get_chunk_data(chunk_coord)
             .map(|chunk_data| chunk_data.empty())
             .unwrap_or(false)
-    }
-
-    pub fn are_neighbours_generated(&mut self, chunk_coord: ChunkCoordinate) -> bool {
-        self.adjacent_chunk_data(chunk_coord)
-            .iter()
-            .all(|c| c.is_some())
-    }
-
-    pub fn is_chunk_dirty(&mut self, chunk_coord: ChunkCoordinate) -> bool {
-        let chunk_data = self.chunks.get_chunk_data(chunk_coord);
-        if let Some(chunk_data) = chunk_data {
-            return chunk_data.dirty;
-        }
-        return false;
     }
 
     pub fn chunk_to_world(&self, chunk_coord: ChunkCoordinate) -> Vec3 {

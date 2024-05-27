@@ -8,7 +8,7 @@ use bevy::{
     },
     hierarchy::Parent,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
-    math::{Dir3, Vec3},
+    math::Vec3,
     render::camera::Camera,
     time::Time,
     transform::{components::Transform, TransformBundle},
@@ -103,39 +103,12 @@ pub fn player_look(
 
     for ev in motion_evr.read() {
         player_transform.rotate_axis(
-            Dir3::Y,
+            Vec3::new(0.0, 1.0, 0.0),
             -ev.delta.x * player_look.sensitivity * time.delta_seconds(),
         );
         camera_transform.rotate_axis(
-            Dir3::X,
+            Vec3::new(1.0, 0.0, 0.0),
             -ev.delta.y * player_look.sensitivity * time.delta_seconds(),
         );
     }
 }
-
-// #[derive(Default)]
-// pub struct PlayerBlockBreak {}
-
-// impl<'a> System<'a> for PlayerBlockBreak {
-//     type SystemData = (
-//         ReadStorage<'a, Transform>,
-//         ReadStorage<'a, Camera>,
-//         Write<'a, World>,
-//         Read<'a, Input>,
-//     );
-
-//     fn run(&mut self, (transforms, cameras, mut world, input): Self::SystemData) {
-//         for (transform, camera) in (&transforms, &cameras).join() {
-//             if input.mouse.is_left_pressed() {
-//                 if let Some(hit) = physics::raycast::block_aligned_raycast(
-//                     &world,
-//                     transform.position,
-//                     camera.look_direction(),
-//                     5.0,
-//                 ) {
-//                     world.set_block_at(hit.position, BlockType::Air);
-//                 }
-//             }
-//         }
-//     }
-// }

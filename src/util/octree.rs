@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use bevy::{math::Vec3, utils::HashMap};
-use tracing::{info_span, trace_span};
+use tracing::trace_span;
 
 pub struct OctreeNode<Data> {
     id: usize,
@@ -22,10 +22,6 @@ impl<Data> OctreeNode<Data> {
             depth,
             data,
         }
-    }
-
-    pub fn depth(&self) -> u8 {
-        self.depth
     }
 
     pub fn id(&self) -> usize {
@@ -152,7 +148,7 @@ impl<Data> Octree<Data> {
     }
 
     pub fn query_octant(&mut self, point: Vec3) -> Arc<RwLock<OctreeNode<Data>>> {
-        let span = trace_span!("query_octant").entered();
+        let _ = trace_span!("query_octant").entered();
         let mut i = 0;
 
         let mut current_id = 0;
