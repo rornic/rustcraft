@@ -1,20 +1,22 @@
 use std::error::Error;
 
 use bevy::pbr::light_consts::lux;
-use bevy::pbr::ScreenSpaceAmbientOcclusionBundle;
 use settings::Settings;
 
+mod block;
+mod chunks;
+mod player;
 mod settings;
 mod util;
 mod world;
 
 use bevy::prelude::*;
-use world::ecs::chunk_loader::{generate_chunks, load_chunks, ChunkLoader};
-use world::ecs::player::{player_look, player_move};
-use world::World;
+use chunks::chunk_loader::{
+    gather_chunks, generate_chunks, load_chunks, unload_chunks, ChunkLoader,
+};
+use player::{player_look, player_move, PlayerBundle};
 
-use crate::world::ecs::player::PlayerBundle;
-use crate::world::CHUNK_SIZE;
+use chunks::chunk::CHUNK_SIZE;
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -37,23 +39,24 @@ fn setup_scene(
     });
     ambient_light.brightness = 5000.0;
 
-    let game_world = World::default();
-    let spawn = game_world.spawn();
-    commands.spawn(game_world);
+    let game_world = crate::world::World::new();
+    let spawn = Vec3::new(0.0, 20.0, 0.0);
+    commands.insert_resource(game_world);
 
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
 
     let player = commands
         .spawn(PlayerBundle {
             transform_bundle: TransformBundle {
-                local: Transform::from_xyz(spawn.x, spawn.y, spawn.z).looking_to(Dir3::Z, Dir3::Y),
+                local: Transform::from_xyz(spawn.x, spawn.y, spawn.z)
+                    .looking_to(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)),
                 ..default()
             },
             ..default()
         })
         .id();
 
-    let render_distance = 24;
+    let render_distance = 16;
     let camera = commands
         .spawn((
             Camera3dBundle {
@@ -61,20 +64,19 @@ fn setup_scene(
                 ..default()
             },
             FogSettings {
-                color: Color::srgb_u8(135, 206, 235),
+                color: Color::rgba_u8(135, 206, 235, 255),
                 falloff: FogFalloff::Linear {
-                    start: ((render_distance - 1) * CHUNK_SIZE) as f32,
+                    start: (render_distance * CHUNK_SIZE) as f32 - 32.0,
                     end: (render_distance * CHUNK_SIZE) as f32,
                 },
                 ..default()
             },
         ))
-        .insert(ScreenSpaceAmbientOcclusionBundle::default())
         .id();
     commands.entity(player).push_children(&[camera]);
 
     let chunk_loader = ChunkLoader::new(render_distance as u32);
-    commands.spawn(chunk_loader);
+    commands.insert_resource(chunk_loader);
 
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     commands.spawn(settings);
@@ -85,12 +87,16 @@ fn setup_scene(
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
-        .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
+        .insert_resource(ClearColor(Color::rgb_u8(135, 206, 235)))
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
-            (generate_chunks, load_chunks, player_move, player_look),
+            (
+                (gather_chunks, generate_chunks, load_chunks, unload_chunks).chain(),
+                player_move,
+                player_look,
+            ),
         )
         .run();
 }
