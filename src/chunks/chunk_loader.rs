@@ -154,7 +154,6 @@ pub fn load_chunks(
                         base_color_texture: Some(asset_server.load::<Image>("textures/blocks.png")),
                         reflectance: 0.0,
                         cull_mode: Some(Face::Front),
-                        alpha_mode: bevy::pbr::AlphaMode::Blend,
                         ..default()
                     }),
                     transform: t,

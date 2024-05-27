@@ -194,18 +194,23 @@ impl WorldGenerator {
 
                 for y in 0..chunk_height {
                     let world_y = world_y + y as i64;
+
                     let block = if world_y >= 90 && ((gradient_x + gradient_z) <= 2.0) {
                         BlockType::Snow
                     } else if world_y >= 70 && ((gradient_x + gradient_z) >= 2.0) {
                         BlockType::Stone
-                    } else if world_y as i64 == 0 {
-                        BlockType::Water
-                    } else if world_y <= 10 {
-                        BlockType::Sand
-                    } else {
+                    } else if world_y >= 36 {
                         BlockType::Grass
+                    } else {
+                        BlockType::Sand
                     };
                     chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), block);
+                }
+
+                if world_y <= chunk_data.size as i64 {
+                    for y in chunk_height..chunk_data.size as u64 {
+                        chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), BlockType::Water);
+                    }
                 }
             }
         }
