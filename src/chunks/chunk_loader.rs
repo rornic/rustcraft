@@ -13,16 +13,19 @@ use bevy::{
     pbr::{PbrBundle, StandardMaterial},
     prelude::default,
     render::{
-        camera::Camera, color::Color, mesh::Mesh, primitives::Aabb, render_resource::Face,
+        camera::{self, Camera},
+        color::Color,
+        mesh::Mesh,
+        primitives::Aabb,
+        render_resource::Face,
         texture::Image,
     },
     transform::components::{GlobalTransform, Transform},
 };
+use priority_queue::PriorityQueue;
 
 use super::chunk::ChunkCoordinate;
 use crate::{player::PlayerLook, world::World};
-
-use crate::player::Player;
 
 #[derive(Component)]
 pub struct Chunk {
@@ -37,6 +40,7 @@ pub struct ChunkLoader {
     load_queue: VecDeque<ChunkCoordinate>,
     unload_queue: VecDeque<ChunkCoordinate>,
     loaded: HashMap<ChunkCoordinate, Entity>,
+    chunk_iterator: ChunkIterator,
 }
 
 impl ChunkLoader {
@@ -47,6 +51,7 @@ impl ChunkLoader {
             load_queue: VecDeque::new(),
             unload_queue: VecDeque::new(),
             loaded: HashMap::new(),
+            chunk_iterator: ChunkIterator::new(),
         }
     }
 }
@@ -54,10 +59,8 @@ impl ChunkLoader {
 pub fn gather_chunks(
     mut chunk_loader: ResMut<ChunkLoader>,
     mut world: ResMut<World>,
-    player_query: Query<&Transform, With<Player>>,
     camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
 ) {
-    let player = player_query.get_single().expect("could not find player");
     let (_, camera) = camera_query.get_single().expect("could not find camera");
 
     let queued_for_generation = chunk_loader
@@ -78,15 +81,23 @@ pub fn gather_chunks(
         .cloned()
         .collect::<HashSet<ChunkCoordinate>>();
 
-    let all_chunks: Vec<ChunkCoordinate> = all_chunks(
-        player.translation,
-        camera.forward(),
-        chunk_loader.render_distance,
-        &world,
-    )
-    .collect();
+    let camera_pos = camera.translation();
+    let camera_chunk = world.block_to_chunk_coordinate(I64Vec3::new(
+        camera_pos.x as i64,
+        camera_pos.y as i64,
+        camera_pos.z as i64,
+    ));
 
-    let all_chunks_set: HashSet<ChunkCoordinate> = all_chunks.iter().cloned().collect();
+    let camera_forward = camera.forward();
+    chunk_loader
+        .chunk_iterator
+        .update(camera_chunk, camera_forward, &world);
+
+    let distance = chunk_loader.render_distance;
+    let next_chunks: Vec<ChunkCoordinate> = chunk_loader
+        .chunk_iterator
+        .next_chunks(8, distance, &world)
+        .collect();
 
     let loaded = chunk_loader
         .loaded
@@ -95,20 +106,22 @@ pub fn gather_chunks(
         .collect::<HashSet<ChunkCoordinate>>();
 
     let to_unload = loaded
-        .difference(&all_chunks_set)
-        .filter(|chunk| !queued_for_unload.contains(chunk));
+        .iter()
+        .filter(|chunk| !queued_for_unload.contains(chunk))
+        .filter(|chunk| !queued_for_generation.contains(chunk))
+        .filter(|chunk| !queued_for_loading.contains(chunk))
+        .filter(|chunk| chunk_distance(**chunk, camera_chunk) > distance);
 
     for chunk in to_unload {
         chunk_loader.unload_queue.push_front(*chunk);
     }
 
-    let to_generate = all_chunks
+    let to_generate = next_chunks
         .iter()
         .filter(|chunk| !queued_for_generation.contains(chunk))
         .filter(|chunk| !queued_for_loading.contains(chunk))
         .filter(|chunk| !loaded.contains(*chunk))
-        .filter(|chunk| !world.is_chunk_empty(**chunk))
-        .take(16);
+        .filter(|chunk| !world.is_chunk_empty(**chunk));
 
     for chunk in to_generate {
         chunk_loader.generate_queue.push_front(*chunk);
@@ -179,49 +192,6 @@ pub fn unload_chunks(mut commands: Commands, mut chunk_loader: ResMut<ChunkLoade
     }
 }
 
-#[tracing::instrument]
-fn all_chunks(
-    camera_pos: Vec3,
-    camera_forward: Vec3,
-    max_distance: u32,
-    world: &World,
-) -> impl Iterator<Item = ChunkCoordinate> {
-    let camera_chunk = world.block_to_chunk_coordinate(I64Vec3::new(
-        camera_pos.x as i64,
-        camera_pos.y as i64,
-        camera_pos.z as i64,
-    ));
-
-    let mut stack = VecDeque::new();
-    stack.push_back((camera_chunk, 0));
-
-    let mut seen = HashSet::new();
-    let mut all_chunks = Vec::new();
-    while !stack.is_empty() {
-        let (next, distance) = stack.pop_front().unwrap();
-        all_chunks.push(next);
-        seen.insert(next);
-
-        if distance >= max_distance {
-            continue;
-        }
-
-        for neighbour in next.adjacent().into_iter() {
-            let direction: Vec3 =
-                (world.chunk_to_world(neighbour) - world.chunk_to_world(camera_chunk)).normalize();
-            let dot = camera_forward.dot(direction);
-            if !seen.contains(&neighbour) && dot > 0.5 {
-                stack.push_back((
-                    neighbour,
-                    (neighbour.0 - camera_chunk.0).abs().max_element() as u32,
-                ));
-            }
-            seen.insert(neighbour);
-        }
-    }
-    all_chunks.into_iter()
-}
-
 fn chunk_world_pos(chunk: ChunkCoordinate) -> Vec3 {
     Vec3::new(
         (chunk.0.x * 16) as f32,
@@ -230,9 +200,113 @@ fn chunk_world_pos(chunk: ChunkCoordinate) -> Vec3 {
     )
 }
 
+fn chunk_distance(chunk: ChunkCoordinate, other: ChunkCoordinate) -> u32 {
+    (chunk.0 - other.0).abs().max_element() as u32
+}
+
 fn chunk_components(chunk: ChunkCoordinate) -> (Transform, Aabb) {
     let pos = chunk_world_pos(chunk);
     let t = Transform::from_translation(Vec3::new(pos.x, pos.y, pos.z));
     let aabb = Aabb::from_min_max(Vec3::new(0.0, 0.0, 0.0), Vec3::new(16.0, 16.0, 16.0));
     (t, aabb)
+}
+
+/// `ChunkIterator` enables iteration of nearby chunks over multiple frames
+/// by storing BFS state in memory and dynamically recalculating when the camera chunk or direction changes
+#[derive(Debug)]
+struct ChunkIterator {
+    seen: HashSet<ChunkCoordinate>,
+    camera_chunk: ChunkCoordinate,
+    camera_forward: Vec3,
+    queue: PriorityQueue<ChunkCoordinate, u32>,
+}
+
+impl ChunkIterator {
+    fn new() -> Self {
+        Self {
+            seen: HashSet::new(),
+            camera_chunk: ChunkCoordinate(I64Vec3::ZERO),
+            camera_forward: Vec3::ZERO,
+            queue: PriorityQueue::new(),
+        }
+    }
+
+    #[tracing::instrument]
+    fn next_chunks(
+        &mut self,
+        count: usize,
+        max_distance: u32,
+        world: &World,
+    ) -> impl Iterator<Item = ChunkCoordinate> {
+        let mut next_chunks = Vec::new();
+        while !self.queue.is_empty() && next_chunks.len() < count {
+            let (next, _) = self.queue.pop().unwrap();
+            next_chunks.push(next);
+            self.seen.insert(next);
+
+            if chunk_distance(next, self.camera_chunk) >= max_distance {
+                continue;
+            }
+
+            for neighbour in next.adjacent().into_iter() {
+                self.queue_chunk(neighbour, world);
+            }
+        }
+        next_chunks.into_iter()
+    }
+
+    fn queue_chunk(&mut self, chunk: ChunkCoordinate, world: &World) {
+        if self.seen.contains(&chunk) {
+            return;
+        }
+
+        let dot = self.dot(chunk, world);
+        if dot < 0.5 {
+            return;
+        }
+
+        let score = self.calculate_priority(chunk, world);
+        self.queue.push(chunk, score);
+        self.seen.insert(chunk);
+    }
+
+    fn dot(&self, chunk: ChunkCoordinate, world: &World) -> f32 {
+        let direction: Vec3 =
+            (world.chunk_to_world(chunk) - world.chunk_to_world(self.camera_chunk)).normalize();
+        self.camera_forward.dot(direction)
+    }
+
+    fn calculate_priority(&self, chunk: ChunkCoordinate, world: &World) -> u32 {
+        (100.0 * self.dot(chunk, world) / chunk_distance(chunk, self.camera_chunk) as f32).round()
+            as u32
+    }
+
+    fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3, world: &World) {
+        // reset if camera turns too far from original direction
+        if camera_forward.dot(self.camera_forward) < 0.75 {
+            self.reset(camera_chunk, camera_forward, world);
+            return;
+        }
+
+        // reset if chunk changes
+        if camera_chunk != self.camera_chunk {
+            self.reset(camera_chunk, camera_forward, world);
+            return;
+        }
+    }
+
+    fn reset(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3, world: &World) {
+        self.seen.clear();
+
+        self.camera_chunk = camera_chunk;
+        self.camera_forward = camera_forward;
+
+        let queued_chunks: Vec<ChunkCoordinate> =
+            self.queue.iter().map(|(chunk, _)| *chunk).collect();
+        for chunk in queued_chunks {
+            self.queue
+                .change_priority(&chunk, self.calculate_priority(chunk, world));
+        }
+        self.queue.push(camera_chunk, 0);
+    }
 }

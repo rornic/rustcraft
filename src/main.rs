@@ -93,7 +93,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                (gather_chunks, generate_chunks, load_chunks, unload_chunks).chain(),
+                (gather_chunks, generate_chunks, load_chunks, unload_chunks),
                 player_move,
                 player_look,
             ),
