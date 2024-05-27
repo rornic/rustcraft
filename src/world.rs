@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 use bevy::{
     ecs::{component::Component, system::Resource},
@@ -142,6 +142,12 @@ impl World {
 
     fn block_to_chunk_local(&self, block_coord: I64Vec3) -> ChunkCoordinate {
         (block_coord / self.chunks.chunk_size as i64).into()
+    }
+}
+
+impl Debug for World {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("World").field("seed", &self.seed).finish()
     }
 }
 

@@ -88,7 +88,6 @@ pub fn gather_chunks(
         chunk_loader.render_distance,
         &world,
     )
-    .filter(|chunk| !world.is_chunk_empty(*chunk))
     .collect();
 
     let all_chunks_set: HashSet<ChunkCoordinate> = all_chunks.iter().cloned().collect();
@@ -112,6 +111,7 @@ pub fn gather_chunks(
         .filter(|chunk| !queued_for_generation.contains(chunk))
         .filter(|chunk| !queued_for_loading.contains(chunk))
         .filter(|chunk| !loaded.contains(*chunk))
+        .filter(|chunk| !world.is_chunk_empty(**chunk))
         .take(16);
 
     for chunk in to_generate {
@@ -188,6 +188,7 @@ pub fn unload_chunks(
     }
 }
 
+#[tracing::instrument]
 fn all_chunks(
     camera_pos: Vec3,
     camera_forward: Dir3,
@@ -218,7 +219,7 @@ fn all_chunks(
             let direction: Vec3 =
                 (world.chunk_to_world(neighbour) - world.chunk_to_world(camera_chunk)).normalize();
             let dot = camera_forward.dot(direction);
-            if !seen.contains(&neighbour) && dot > 0.0 {
+            if !seen.contains(&neighbour) && dot > 0.5 {
                 stack.push_back((
                     neighbour,
                     (neighbour.0 - camera_chunk.0).abs().max_element() as u32,
