@@ -11,12 +11,11 @@ mod util;
 mod world;
 
 use bevy::prelude::*;
-use chunks::chunk_loader::{
-    gather_chunks, generate_chunks, load_chunks, unload_chunks, ChunkLoader,
+use chunks::{
+    chunk_loader::{gather_chunks, generate_chunks, load_chunks, unload_chunks, ChunkLoader},
+    material::ChunkMaterial,
 };
 use player::{player_look, player_move, PlayerBundle};
-
-use chunks::chunk::CHUNK_SIZE;
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -56,22 +55,12 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 16;
+    let render_distance = 32;
     let camera = commands
-        .spawn((
-            Camera3dBundle {
-                transform: Transform::from_xyz(0.0, 2.0, 0.0),
-                ..default()
-            },
-            FogSettings {
-                color: Color::rgba_u8(135, 206, 235, 255),
-                falloff: FogFalloff::Linear {
-                    start: (render_distance * CHUNK_SIZE) as f32 - 32.0,
-                    end: (render_distance * CHUNK_SIZE) as f32,
-                },
-                ..default()
-            },
-        ))
+        .spawn((Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 2.0, 0.0),
+            ..default()
+        },))
         .id();
     commands.entity(player).push_children(&[camera]);
 
@@ -86,7 +75,10 @@ fn setup_scene(
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
+        .add_plugins((
+            DefaultPlugins.set(ImagePlugin::default_nearest()),
+            MaterialPlugin::<ChunkMaterial>::default(),
+        ))
         .insert_resource(ClearColor(Color::rgb_u8(135, 206, 235)))
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)

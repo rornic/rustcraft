@@ -207,7 +207,7 @@ impl WorldGenerator {
                     chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), block);
                 }
 
-                if world_y <= chunk_data.size as i64 {
+                if world_y <= 16 {
                     for y in chunk_height..chunk_data.size as u64 {
                         chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), BlockType::Water);
                     }
