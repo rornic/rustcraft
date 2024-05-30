@@ -192,12 +192,16 @@ impl WorldGenerator {
                             .get(I64Vec2::new(world_x, world_z - 1), noise_fn)))
                 .abs();
 
+                let combined_gradient = (gradient_x + gradient_z);
+
                 for y in 0..chunk_height {
                     let world_y = world_y + y as i64;
 
-                    let block = if world_y >= 90 && ((gradient_x + gradient_z) <= 2.0) {
+                    let block = if world_y >= 90 && (combined_gradient <= 2.0) {
                         BlockType::Snow
-                    } else if world_y >= 70 && ((gradient_x + gradient_z) >= 2.0) {
+                    } else if world_y >= 70 && combined_gradient >= 2.0
+                        || (world_y >= 40 && combined_gradient >= 4.0)
+                    {
                         BlockType::Stone
                     } else if world_y >= 36 {
                         BlockType::Grass
