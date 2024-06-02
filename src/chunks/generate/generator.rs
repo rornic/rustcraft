@@ -7,7 +7,6 @@ use bevy::{
         render_asset::RenderAssetUsages,
     },
 };
-use noise::NoiseFn;
 
 use super::noise::NoiseGenerator;
 use crate::block::{BlockType, BLOCK_COUNT};
@@ -19,11 +18,11 @@ pub struct WorldGenerator {
     noise_generator: NoiseGenerator,
 }
 
-impl Default for WorldGenerator {
-    fn default() -> Self {
+impl WorldGenerator {
+    pub fn new(seed: u32) -> Self {
         Self {
             world_height: 256,
-            noise_generator: Default::default(),
+            noise_generator: NoiseGenerator::new(seed),
         }
     }
 }
@@ -149,11 +148,7 @@ impl WorldGenerator {
         mesh
     }
 
-    pub fn generate_chunk(
-        &mut self,
-        chunk_pos: ChunkCoordinate,
-        noise_fn: &impl NoiseFn<f64, 2>,
-    ) -> ChunkData {
+    pub fn generate_chunk(&mut self, chunk_pos: ChunkCoordinate) -> ChunkData {
         let mut chunk_data = ChunkData::default();
 
         for x in 0..chunk_data.size {
@@ -163,9 +158,7 @@ impl WorldGenerator {
                     chunk_pos.0.y * chunk_data.size as i64,
                     chunk_pos.0.z * chunk_data.size as i64 + z as i64,
                 );
-                let noise_val = self
-                    .noise_generator
-                    .get(I64Vec2::new(world_x, world_z), noise_fn);
+                let noise_val = self.noise_generator.get(I64Vec2::new(world_x, world_z));
 
                 let world_height = (noise_val * self.world_height as f64).round() as u64;
                 let chunk_height = if world_y > 0 {
@@ -176,23 +169,15 @@ impl WorldGenerator {
                 };
 
                 let gradient_x = (self.world_height as f64
-                    * (self
-                        .noise_generator
-                        .get(I64Vec2::new(world_x + 1, world_z), noise_fn)
-                        - self
-                            .noise_generator
-                            .get(I64Vec2::new(world_x - 1, world_z), noise_fn)))
+                    * (self.noise_generator.get(I64Vec2::new(world_x + 1, world_z))
+                        - self.noise_generator.get(I64Vec2::new(world_x - 1, world_z))))
                 .abs();
                 let gradient_z = (self.world_height as f64
-                    * (self
-                        .noise_generator
-                        .get(I64Vec2::new(world_x, world_z + 1), noise_fn)
-                        - self
-                            .noise_generator
-                            .get(I64Vec2::new(world_x, world_z - 1), noise_fn)))
+                    * (self.noise_generator.get(I64Vec2::new(world_x, world_z + 1))
+                        - self.noise_generator.get(I64Vec2::new(world_x, world_z - 1))))
                 .abs();
 
-                let combined_gradient = (gradient_x + gradient_z);
+                let combined_gradient = gradient_x + gradient_z;
 
                 for y in 0..chunk_height {
                     let world_y = world_y + y as i64;

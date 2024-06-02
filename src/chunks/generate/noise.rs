@@ -1,7 +1,10 @@
+use std::sync::{Arc, RwLock};
+
 use bevy::{math::I64Vec2, utils::HashMap};
 use noise::{
     Cache, Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence,
 };
+use tracing::info_span;
 
 pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
     let scale: f64 = 1.0 / 1024.0;
@@ -32,29 +35,38 @@ pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
     let generator = Clamp::new(ScalePoint::new(combined).set_scale(scale))
         .set_lower_bound(0.0)
         .set_upper_bound(1.0);
+
     Cache::new(generator)
 }
 
 pub struct NoiseGenerator {
-    noise_cache: HashMap<I64Vec2, f64>,
+    cache: HashMap<I64Vec2, f64>,
+    source: Arc<RwLock<dyn NoiseFn<f64, 2>>>,
 }
 
-impl Default for NoiseGenerator {
-    fn default() -> Self {
+unsafe impl Send for NoiseGenerator {}
+unsafe impl Sync for NoiseGenerator {}
+
+impl NoiseGenerator {
+    pub fn new(seed: u32) -> Self {
         Self {
-            noise_cache: HashMap::new(),
+            cache: HashMap::new(),
+            source: Arc::new(RwLock::new(world_noise(seed))),
         }
     }
 }
 
 impl NoiseGenerator {
-    pub fn get(&mut self, pos: I64Vec2, noise_fn: &impl NoiseFn<f64, 2>) -> f64 {
-        if self.noise_cache.contains_key(&pos) {
-            return *self.noise_cache.get(&pos).unwrap();
+    pub fn get(&mut self, pos: I64Vec2) -> f64 {
+        let _ = info_span!("noise_get").entered();
+
+        if self.cache.contains_key(&pos) {
+            return *self.cache.get(&pos).unwrap();
         }
 
-        let value = noise_fn.get([pos.x as f64, pos.y as f64]);
-        self.noise_cache.insert(pos, value);
+        let read = self.source.read().unwrap();
+        let value = read.get([pos.x as f64, pos.y as f64]);
+        self.cache.insert(pos, value);
         value
     }
 }

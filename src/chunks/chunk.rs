@@ -120,7 +120,7 @@ impl ChunkOctree {
     }
 
     pub fn set_chunk_data(&mut self, coord: ChunkCoordinate, chunk_data: ChunkData) {
-        let _ = info_span!("get_chunk_data").entered();
+        let _ = info_span!("set_chunk_data").entered();
         let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
 
         let mut write = chunk_octant.write().unwrap();

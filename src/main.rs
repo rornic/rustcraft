@@ -39,6 +39,7 @@ fn setup_scene(
     ambient_light.brightness = 5000.0;
 
     let game_world = crate::world::World::new();
+    info!("world seed is {}", game_world.seed());
     let spawn = Vec3::new(0.0, 20.0, 0.0);
     commands.insert_resource(game_world);
 
@@ -55,7 +56,7 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 32;
+    let render_distance = 16;
     let camera = commands
         .spawn((Camera3dBundle {
             transform: Transform::from_xyz(0.0, 2.0, 0.0),

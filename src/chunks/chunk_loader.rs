@@ -10,16 +10,9 @@ use bevy::{
     },
     hierarchy::Parent,
     math::{I64Vec3, Vec3},
-    pbr::{wireframe::Wireframe, MaterialMeshBundle},
+    pbr::MaterialMeshBundle,
     prelude::default,
-    render::{
-        camera::{self, Camera},
-        color::Color,
-        mesh::Mesh,
-        primitives::Aabb,
-        render_resource::Face,
-        texture::Image,
-    },
+    render::{camera::Camera, color::Color, mesh::Mesh, primitives::Aabb, texture::Image},
     transform::components::{GlobalTransform, Transform},
 };
 use priority_queue::PriorityQueue;
@@ -29,8 +22,8 @@ use crate::{player::PlayerLook, world::World};
 
 #[derive(Component)]
 pub struct Chunk {
-    coord: ChunkCoordinate,
-    dirty: bool,
+    _coord: ChunkCoordinate,
+    _dirty: bool,
 }
 
 #[derive(Resource)]
@@ -91,7 +84,7 @@ pub fn gather_chunks(
     let camera_forward = camera.forward();
     chunk_loader
         .chunk_iterator
-        .update(camera_chunk, camera_forward, &world);
+        .update(camera_chunk, camera_forward);
 
     let distance = chunk_loader.render_distance;
     let next_chunks: Vec<ChunkCoordinate> = chunk_loader
@@ -171,8 +164,8 @@ pub fn load_chunks(
                 },
                 aabb,
                 Chunk {
-                    coord: chunk,
-                    dirty: false,
+                    _coord: chunk,
+                    _dirty: false,
                 },
             ))
             .id();
@@ -287,21 +280,21 @@ impl ChunkIterator {
         (score * 100.0).round() as u32
     }
 
-    fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3, world: &World) {
+    fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3) {
         // reset if camera turns too far from original direction
         if camera_forward.dot(self.camera_forward) < 0.75 {
-            self.reset(camera_chunk, camera_forward, world);
+            self.reset(camera_chunk, camera_forward);
             return;
         }
 
         if self.camera_chunk != camera_chunk {
-            self.reset(camera_chunk, camera_forward, world);
+            self.reset(camera_chunk, camera_forward);
             return;
         }
         self.camera_chunk = camera_chunk;
     }
 
-    fn reset(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3, world: &World) {
+    fn reset(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3) {
         self.seen.clear();
 
         self.camera_chunk = camera_chunk;

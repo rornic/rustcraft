@@ -6,11 +6,10 @@ use bevy::{
     math::{I64Vec3, Vec3},
     render::mesh::Mesh,
 };
-use noise::NoiseFn;
 
 use super::{
     chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree},
-    chunks::generate::{generator::WorldGenerator, noise::world_noise},
+    chunks::generate::generator::WorldGenerator,
 };
 
 #[derive(Resource)]
@@ -22,31 +21,30 @@ pub struct World {
 
 impl World {
     pub fn new() -> Self {
+        let seed = rand::random();
         Self {
-            seed: rand::random(),
+            seed,
             chunks: ChunkOctree::default(),
-            generator: WorldGenerator::default(),
+            generator: WorldGenerator::new(seed),
         }
     }
 
-    pub fn generate_chunk(
-        &mut self,
-        chunk_coord: ChunkCoordinate,
-        noise_fn: &impl NoiseFn<f64, 2>,
-    ) {
-        let _ = info_span!("generate_chunk").entered();
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
+    pub fn generate_chunk(&mut self, chunk_coord: ChunkCoordinate) {
         if self.is_chunk_generated(chunk_coord) {
             return;
         }
 
-        let chunk_data = self.generator.generate_chunk(chunk_coord, noise_fn);
+        let chunk_data = self.generator.generate_chunk(chunk_coord);
         self.chunks.set_chunk_data(chunk_coord, chunk_data);
     }
 
     pub fn generate_chunks(&mut self, chunk_coords: Vec<ChunkCoordinate>) {
-        let noise_fn = world_noise(self.seed);
         for chunk in chunk_coords {
-            self.generate_chunk(chunk, &noise_fn);
+            self.generate_chunk(chunk);
         }
     }
 
@@ -86,18 +84,6 @@ impl World {
     }
 
     pub fn block_to_chunk_coordinate(&self, block_coord: I64Vec3) -> ChunkCoordinate {
-        (block_coord / self.chunks.chunk_size as i64).into()
-    }
-
-    pub fn world_to_chunk_coordinate(&self, world_pos: Vec3) -> ChunkCoordinate {
-        ChunkCoordinate(I64Vec3::new(
-            (world_pos.x / self.chunks.chunk_size as f32) as i64,
-            (world_pos.y / self.chunks.chunk_size as f32) as i64,
-            (world_pos.z / self.chunks.chunk_size as f32) as i64,
-        ))
-    }
-
-    fn block_to_chunk_local(&self, block_coord: I64Vec3) -> ChunkCoordinate {
         (block_coord / self.chunks.chunk_size as i64).into()
     }
 }
