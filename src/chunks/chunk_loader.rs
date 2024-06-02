@@ -11,19 +11,34 @@ use bevy::{
     hierarchy::Parent,
     math::{I64Vec3, Vec3},
     pbr::MaterialMeshBundle,
-    prelude::default,
     render::{camera::Camera, color::Color, mesh::Mesh, primitives::Aabb, texture::Image},
+    tasks::{AsyncComputeTaskPool, Task},
     transform::components::{GlobalTransform, Transform},
+    utils::futures,
 };
 use priority_queue::PriorityQueue;
 
-use super::{chunk::ChunkCoordinate, material::ChunkMaterial};
+use super::{
+    chunk::{ChunkCoordinate, ChunkData},
+    generate::generator::generate_chunk,
+    material::ChunkMaterial,
+};
 use crate::{player::PlayerLook, world::World};
 
 #[derive(Component)]
 pub struct Chunk {
-    _coord: ChunkCoordinate,
+    coord: ChunkCoordinate,
     _dirty: bool,
+}
+
+#[derive(Component)]
+pub struct GenerateChunkData {
+    task: Task<ChunkData>,
+}
+
+#[derive(Component)]
+struct GenerateChunkMesh {
+    task: Task<Mesh>,
 }
 
 #[derive(Resource)]
@@ -50,6 +65,7 @@ impl ChunkLoader {
 }
 
 pub fn gather_chunks(
+    mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
     mut world: ResMut<World>,
     camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
@@ -109,26 +125,51 @@ pub fn gather_chunks(
         chunk_loader.unload_queue.push_front(*chunk);
     }
 
-    let to_generate = next_chunks
+    let height = world.height;
+
+    let to_generate: Vec<ChunkCoordinate> = next_chunks
         .iter()
         .filter(|chunk| !queued_for_generation.contains(chunk))
         .filter(|chunk| !queued_for_loading.contains(chunk))
         .filter(|chunk| !loaded.contains(*chunk))
-        .filter(|chunk| !world.is_chunk_empty(**chunk));
+        .filter(|chunk| !world.is_chunk_empty(**chunk))
+        .cloned()
+        .collect();
 
+    let task_pool = AsyncComputeTaskPool::get();
     for chunk in to_generate {
-        chunk_loader.generate_queue.push_front(*chunk);
+        let noise_generator = world.noise_generator.clone();
+
+        commands.spawn((
+            Chunk {
+                coord: chunk.clone(),
+                _dirty: false,
+            },
+            GenerateChunkData {
+                task: task_pool
+                    .spawn(async move { generate_chunk(noise_generator, chunk, height) }),
+            },
+        ));
     }
 }
 
-pub fn generate_chunks(mut world: ResMut<World>, mut chunk_loader: ResMut<ChunkLoader>) {
-    while let Some(chunk) = chunk_loader.generate_queue.pop_front() {
-        let mut chunks = vec![chunk];
-        chunks.extend(chunk.adjacent());
+pub fn generate_chunks(
+    mut commands: Commands,
+    mut world: ResMut<World>,
+    mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkData)>,
+    mut chunk_loader: ResMut<ChunkLoader>,
+) {
+    let mut ready: Vec<(Entity, ChunkCoordinate, ChunkData)> = vec![];
+    for (entity, chunk, mut gen_chunk) in chunks_query.iter_mut() {
+        if let Some(chunk_data) = futures::check_ready(&mut gen_chunk.task) {
+            ready.push((entity, chunk.coord, chunk_data));
+        }
+    }
 
-        world.generate_chunks(chunks);
-
-        chunk_loader.load_queue.push_front(chunk);
+    for (entity, coord, data) in ready {
+        world.insert_chunk(coord, data);
+        chunk_loader.load_queue.push_front(coord);
+        commands.entity(entity).remove::<GenerateChunkData>();
     }
 }
 
@@ -140,13 +181,28 @@ pub fn load_chunks(
     mut materials: ResMut<Assets<ChunkMaterial>>,
     asset_server: Res<AssetServer>,
 ) {
+    let mut not_ready = VecDeque::new();
+
     let mut generated_meshes = vec![];
     while let Some(chunk) = chunk_loader.load_queue.pop_front() {
         if world.is_chunk_empty(chunk) {
             continue;
         }
 
+        if !chunk
+            .adjacent()
+            .iter()
+            .all(|chunk| world.is_chunk_generated(*chunk))
+        {
+            not_ready.push_back(chunk);
+            continue;
+        }
+
         generated_meshes.push((chunk, world.generate_chunk_mesh(chunk)));
+    }
+
+    for chunk in not_ready {
+        chunk_loader.load_queue.push_back(chunk);
     }
 
     for (chunk, mesh) in generated_meshes.into_iter() {
@@ -160,11 +216,11 @@ pub fn load_chunks(
                         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
                     }),
                     transform: t,
-                    ..default()
+                    ..Default::default()
                 },
                 aabb,
                 Chunk {
-                    _coord: chunk,
+                    coord: chunk,
                     _dirty: false,
                 },
             ))

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
 
 use bevy::{
     math::{I64Vec2, U16Vec3, Vec3},
@@ -15,14 +15,14 @@ use crate::util::primitives::Vertex;
 
 pub struct WorldGenerator {
     world_height: u64,
-    noise_generator: NoiseGenerator,
+    noise_generator: Arc<RwLock<NoiseGenerator>>,
 }
 
 impl WorldGenerator {
     pub fn new(seed: u32) -> Self {
         Self {
             world_height: 256,
-            noise_generator: NoiseGenerator::new(seed),
+            noise_generator: Arc::new(RwLock::new(NoiseGenerator::new(seed))),
         }
     }
 }
@@ -148,62 +148,72 @@ impl WorldGenerator {
         mesh
     }
 
-    pub fn generate_chunk(&mut self, chunk_pos: ChunkCoordinate) -> ChunkData {
-        let mut chunk_data = ChunkData::default();
+    pub fn generate_chunk(&self, chunk_pos: ChunkCoordinate) -> ChunkData {
+        generate_chunk(self.noise_generator.clone(), chunk_pos, self.world_height)
+    }
+}
 
-        for x in 0..chunk_data.size {
-            for z in 0..chunk_data.size {
-                let (world_x, world_y, world_z) = (
-                    chunk_pos.0.x * chunk_data.size as i64 + x as i64,
-                    chunk_pos.0.y * chunk_data.size as i64,
-                    chunk_pos.0.z * chunk_data.size as i64 + z as i64,
-                );
-                let noise_val = self.noise_generator.get(I64Vec2::new(world_x, world_z));
+pub fn generate_chunk(
+    noise_generator: Arc<RwLock<NoiseGenerator>>,
+    chunk_pos: ChunkCoordinate,
+    world_height: u64,
+) -> ChunkData {
+    let mut chunk_data = ChunkData::default();
 
-                let world_height = (noise_val * self.world_height as f64).round() as u64;
-                let chunk_height = if world_y > 0 {
-                    let positive_y = world_y as u64;
-                    (world_height - positive_y.min(world_height)).min(chunk_data.size as u64)
+    let mut noise = noise_generator.write().unwrap();
+
+    for x in 0..chunk_data.size {
+        for z in 0..chunk_data.size {
+            let (world_x, world_y, world_z) = (
+                chunk_pos.0.x * chunk_data.size as i64 + x as i64,
+                chunk_pos.0.y * chunk_data.size as i64,
+                chunk_pos.0.z * chunk_data.size as i64 + z as i64,
+            );
+            let noise_val = noise.get(I64Vec2::new(world_x, world_z));
+
+            let world_height = (noise_val * world_height as f64).round() as u64;
+            let chunk_height = if world_y > 0 {
+                let positive_y = world_y as u64;
+                (world_height - positive_y.min(world_height)).min(chunk_data.size as u64)
+            } else {
+                chunk_data.size as u64
+            };
+
+            let gradient_x = (world_height as f64
+                * (noise.get(I64Vec2::new(world_x + 1, world_z))
+                    - noise.get(I64Vec2::new(world_x - 1, world_z))))
+            .abs();
+            let gradient_z = (world_height as f64
+                * (noise.get(I64Vec2::new(world_x, world_z + 1))
+                    - noise.get(I64Vec2::new(world_x, world_z - 1))))
+            .abs();
+
+            let combined_gradient = gradient_x + gradient_z;
+
+            for y in 0..chunk_height {
+                let world_y = world_y + y as i64;
+
+                let block = if world_y >= 90 && (combined_gradient <= 2.0) {
+                    BlockType::Snow
+                } else if world_y >= 70 && combined_gradient >= 2.0
+                    || (world_y >= 40 && combined_gradient >= 4.0)
+                {
+                    BlockType::Stone
+                } else if world_y >= 36 {
+                    BlockType::Grass
                 } else {
-                    chunk_data.size as u64
+                    BlockType::Sand
                 };
+                chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), block);
+            }
 
-                let gradient_x = (self.world_height as f64
-                    * (self.noise_generator.get(I64Vec2::new(world_x + 1, world_z))
-                        - self.noise_generator.get(I64Vec2::new(world_x - 1, world_z))))
-                .abs();
-                let gradient_z = (self.world_height as f64
-                    * (self.noise_generator.get(I64Vec2::new(world_x, world_z + 1))
-                        - self.noise_generator.get(I64Vec2::new(world_x, world_z - 1))))
-                .abs();
-
-                let combined_gradient = gradient_x + gradient_z;
-
-                for y in 0..chunk_height {
-                    let world_y = world_y + y as i64;
-
-                    let block = if world_y >= 90 && (combined_gradient <= 2.0) {
-                        BlockType::Snow
-                    } else if world_y >= 70 && combined_gradient >= 2.0
-                        || (world_y >= 40 && combined_gradient >= 4.0)
-                    {
-                        BlockType::Stone
-                    } else if world_y >= 36 {
-                        BlockType::Grass
-                    } else {
-                        BlockType::Sand
-                    };
-                    chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), block);
-                }
-
-                if world_y <= 16 {
-                    for y in chunk_height..chunk_data.size as u64 {
-                        chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), BlockType::Water);
-                    }
+            if world_y <= 16 {
+                for y in chunk_height..chunk_data.size as u64 {
+                    chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), BlockType::Water);
                 }
             }
         }
-
-        chunk_data
     }
+
+    chunk_data
 }

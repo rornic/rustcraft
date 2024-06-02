@@ -1,4 +1,7 @@
-use std::sync::{Arc, RwLock};
+use std::{
+    cell::RefCell,
+    sync::{Arc, RwLock},
+};
 
 use bevy::{math::I64Vec2, utils::HashMap};
 use noise::{
@@ -40,8 +43,8 @@ pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
 }
 
 pub struct NoiseGenerator {
-    cache: HashMap<I64Vec2, f64>,
-    source: Arc<RwLock<dyn NoiseFn<f64, 2>>>,
+    cache: RefCell<HashMap<I64Vec2, f64>>,
+    source: Box<dyn NoiseFn<f64, 2>>,
 }
 
 unsafe impl Send for NoiseGenerator {}
@@ -50,8 +53,8 @@ unsafe impl Sync for NoiseGenerator {}
 impl NoiseGenerator {
     pub fn new(seed: u32) -> Self {
         Self {
-            cache: HashMap::new(),
-            source: Arc::new(RwLock::new(world_noise(seed))),
+            cache: RefCell::new(HashMap::new()),
+            source: Box::new(world_noise(seed)),
         }
     }
 }
@@ -60,13 +63,13 @@ impl NoiseGenerator {
     pub fn get(&mut self, pos: I64Vec2) -> f64 {
         let _ = info_span!("noise_get").entered();
 
-        if self.cache.contains_key(&pos) {
-            return *self.cache.get(&pos).unwrap();
+        if self.cache.borrow().contains_key(&pos) {
+            return *self.cache.borrow().get(&pos).unwrap();
         }
 
-        let read = self.source.read().unwrap();
-        let value = read.get([pos.x as f64, pos.y as f64]);
-        self.cache.insert(pos, value);
+        let value = self.source.get([pos.x as f64, pos.y as f64]);
+        self.cache.borrow_mut().insert(pos, value);
+
         value
     }
 }
