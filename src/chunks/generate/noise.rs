@@ -1,7 +1,4 @@
-use std::{
-    cell::RefCell,
-    sync::{Arc, RwLock},
-};
+use std::cell::RefCell;
 
 use bevy::{math::I64Vec2, utils::HashMap};
 use noise::{

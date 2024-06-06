@@ -5,9 +5,7 @@ use std::{
 
 use bevy::{
     ecs::system::Resource,
-    log::info_span,
     math::{I64Vec3, Vec3},
-    render::mesh::Mesh,
 };
 
 use crate::chunks::generate::noise::NoiseGenerator;
@@ -58,23 +56,22 @@ impl World {
     // }
     //
 
-    pub fn insert_chunk(&mut self, chunk_coord: ChunkCoordinate, chunk_data: ChunkData) {
-        self.chunks.set_chunk_data(chunk_coord, chunk_data);
-    }
-
-    pub fn generate_chunk_mesh(&mut self, chunk_coord: ChunkCoordinate) -> Mesh {
-        let _ = info_span!("generate_chunk_mesh").entered();
-        let chunk_data = self.chunks.get_chunk_data(chunk_coord).unwrap();
-        let adjacent_chunks = self.adjacent_chunk_data(chunk_coord);
-        self.generator
-            .generate_chunk_mesh(&chunk_data, adjacent_chunks)
+    pub fn insert_chunk(
+        &mut self,
+        chunk_coord: ChunkCoordinate,
+        chunk_data: ChunkData,
+    ) -> Arc<ChunkData> {
+        self.chunks.set_chunk_data(chunk_coord, chunk_data)
     }
 
     pub fn get_chunk_data(&mut self, chunk_coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
         self.chunks.get_chunk_data(chunk_coord)
     }
 
-    fn adjacent_chunk_data(&mut self, chunk_coord: ChunkCoordinate) -> Vec<Option<Arc<ChunkData>>> {
+    pub fn adjacent_chunk_data(
+        &mut self,
+        chunk_coord: ChunkCoordinate,
+    ) -> Vec<Option<Arc<ChunkData>>> {
         chunk_coord
             .adjacent()
             .iter()

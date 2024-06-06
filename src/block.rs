@@ -8,4 +8,10 @@ pub enum BlockType {
     Snow,
 }
 
+impl Default for BlockType {
+    fn default() -> Self {
+        Self::Air
+    }
+}
+
 pub const BLOCK_COUNT: usize = 6;
