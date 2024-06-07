@@ -8,13 +8,6 @@ struct FragmentOutput {
   @location(0) color: vec4<f32>
 }
 
-fn getFog(start: f32, end: f32, dist: f32) -> f32 {
-   if (dist>=end) { return 0.0; }
-   if (dist<=start) { return 1.0; }
-
-   return (end - dist) / (end - start);
-}
-
 @fragment
 fn fragment(
     in: VertexOutput,
@@ -25,8 +18,7 @@ fn fragment(
     let view_to_world = world_position - view_position;
 
     let dist = length(view_to_world);
-    let fog = getFog(496.0, 512.0, dist);
-    if fog < 0.1 {
+    if dist > 400.0 {
       discard;
     }
 

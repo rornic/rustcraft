@@ -58,7 +58,7 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 8;
+    let render_distance = 32;
     let camera = commands
         .spawn((Camera3dBundle {
             transform: Transform::from_xyz(0.0, 2.0, 0.0),
@@ -88,7 +88,9 @@ fn main() {
         .add_systems(
             Update,
             (
-                (gather_chunks, generate_chunks, mark_chunks, load_chunks).before(unload_chunks),
+                (gather_chunks, generate_chunks, mark_chunks, load_chunks)
+                    .chain()
+                    .before(unload_chunks),
                 unload_chunks,
                 player_move,
                 player_look,

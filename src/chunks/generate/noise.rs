@@ -4,7 +4,6 @@ use bevy::{math::I64Vec2, utils::HashMap};
 use noise::{
     Cache, Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence,
 };
-use tracing::info_span;
 
 pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
     let scale: f64 = 1.0 / 1024.0;
@@ -58,8 +57,6 @@ impl NoiseGenerator {
 
 impl NoiseGenerator {
     pub fn get(&mut self, pos: I64Vec2) -> f64 {
-        let _ = info_span!("noise_get").entered();
-
         if self.cache.borrow().contains_key(&pos) {
             return *self.cache.borrow().get(&pos).unwrap();
         }

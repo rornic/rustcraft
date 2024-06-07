@@ -66,10 +66,10 @@ pub fn generate_chunk(
             for y in 0..chunk_height {
                 let world_y = world_y + y as i64;
 
-                let block = if world_y >= 90 && (combined_gradient <= 2.0) {
+                let block = if world_y >= 90 && combined_gradient <= 2.0 {
                     BlockType::Snow
                 } else if world_y >= 70 && combined_gradient >= 2.0
-                    || (world_y >= 40 && combined_gradient >= 4.0)
+                    || (world_y >= 36 && combined_gradient >= 3.5)
                 {
                     BlockType::Stone
                 } else if world_y >= 36 {

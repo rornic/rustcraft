@@ -4,7 +4,6 @@ use bevy::{
     math::{I64Vec3, U16Vec3, Vec3},
     utils::HashMap,
 };
-use tracing::info_span;
 
 use crate::block::BlockType;
 use crate::util::octree::Octree;
@@ -107,13 +106,11 @@ impl Default for ChunkOctree {
 
 impl ChunkOctree {
     pub fn get_chunk_data(&mut self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
-        let _ = info_span!("get_chunk_data").entered();
-        // let octant = if self.cache.contains_key(&coord) {
-        //     self.octree.get_node_by_id(*self.cache.get(&coord).unwrap())
-        // } else {
-        //     self.octree.query_octant(self.chunk_centre(coord))
-        // };
-        let octant = self.octree.query_octant(self.chunk_centre(coord));
+        let octant = if self.cache.contains_key(&coord) {
+            self.octree.get_node_by_id(*self.cache.get(&coord).unwrap())
+        } else {
+            self.octree.query_octant(self.chunk_centre(coord))
+        };
 
         let read = octant.read().unwrap();
         self.cache.insert(coord, read.id());
@@ -125,7 +122,6 @@ impl ChunkOctree {
         coord: ChunkCoordinate,
         chunk_data: ChunkData,
     ) -> Arc<ChunkData> {
-        let _ = info_span!("set_chunk_data").entered();
         let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
 
         let chunk_data = Arc::new(chunk_data);
