@@ -4,17 +4,17 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetServer, Assets},
+    asset::{Assets, Handle},
     ecs::{
         component::Component,
         entity::Entity,
         query::{With, Without},
-        system::{Commands, Query, Res, ResMut, Resource},
+        system::{Commands, Query, ResMut, Resource},
     },
     hierarchy::Parent,
     math::{I64Vec3, Vec3},
     pbr::MaterialMeshBundle,
-    render::{camera::Camera, color::Color, mesh::Mesh, primitives::Aabb, texture::Image},
+    render::{camera::Camera, mesh::Mesh, primitives::Aabb},
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::{GlobalTransform, Transform},
     utils::futures,
@@ -52,14 +52,18 @@ pub struct ChunkLoader {
     render_distance: u32,
     chunk_to_entity: HashMap<ChunkCoordinate, Entity>,
     chunk_iterator: ChunkIterator,
+    material: Handle<ChunkMaterial>,
 }
 
+const MAX_CHUNKS_PER_FRAME: usize = 32;
+
 impl ChunkLoader {
-    pub fn new(render_distance: u32) -> Self {
+    pub fn new(render_distance: u32, material: Handle<ChunkMaterial>) -> Self {
         Self {
             render_distance,
             chunk_to_entity: HashMap::new(),
             chunk_iterator: ChunkIterator::new(),
+            material,
         }
     }
 }
@@ -71,7 +75,7 @@ pub fn gather_chunks(
     camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
     generating_chunks_query: Query<&Chunk, With<GenerateChunkData>>,
 ) {
-    if generating_chunks_query.iter().count() > 256 {
+    if generating_chunks_query.iter().count() > 1024 {
         return;
     }
 
@@ -92,10 +96,11 @@ pub fn gather_chunks(
     let distance = chunk_loader.render_distance;
 
     let mut next_chunks: Vec<ChunkCoordinate> = vec![];
-    while next_chunks.len() < 16 {
-        if let Some(next) = chunk_loader
-            .chunk_iterator
-            .next_chunks(16, distance, &mut world)
+    while next_chunks.len() < MAX_CHUNKS_PER_FRAME {
+        if let Some(next) =
+            chunk_loader
+                .chunk_iterator
+                .next_chunks(MAX_CHUNKS_PER_FRAME, distance, &mut world)
         {
             next_chunks
                 .extend(next.filter(|chunk| !chunk_loader.chunk_to_entity.contains_key(chunk)));
@@ -186,8 +191,7 @@ pub fn load_chunks(
     mut world: ResMut<World>,
     mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkMesh)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ChunkMaterial>>,
-    asset_server: Res<AssetServer>,
+    chunk_loader: ResMut<ChunkLoader>,
 ) {
     let mut ready = vec![];
     let task_pool = AsyncComputeTaskPool::get();
@@ -207,6 +211,10 @@ pub fn load_chunks(
                 }
             }
         }
+
+        if ready.len() > MAX_CHUNKS_PER_FRAME {
+            break;
+        }
     }
 
     for (entity, chunk, mesh) in ready {
@@ -215,10 +223,7 @@ pub fn load_chunks(
         commands.entity(entity).insert((
             MaterialMeshBundle {
                 mesh: meshes.add(mesh),
-                material: materials.add(ChunkMaterial {
-                    color: Color::WHITE,
-                    texture: Some(asset_server.load::<Image>("textures/blocks.png")),
-                }),
+                material: chunk_loader.material.clone_weak(),
                 transform: t,
                 ..Default::default()
             },

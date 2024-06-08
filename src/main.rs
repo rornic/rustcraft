@@ -29,6 +29,7 @@ fn setup_scene(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut ambient_light: ResMut<AmbientLight>,
+    mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
 ) {
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
@@ -67,13 +68,15 @@ fn setup_scene(
         .id();
     commands.entity(player).push_children(&[camera]);
 
-    let chunk_loader = ChunkLoader::new(render_distance as u32);
+    let chunk_material_handle = chunk_materials.add(ChunkMaterial {
+        color: Color::WHITE,
+        texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+    });
+    let chunk_loader = ChunkLoader::new(render_distance as u32, chunk_material_handle);
     commands.insert_resource(chunk_loader);
 
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     commands.spawn(settings);
-
-    let _ = asset_server.load::<Image>("textures/blocks.png");
 }
 
 fn main() {
