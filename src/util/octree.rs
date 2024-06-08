@@ -1,7 +1,6 @@
 use std::sync::{Arc, RwLock};
 
 use bevy::{math::Vec3, utils::HashMap};
-use tracing::trace_span;
 
 pub struct OctreeNode<Data> {
     id: usize,
@@ -44,7 +43,7 @@ impl<Data> OctreeNode<Data> {
 pub struct Octree<Data> {
     arena: HashMap<usize, Arc<RwLock<OctreeNode<Data>>>>,
     current_id: usize,
-    root_id: usize,
+    _root_id: usize,
     max_depth: u8,
 }
 
@@ -66,7 +65,7 @@ impl<Data> Octree<Data> {
             arena,
             max_depth,
             current_id: root_id + 1,
-            root_id,
+            _root_id: root_id,
         }
     }
 
@@ -148,7 +147,6 @@ impl<Data> Octree<Data> {
     }
 
     pub fn query_octant(&mut self, point: Vec3) -> Arc<RwLock<OctreeNode<Data>>> {
-        let _ = trace_span!("query_octant").entered();
         let mut i = 0;
 
         let mut current_id = 0;
@@ -213,21 +211,21 @@ mod tests {
     #[test]
     fn test_closest_child_subdivided_once() {
         let mut octree = Octree::<u32>::new(16.0, 2);
-        octree.subdivide(octree.root_id);
+        octree.subdivide(octree._root_id);
         assert_eq!(
             2,
-            octree.closest_child(Vec3::new(3.0, 1.0, 5.0), octree.root_id)
+            octree.closest_child(Vec3::new(3.0, 1.0, 5.0), octree._root_id)
         );
         assert_eq!(
             7,
-            octree.closest_child(Vec3::new(-3.0, -1.0, -5.0), octree.root_id)
+            octree.closest_child(Vec3::new(-3.0, -1.0, -5.0), octree._root_id)
         );
     }
 
     #[test]
     fn test_closest_child_subdivided_twice() {
         let mut octree = Octree::<u32>::new(16.0, 2);
-        octree.subdivide(octree.root_id);
+        octree.subdivide(octree._root_id);
         octree.subdivide(1);
         assert_eq!(9, octree.closest_child(Vec3::new(-15.0, 15.0, 15.0), 1));
         assert_eq!(14, octree.closest_child(Vec3::new(-3.0, 1.0, 8.0), 1));
@@ -237,7 +235,7 @@ mod tests {
     #[test]
     fn test_max_depth_not_exceeded() {
         let mut octree = Octree::<u32>::new(16.0, 0);
-        octree.subdivide(octree.root_id);
+        octree.subdivide(octree._root_id);
         assert_eq!(1, octree.arena.len());
     }
 

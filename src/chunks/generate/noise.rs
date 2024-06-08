@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use bevy::{math::I64Vec2, utils::HashMap};
 use noise::{
     Cache, Clamp, Fbm, MultiFractal, NoiseFn, Perlin, ScalePoint, Seedable, Select, Turbulence,
@@ -32,29 +34,36 @@ pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
     let generator = Clamp::new(ScalePoint::new(combined).set_scale(scale))
         .set_lower_bound(0.0)
         .set_upper_bound(1.0);
+
     Cache::new(generator)
 }
 
 pub struct NoiseGenerator {
-    noise_cache: HashMap<I64Vec2, f64>,
+    cache: RefCell<HashMap<I64Vec2, f64>>,
+    source: Box<dyn NoiseFn<f64, 2>>,
 }
 
-impl Default for NoiseGenerator {
-    fn default() -> Self {
+unsafe impl Send for NoiseGenerator {}
+unsafe impl Sync for NoiseGenerator {}
+
+impl NoiseGenerator {
+    pub fn new(seed: u32) -> Self {
         Self {
-            noise_cache: HashMap::new(),
+            cache: RefCell::new(HashMap::new()),
+            source: Box::new(world_noise(seed)),
         }
     }
 }
 
 impl NoiseGenerator {
-    pub fn get(&mut self, pos: I64Vec2, noise_fn: &impl NoiseFn<f64, 2>) -> f64 {
-        if self.noise_cache.contains_key(&pos) {
-            return *self.noise_cache.get(&pos).unwrap();
+    pub fn get(&mut self, pos: I64Vec2) -> f64 {
+        if self.cache.borrow().contains_key(&pos) {
+            return *self.cache.borrow().get(&pos).unwrap();
         }
 
-        let value = noise_fn.get([pos.x as f64, pos.y as f64]);
-        self.noise_cache.insert(pos, value);
+        let value = self.source.get([pos.x as f64, pos.y as f64]);
+        self.cache.borrow_mut().insert(pos, value);
+
         value
     }
 }

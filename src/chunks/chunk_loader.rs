@@ -1,85 +1,85 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    collections::{HashMap, HashSet},
+    vec::IntoIter,
+};
 
 use bevy::{
-    asset::{AssetServer, Assets},
+    asset::{Assets, Handle},
     ecs::{
         component::Component,
         entity::Entity,
         query::{With, Without},
-        system::{Commands, Query, Res, ResMut, Resource},
+        system::{Commands, Query, ResMut, Resource},
     },
     hierarchy::Parent,
     math::{I64Vec3, Vec3},
-    pbr::{PbrBundle, StandardMaterial},
-    prelude::default,
-    render::{
-        camera::{self, Camera},
-        color::Color,
-        mesh::Mesh,
-        primitives::Aabb,
-        render_resource::Face,
-        texture::Image,
-    },
+    pbr::MaterialMeshBundle,
+    render::{camera::Camera, mesh::Mesh, primitives::Aabb},
+    tasks::{AsyncComputeTaskPool, Task},
     transform::components::{GlobalTransform, Transform},
+    utils::futures,
 };
 use priority_queue::PriorityQueue;
 
-use super::chunk::ChunkCoordinate;
+use super::{
+    chunk::{ChunkCoordinate, ChunkData},
+    generate::generator::{generate_chunk, generate_chunk_mesh},
+    material::ChunkMaterial,
+};
 use crate::{player::PlayerLook, world::World};
 
 #[derive(Component)]
 pub struct Chunk {
     coord: ChunkCoordinate,
-    dirty: bool,
+}
+
+#[derive(Component)]
+pub struct DirtyChunk {}
+
+#[derive(Component)]
+pub struct GenerateChunkData {
+    task: Task<ChunkData>,
+}
+
+#[derive(Component)]
+pub struct GenerateChunkMesh {
+    coord: ChunkCoordinate,
+    task: Option<Task<Mesh>>,
 }
 
 #[derive(Resource)]
 pub struct ChunkLoader {
     render_distance: u32,
-    generate_queue: VecDeque<ChunkCoordinate>,
-    load_queue: VecDeque<ChunkCoordinate>,
-    unload_queue: VecDeque<ChunkCoordinate>,
-    loaded: HashMap<ChunkCoordinate, Entity>,
+    chunk_to_entity: HashMap<ChunkCoordinate, Entity>,
     chunk_iterator: ChunkIterator,
+    material: Handle<ChunkMaterial>,
 }
 
+const MAX_CHUNKS_PER_FRAME: usize = 32;
+
 impl ChunkLoader {
-    pub fn new(render_distance: u32) -> Self {
+    pub fn new(render_distance: u32, material: Handle<ChunkMaterial>) -> Self {
         Self {
             render_distance,
-            generate_queue: VecDeque::new(),
-            load_queue: VecDeque::new(),
-            unload_queue: VecDeque::new(),
-            loaded: HashMap::new(),
+            chunk_to_entity: HashMap::new(),
             chunk_iterator: ChunkIterator::new(),
+            material,
         }
     }
 }
 
 pub fn gather_chunks(
+    mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
     mut world: ResMut<World>,
     camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
+    generating_chunks_query: Query<&Chunk, With<GenerateChunkData>>,
 ) {
+    if generating_chunks_query.iter().count() > 1024 {
+        return;
+    }
+
     let (_, camera) = camera_query.get_single().expect("could not find camera");
-
-    let queued_for_generation = chunk_loader
-        .generate_queue
-        .iter()
-        .cloned()
-        .collect::<HashSet<ChunkCoordinate>>();
-
-    let queued_for_loading = chunk_loader
-        .load_queue
-        .iter()
-        .cloned()
-        .collect::<HashSet<ChunkCoordinate>>();
-
-    let queued_for_unload = chunk_loader
-        .unload_queue
-        .iter()
-        .cloned()
-        .collect::<HashSet<ChunkCoordinate>>();
 
     let camera_pos = camera.translation();
     let camera_chunk = world.block_to_chunk_coordinate(I64Vec3::new(
@@ -91,103 +91,159 @@ pub fn gather_chunks(
     let camera_forward = camera.forward();
     chunk_loader
         .chunk_iterator
-        .update(camera_chunk, camera_forward, &world);
+        .update(camera_chunk, camera_forward);
 
     let distance = chunk_loader.render_distance;
-    let next_chunks: Vec<ChunkCoordinate> = chunk_loader
-        .chunk_iterator
-        .next_chunks(8, distance, &world)
-        .collect();
 
-    let loaded = chunk_loader
-        .loaded
-        .keys()
-        .cloned()
-        .collect::<HashSet<ChunkCoordinate>>();
-
-    let to_unload = loaded
-        .iter()
-        .filter(|chunk| !queued_for_unload.contains(chunk))
-        .filter(|chunk| !queued_for_generation.contains(chunk))
-        .filter(|chunk| !queued_for_loading.contains(chunk))
-        .filter(|chunk| chunk_distance(**chunk, camera_chunk) > distance);
-
-    for chunk in to_unload {
-        chunk_loader.unload_queue.push_front(*chunk);
+    let mut next_chunks: Vec<ChunkCoordinate> = vec![];
+    while next_chunks.len() < MAX_CHUNKS_PER_FRAME {
+        if let Some(next) =
+            chunk_loader
+                .chunk_iterator
+                .next_chunks(MAX_CHUNKS_PER_FRAME, distance, &mut world)
+        {
+            next_chunks
+                .extend(next.filter(|chunk| !chunk_loader.chunk_to_entity.contains_key(chunk)));
+        } else {
+            break;
+        }
     }
 
-    let to_generate = next_chunks
-        .iter()
-        .filter(|chunk| !queued_for_generation.contains(chunk))
-        .filter(|chunk| !queued_for_loading.contains(chunk))
-        .filter(|chunk| !loaded.contains(*chunk))
-        .filter(|chunk| !world.is_chunk_empty(**chunk));
-
-    for chunk in to_generate {
-        chunk_loader.generate_queue.push_front(*chunk);
+    let task_pool = AsyncComputeTaskPool::get();
+    for chunk in next_chunks {
+        generate_single_chunk(
+            &mut commands,
+            &mut world,
+            chunk,
+            task_pool,
+            &mut chunk_loader,
+        );
     }
 }
 
-pub fn generate_chunks(mut world: ResMut<World>, mut chunk_loader: ResMut<ChunkLoader>) {
-    while let Some(chunk) = chunk_loader.generate_queue.pop_front() {
-        let mut chunks = vec![chunk];
-        chunks.extend(chunk.adjacent());
+fn generate_single_chunk(
+    commands: &mut Commands,
+    world: &mut ResMut<World>,
+    coord: ChunkCoordinate,
+    task_pool: &AsyncComputeTaskPool,
+    chunk_loader: &mut ResMut<ChunkLoader>,
+) {
+    let noise_generator = world.noise_generator.clone();
+    let height = world.height;
+    let entity = commands
+        .spawn((
+            Chunk { coord },
+            GenerateChunkData {
+                task: task_pool
+                    .spawn(async move { generate_chunk(noise_generator, coord, height) }),
+            },
+        ))
+        .id();
+    chunk_loader.chunk_to_entity.insert(coord, entity);
+}
 
-        world.generate_chunks(chunks);
-
-        chunk_loader.load_queue.push_front(chunk);
+pub fn generate_chunks(
+    mut commands: Commands,
+    mut world: ResMut<World>,
+    mut chunks_query: Query<(Entity, &mut Chunk, &mut GenerateChunkData)>,
+) {
+    for (entity, chunk, mut gen_chunk) in chunks_query.iter_mut() {
+        if let Some(chunk_data) = futures::check_ready(&mut gen_chunk.task) {
+            let data = world.insert_chunk(chunk.coord, chunk_data);
+            if !data.empty() {
+                commands.entity(entity).insert(DirtyChunk {});
+            }
+            commands.entity(entity).remove::<GenerateChunkData>();
+        }
     }
+}
+
+pub fn mark_chunks(
+    mut commands: Commands,
+    mut world: ResMut<World>,
+    mut chunks_query: Query<
+        (Entity, &mut Chunk),
+        (
+            With<DirtyChunk>,
+            Without<GenerateChunkData>,
+            Without<GenerateChunkMesh>,
+        ),
+    >,
+) {
+    chunks_query.iter_mut().for_each(|(entity, chunk)| {
+        if chunk
+            .coord
+            .adjacent()
+            .into_iter()
+            .all(|adj| world.is_chunk_generated(adj))
+        {
+            commands.entity(entity).insert(GenerateChunkMesh {
+                coord: chunk.coord,
+                task: None,
+            });
+            commands.entity(entity).remove::<DirtyChunk>();
+        }
+    });
 }
 
 pub fn load_chunks(
     mut commands: Commands,
-    mut chunk_loader: ResMut<ChunkLoader>,
     mut world: ResMut<World>,
+    mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkMesh)>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
+    chunk_loader: ResMut<ChunkLoader>,
 ) {
-    let mut generated_meshes = vec![];
-    while let Some(chunk) = chunk_loader.load_queue.pop_front() {
-        if world.is_chunk_empty(chunk) {
-            continue;
+    let mut ready = vec![];
+    let task_pool = AsyncComputeTaskPool::get();
+
+    for (entity, chunk, mut gen_chunk_mesh) in chunks_query.iter_mut() {
+        match &mut gen_chunk_mesh.task {
+            Some(task) => {
+                if let Some(mesh) = futures::check_ready(task) {
+                    ready.push((entity, chunk, mesh));
+                }
+            }
+            None => {
+                if let Some(data) = world.get_chunk_data(gen_chunk_mesh.coord) {
+                    let adjacent = world.adjacent_chunk_data(chunk.coord);
+                    gen_chunk_mesh.task =
+                        Some(task_pool.spawn(async move { generate_chunk_mesh(data, adjacent) }));
+                }
+            }
         }
 
-        generated_meshes.push((chunk, world.generate_chunk_mesh(chunk)));
+        if ready.len() > MAX_CHUNKS_PER_FRAME {
+            break;
+        }
     }
 
-    for (chunk, mesh) in generated_meshes.into_iter() {
-        let (t, aabb) = chunk_components(chunk);
-        let entity = commands
-            .spawn((
-                PbrBundle {
-                    mesh: meshes.add(mesh),
-                    material: materials.add(StandardMaterial {
-                        base_color: Color::WHITE,
-                        base_color_texture: Some(asset_server.load::<Image>("textures/blocks.png")),
-                        reflectance: 0.0,
-                        cull_mode: Some(Face::Front),
-                        ..default()
-                    }),
-                    transform: t,
-                    ..default()
-                },
-                aabb,
-                Chunk {
-                    coord: chunk,
-                    dirty: false,
-                },
-            ))
-            .id();
-        chunk_loader.loaded.insert(chunk, entity);
+    for (entity, chunk, mesh) in ready {
+        let (t, aabb) = chunk_components(chunk.coord);
+
+        commands.entity(entity).insert((
+            MaterialMeshBundle {
+                mesh: meshes.add(mesh),
+                material: chunk_loader.material.clone_weak(),
+                transform: t,
+                ..Default::default()
+            },
+            aabb,
+        ));
+        commands.entity(entity).remove::<GenerateChunkMesh>();
     }
 }
 
-pub fn unload_chunks(mut commands: Commands, mut chunk_loader: ResMut<ChunkLoader>) {
-    while let Some(chunk) = chunk_loader.unload_queue.pop_front() {
-        if let Some(entity) = chunk_loader.loaded.get(&chunk) {
-            commands.entity(*entity).despawn();
-            chunk_loader.loaded.remove(&chunk);
+pub fn unload_chunks(
+    mut commands: Commands,
+    mut chunk_loader: ResMut<ChunkLoader>,
+    chunks_query: Query<(Entity, &Chunk), (Without<GenerateChunkData>, Without<GenerateChunkMesh>)>,
+) {
+    for (entity, chunk) in chunks_query.iter() {
+        if chunk_distance(chunk.coord, chunk_loader.chunk_iterator.camera_chunk)
+            > chunk_loader.render_distance
+        {
+            commands.entity(entity).despawn();
+            chunk_loader.chunk_to_entity.remove(&chunk.coord);
         }
     }
 }
@@ -231,13 +287,16 @@ impl ChunkIterator {
         }
     }
 
-    #[tracing::instrument]
     fn next_chunks(
         &mut self,
         count: usize,
         max_distance: u32,
-        world: &World,
-    ) -> impl Iterator<Item = ChunkCoordinate> {
+        world: &mut World,
+    ) -> Option<IntoIter<ChunkCoordinate>> {
+        if self.queue.is_empty() {
+            return None;
+        }
+
         let mut next_chunks = Vec::new();
         while !self.queue.is_empty() && next_chunks.len() < count {
             let (next, _) = self.queue.pop().unwrap();
@@ -252,16 +311,17 @@ impl ChunkIterator {
                 self.queue_chunk(neighbour, world);
             }
         }
-        next_chunks.into_iter()
+
+        Some(next_chunks.into_iter())
     }
 
-    fn queue_chunk(&mut self, chunk: ChunkCoordinate, world: &World) {
+    fn queue_chunk(&mut self, chunk: ChunkCoordinate, world: &mut World) {
         if self.seen.contains(&chunk) {
             return;
         }
 
         let dot = self.dot(chunk, world);
-        if dot < 0.5 {
+        if dot < 0.0 {
             return;
         }
 
@@ -276,37 +336,36 @@ impl ChunkIterator {
         self.camera_forward.dot(direction)
     }
 
-    fn calculate_priority(&self, chunk: ChunkCoordinate, world: &World) -> u32 {
-        (100.0 * self.dot(chunk, world) / chunk_distance(chunk, self.camera_chunk) as f32).round()
-            as u32
+    fn calculate_priority(&self, chunk: ChunkCoordinate, world: &mut World) -> u32 {
+        let mut score = self.dot(chunk, world) / chunk_distance(chunk, self.camera_chunk) as f32;
+
+        if let Some(true) = world.get_chunk_data(chunk).map(|data| data.empty()) {
+            score = 0.0;
+        }
+
+        (score * 100.0).round() as u32
     }
 
-    fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3, world: &World) {
+    fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3) {
         // reset if camera turns too far from original direction
         if camera_forward.dot(self.camera_forward) < 0.75 {
-            self.reset(camera_chunk, camera_forward, world);
+            self.reset(camera_chunk, camera_forward);
             return;
         }
 
         // reset if chunk changes
         if camera_chunk != self.camera_chunk {
-            self.reset(camera_chunk, camera_forward, world);
+            self.reset(camera_chunk, camera_forward);
             return;
         }
     }
 
-    fn reset(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3, world: &World) {
+    fn reset(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3) {
         self.seen.clear();
 
         self.camera_chunk = camera_chunk;
         self.camera_forward = camera_forward;
 
-        let queued_chunks: Vec<ChunkCoordinate> =
-            self.queue.iter().map(|(chunk, _)| *chunk).collect();
-        for chunk in queued_chunks {
-            self.queue
-                .change_priority(&chunk, self.calculate_priority(chunk, world));
-        }
-        self.queue.push(camera_chunk, 0);
+        self.queue.push(camera_chunk, 99999);
     }
 }
