@@ -38,6 +38,10 @@ impl<Data> OctreeNode<Data> {
     pub fn set_data(&mut self, data: Arc<Data>) {
         self.data = Some(data);
     }
+
+    pub fn clear_data(&mut self) {
+        self.data = None;
+    }
 }
 
 pub struct Octree<Data> {

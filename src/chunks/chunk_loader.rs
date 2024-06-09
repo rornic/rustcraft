@@ -14,7 +14,7 @@ use bevy::{
     hierarchy::Parent,
     math::{I64Vec3, Vec3},
     pbr::MaterialMeshBundle,
-    render::{camera::Camera, mesh::Mesh, primitives::Aabb},
+    render::{camera::Camera, mesh::Mesh, primitives::Aabb, view::Visibility},
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::{GlobalTransform, Transform},
     utils::futures,
@@ -235,6 +235,7 @@ pub fn load_chunks(
 
 pub fn unload_chunks(
     mut commands: Commands,
+    mut world: ResMut<World>,
     mut chunk_loader: ResMut<ChunkLoader>,
     chunks_query: Query<(Entity, &Chunk), (Without<GenerateChunkData>, Without<GenerateChunkMesh>)>,
 ) {
@@ -244,6 +245,7 @@ pub fn unload_chunks(
         {
             commands.entity(entity).despawn();
             chunk_loader.chunk_to_entity.remove(&chunk.coord);
+            world.clear_chunk(chunk.coord);
         }
     }
 }

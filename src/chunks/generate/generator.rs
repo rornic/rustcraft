@@ -13,20 +13,6 @@ use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
 use crate::util::primitives::Vertex;
 
-pub struct WorldGenerator {
-    world_height: u64,
-    noise_generator: Arc<RwLock<NoiseGenerator>>,
-}
-
-impl WorldGenerator {
-    pub fn new(seed: u32) -> Self {
-        Self {
-            world_height: 256,
-            noise_generator: Arc::new(RwLock::new(NoiseGenerator::new(seed))),
-        }
-    }
-}
-
 pub fn generate_chunk(
     noise_generator: Arc<RwLock<NoiseGenerator>>,
     chunk_pos: ChunkCoordinate,

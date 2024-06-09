@@ -97,7 +97,7 @@ impl Default for ChunkOctree {
     fn default() -> Self {
         let chunk_size = 16;
         Self {
-            octree: Octree::new(1024.0, 7),
+            octree: Octree::new(4096.0, 9),
             cache: HashMap::new(),
             chunk_size,
         }
@@ -128,6 +128,14 @@ impl ChunkOctree {
         let mut write = chunk_octant.write().unwrap();
         write.set_data(chunk_data.clone());
         chunk_data
+    }
+
+    pub fn clear_chunk(&mut self, coord: ChunkCoordinate) {
+        let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
+
+        let mut write = chunk_octant.write().unwrap();
+        write.clear_data();
+        self.cache.remove(&coord);
     }
 
     pub fn chunk_centre(&self, chunk_coord: ChunkCoordinate) -> Vec3 {

@@ -33,7 +33,7 @@ pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> {
 
     let generator = Clamp::new(ScalePoint::new(combined).set_scale(scale))
         .set_lower_bound(0.0)
-        .set_upper_bound(1.0);
+        .set_upper_bound(10.0);
 
     Cache::new(generator)
 }

@@ -1,6 +1,5 @@
 use std::error::Error;
 
-use bevy::pbr::light_consts::lux;
 use settings::Settings;
 
 mod block;
@@ -28,19 +27,8 @@ fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
 fn setup_scene(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut ambient_light: ResMut<AmbientLight>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
 ) {
-    commands.spawn(DirectionalLightBundle {
-        directional_light: DirectionalLight {
-            illuminance: lux::AMBIENT_DAYLIGHT,
-            shadows_enabled: true,
-            ..default()
-        },
-        ..default()
-    });
-    ambient_light.brightness = 5000.0;
-
     let game_world = crate::world::World::new();
     info!("world seed is {}", game_world.seed());
     let spawn = Vec3::new(0.0, 20.0, 0.0);
@@ -82,7 +70,15 @@ fn setup_scene(
 fn main() {
     App::new()
         .add_plugins((
-            DefaultPlugins.set(ImagePlugin::default_nearest()),
+            DefaultPlugins
+                .set(ImagePlugin::default_nearest())
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        present_mode: bevy::window::PresentMode::AutoNoVsync,
+                        ..default()
+                    }),
+                    ..default()
+                }),
             MaterialPlugin::<ChunkMaterial>::default(),
         ))
         .insert_resource(ClearColor(Color::rgb_u8(135, 206, 235)))
@@ -91,9 +87,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                (gather_chunks, generate_chunks, mark_chunks, load_chunks)
-                    .chain()
-                    .before(unload_chunks),
+                (gather_chunks, generate_chunks, mark_chunks, load_chunks).before(unload_chunks),
                 unload_chunks,
                 player_move,
                 player_look,

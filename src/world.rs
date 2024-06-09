@@ -10,17 +10,13 @@ use bevy::{
 
 use crate::chunks::generate::noise::NoiseGenerator;
 
-use super::{
-    chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree},
-    chunks::generate::generator::WorldGenerator,
-};
+use super::chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree};
 
 #[derive(Resource)]
 pub struct World {
     seed: u32,
     pub height: u64,
     chunks: ChunkOctree,
-    generator: WorldGenerator,
     pub noise_generator: Arc<RwLock<NoiseGenerator>>,
 }
 
@@ -31,7 +27,6 @@ impl World {
             seed,
             height: 256,
             chunks: ChunkOctree::default(),
-            generator: WorldGenerator::new(seed),
             noise_generator: Arc::new(RwLock::new(NoiseGenerator::new(seed))),
         }
     }
@@ -39,22 +34,6 @@ impl World {
     pub fn seed(&self) -> u32 {
         self.seed
     }
-
-    // pub fn generate_chunk_mut(&mut self, chunk_coord: ChunkCoordinate) {
-    //     if self.is_chunk_generated(chunk_coord) {
-    //         return;
-    //     }
-
-    //     let chunk_data = self.generator.generate_chunk(chunk_coord);
-    //     self.chunks.set_chunk_data(chunk_coord, chunk_data);
-    // }
-
-    // pub fn generate_chunks(&mut self, chunk_coords: Vec<ChunkCoordinate>) {
-    //     for chunk in chunk_coords {
-    //         self.generate_chunk(chunk);
-    //     }
-    // }
-    //
 
     pub fn insert_chunk(
         &mut self,
@@ -66,6 +45,10 @@ impl World {
 
     pub fn get_chunk_data(&mut self, chunk_coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
         self.chunks.get_chunk_data(chunk_coord)
+    }
+
+    pub fn clear_chunk(&mut self, chunk_coord: ChunkCoordinate) {
+        self.chunks.clear_chunk(chunk_coord)
     }
 
     pub fn adjacent_chunk_data(
