@@ -348,13 +348,7 @@ impl ChunkIterator {
 
     fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Dir3) {
         // reset if camera turns too far from original direction
-        if camera_forward.dot(self.camera_forward.as_vec3()) < 0.75 {
-            self.reset(camera_chunk, camera_forward);
-            return;
-        }
-
-        // reset if chunk changes
-        if camera_chunk != self.camera_chunk {
+        if camera_forward.dot(self.camera_forward.as_vec3()) < 0.9 {
             self.reset(camera_chunk, camera_forward);
             return;
         }
