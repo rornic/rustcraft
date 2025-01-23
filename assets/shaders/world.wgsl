@@ -18,7 +18,7 @@ fn fragment(
     let view_to_world = world_position - view_position;
 
     let dist = length(view_to_world);
-    if dist > 496.0 {
+    if dist > 2000.0 {
       discard;
     }
 

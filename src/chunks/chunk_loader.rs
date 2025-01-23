@@ -12,7 +12,7 @@ use bevy::{
         system::{Commands, Query, ResMut, Resource},
     },
     hierarchy::Parent,
-    math::{I64Vec3, Vec3},
+    math::{Dir3, I64Vec3, Vec3, VectorSpace},
     pbr::MaterialMeshBundle,
     render::{camera::Camera, mesh::Mesh, primitives::Aabb, view::Visibility},
     tasks::{AsyncComputeTaskPool, Task},
@@ -275,7 +275,7 @@ fn chunk_components(chunk: ChunkCoordinate) -> (Transform, Aabb) {
 struct ChunkIterator {
     seen: HashSet<ChunkCoordinate>,
     camera_chunk: ChunkCoordinate,
-    camera_forward: Vec3,
+    camera_forward: Dir3,
     queue: PriorityQueue<ChunkCoordinate, u32>,
 }
 
@@ -284,7 +284,7 @@ impl ChunkIterator {
         Self {
             seen: HashSet::new(),
             camera_chunk: ChunkCoordinate(I64Vec3::ZERO),
-            camera_forward: Vec3::ZERO,
+            camera_forward: Dir3::X,
             queue: PriorityQueue::new(),
         }
     }
@@ -348,9 +348,9 @@ impl ChunkIterator {
         (score * 100.0).round() as u32
     }
 
-    fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3) {
+    fn update(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Dir3) {
         // reset if camera turns too far from original direction
-        if camera_forward.dot(self.camera_forward) < 0.75 {
+        if camera_forward.dot(self.camera_forward.as_vec3()) < 0.75 {
             self.reset(camera_chunk, camera_forward);
             return;
         }
@@ -362,7 +362,7 @@ impl ChunkIterator {
         }
     }
 
-    fn reset(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Vec3) {
+    fn reset(&mut self, camera_chunk: ChunkCoordinate, camera_forward: Dir3) {
         self.seen.clear();
 
         self.camera_chunk = camera_chunk;

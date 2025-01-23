@@ -8,10 +8,10 @@ use bevy::{
     },
     hierarchy::Parent,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
-    math::Vec3,
+    math::{Dir3, Vec3},
+    prelude::{Transform, TransformBundle},
     render::camera::Camera,
     time::Time,
-    transform::{components::Transform, TransformBundle},
 };
 
 #[derive(Bundle, Default)]
@@ -103,11 +103,11 @@ pub fn player_look(
 
     for ev in motion_evr.read() {
         player_transform.rotate_axis(
-            Vec3::new(0.0, 1.0, 0.0),
+            Dir3::Y,
             -ev.delta.x * player_look.sensitivity * time.delta_seconds(),
         );
         camera_transform.rotate_axis(
-            Vec3::new(1.0, 0.0, 0.0),
+            Dir3::X,
             -ev.delta.y * player_look.sensitivity * time.delta_seconds(),
         );
     }

@@ -47,7 +47,7 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 32;
+    let render_distance = 64;
     let camera = commands
         .spawn((Camera3dBundle {
             transform: Transform::from_xyz(0.0, 2.0, 0.0),
@@ -57,7 +57,7 @@ fn setup_scene(
     commands.entity(player).push_children(&[camera]);
 
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
-        color: Color::WHITE,
+        color: LinearRgba::WHITE,
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
     });
     let chunk_loader = ChunkLoader::new(render_distance as u32, chunk_material_handle);
@@ -81,7 +81,7 @@ fn main() {
                 }),
             MaterialPlugin::<ChunkMaterial>::default(),
         ))
-        .insert_resource(ClearColor(Color::rgb_u8(135, 206, 235)))
+        .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
         .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(
