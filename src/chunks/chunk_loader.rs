@@ -12,9 +12,10 @@ use bevy::{
         system::{Commands, Query, ResMut, Resource},
     },
     hierarchy::Parent,
-    math::{Dir3, I64Vec3, Vec3, VectorSpace},
-    pbr::MaterialMeshBundle,
-    render::{camera::Camera, mesh::Mesh, primitives::Aabb, view::Visibility},
+    math::{Dir3, I64Vec3, Vec3},
+    pbr::MeshMaterial3d,
+    prelude::Mesh3d,
+    render::{camera::Camera, mesh::Mesh, primitives::Aabb},
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::{GlobalTransform, Transform},
     utils::futures,
@@ -221,12 +222,9 @@ pub fn load_chunks(
         let (t, aabb) = chunk_components(chunk.coord);
 
         commands.entity(entity).insert((
-            MaterialMeshBundle {
-                mesh: meshes.add(mesh),
-                material: chunk_loader.material.clone_weak(),
-                transform: t,
-                ..Default::default()
-            },
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(chunk_loader.material.clone_weak()),
+            t,
             aabb,
         ));
         commands.entity(entity).remove::<GenerateChunkMesh>();

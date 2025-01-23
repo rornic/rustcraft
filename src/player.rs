@@ -9,7 +9,7 @@ use bevy::{
     hierarchy::Parent,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
     math::{Dir3, Vec3},
-    prelude::{Transform, TransformBundle},
+    prelude::Transform,
     render::camera::Camera,
     time::Time,
 };
@@ -19,7 +19,7 @@ pub struct PlayerBundle {
     pub marker: Player,
     pub movement: PlayerMovement,
     pub look: PlayerLook,
-    pub transform_bundle: TransformBundle,
+    pub transform: Transform,
 }
 
 #[derive(Component, Default)]
@@ -69,11 +69,9 @@ pub fn player_move(
         vertical_movement.y = -move_speed;
     }
 
-    let final_movement = player_transform.rotation
-        * camera_transform.rotation
-        * movement_vector
-        * time.delta_seconds()
-        + (vertical_movement * time.delta_seconds());
+    let final_movement =
+        player_transform.rotation * camera_transform.rotation * movement_vector * time.delta_secs()
+            + (vertical_movement * time.delta_secs());
     player_transform.translation += final_movement;
 }
 
@@ -104,11 +102,11 @@ pub fn player_look(
     for ev in motion_evr.read() {
         player_transform.rotate_axis(
             Dir3::Y,
-            -ev.delta.x * player_look.sensitivity * time.delta_seconds(),
+            -ev.delta.x * player_look.sensitivity * time.delta_secs(),
         );
         camera_transform.rotate_axis(
             Dir3::X,
-            -ev.delta.y * player_look.sensitivity * time.delta_seconds(),
+            -ev.delta.y * player_look.sensitivity * time.delta_secs(),
         );
     }
 }

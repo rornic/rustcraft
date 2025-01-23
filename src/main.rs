@@ -38,23 +38,21 @@ fn setup_scene(
 
     let player = commands
         .spawn(PlayerBundle {
-            transform_bundle: TransformBundle {
-                local: Transform::from_xyz(spawn.x, spawn.y, spawn.z)
-                    .looking_to(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)),
-                ..default()
-            },
+            transform: Transform::from_xyz(spawn.x, spawn.y, spawn.z)
+                .looking_to(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)),
             ..default()
         })
         .id();
 
     let render_distance = 64;
     let camera = commands
-        .spawn((Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 2.0, 0.0),
-            ..default()
-        },))
+        .spawn((
+            Transform::from_xyz(0.0, 2.0, 0.0),
+            Camera3d { ..default() },
+            Msaa::Off,
+        ))
         .id();
-    commands.entity(player).push_children(&[camera]);
+    commands.entity(player).add_children(&[camera]);
 
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
@@ -82,7 +80,6 @@ fn main() {
             MaterialPlugin::<ChunkMaterial>::default(),
         ))
         .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
-        .insert_resource(Msaa::Off)
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,

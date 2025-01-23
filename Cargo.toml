@@ -12,7 +12,7 @@ noise = "0.8.2"
 rand = "0.8.5"
 toml = "0.7.0"
 serde = { version = "1.0", features = ["serde_derive"] }
-bevy = { version = "0.14.2", features = ["trace"] }
+bevy = { version = "0.15.1", features = ["trace"] }
 tracing = { version = "0.1.40", features = ["attributes"] }
 priority-queue = "2.0.3"
 
