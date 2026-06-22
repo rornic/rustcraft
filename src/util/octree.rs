@@ -45,6 +45,9 @@ impl<Data> OctreeNode<Data> {
 }
 
 pub struct Octree<Data> {
+    // nodes are never removed/collapsed once subdivided, so this grows monotonically
+    // as new regions are explored; see ChunkOctree::clear_chunk for the consumer-side
+    // implication of this
     arena: HashMap<usize, Arc<RwLock<OctreeNode<Data>>>>,
     current_id: usize,
     _root_id: usize,
@@ -124,6 +127,7 @@ impl<Data> Octree<Data> {
         }
 
         let child_size = octree_node.size / 2.0;
+        let offset = child_size / 2.0;
 
         // top layer
         // 0 1
@@ -132,14 +136,14 @@ impl<Data> Octree<Data> {
         // 4 5
         // 6 7
         let child_centres = [
-            octree_node.centre + Vec3::new(-child_size, child_size, child_size),
-            octree_node.centre + Vec3::new(child_size, child_size, child_size),
-            octree_node.centre + Vec3::new(-child_size, child_size, -child_size),
-            octree_node.centre + Vec3::new(child_size, child_size, -child_size),
-            octree_node.centre + Vec3::new(-child_size, -child_size, child_size),
-            octree_node.centre + Vec3::new(child_size, -child_size, child_size),
-            octree_node.centre + Vec3::new(-child_size, -child_size, -child_size),
-            octree_node.centre + Vec3::new(child_size, -child_size, -child_size),
+            octree_node.centre + Vec3::new(-offset, offset, offset),
+            octree_node.centre + Vec3::new(offset, offset, offset),
+            octree_node.centre + Vec3::new(-offset, offset, -offset),
+            octree_node.centre + Vec3::new(offset, offset, -offset),
+            octree_node.centre + Vec3::new(-offset, -offset, offset),
+            octree_node.centre + Vec3::new(offset, -offset, offset),
+            octree_node.centre + Vec3::new(-offset, -offset, -offset),
+            octree_node.centre + Vec3::new(offset, -offset, -offset),
         ];
 
         let mut ids = [0; 8];
@@ -151,9 +155,22 @@ impl<Data> Octree<Data> {
     }
 
     pub fn query_octant(&mut self, point: Vec3) -> Arc<RwLock<OctreeNode<Data>>> {
+        let (root_centre, root_size) = {
+            let root_ref = self.get_node(self._root_id);
+            let root = root_ref.read().unwrap();
+            (root.centre, root.size)
+        };
+        let half = root_size / 2.0;
+        assert!(
+            (point - root_centre).abs().max_element() <= half,
+            "octree query point {:?} is outside the tree's bounds (half-extent {})",
+            point,
+            half
+        );
+
         let mut i = 0;
 
-        let mut current_id = 0;
+        let mut current_id = self._root_id;
         while i < self.max_depth {
             let octree_node_ref = self.get_node(current_id);
 
@@ -191,7 +208,7 @@ mod tests {
         assert!(root.children.is_some());
 
         // pythagorean theorem
-        let expected_distance = (3.0 * 8.0_f32.powi(2)).sqrt();
+        let expected_distance = (3.0 * 4.0_f32.powi(2)).sqrt();
 
         let mut child_node_set = HashSet::new();
         for child in root.children.unwrap().into_iter() {
@@ -244,6 +261,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn test_query_octant_out_of_bounds_panics() {
+        let mut octree = Octree::<u32>::new(16.0, 2);
+        octree.query_octant(Vec3::new(100.0, 0.0, 0.0));
+    }
+
+    #[test]
     fn test_query_octant_max_depth_zero() {
         let mut octree = Octree::<u32>::new(16.0, 0);
 
@@ -261,6 +285,6 @@ mod tests {
         let octant = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
         let octant = octant.read().unwrap();
         assert_eq!(8.0, octant.size);
-        assert_eq!(Vec3::new(8.0, 8.0, 8.0), octant.centre);
+        assert_eq!(Vec3::new(4.0, 4.0, 4.0), octant.centre);
     }
 }

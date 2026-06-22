@@ -97,7 +97,7 @@ impl Default for ChunkOctree {
     fn default() -> Self {
         let chunk_size = 16;
         Self {
-            octree: Octree::new(4096.0, 9),
+            octree: Octree::new(1_048_576.0, 16),
             cache: HashMap::new(),
             chunk_size,
         }
@@ -106,15 +106,16 @@ impl Default for ChunkOctree {
 
 impl ChunkOctree {
     pub fn get_chunk_data(&mut self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
-        let octant = if self.cache.contains_key(&coord) {
-            self.octree.get_node_by_id(*self.cache.get(&coord).unwrap())
+        let octant = if let Some(&id) = self.cache.get(&coord) {
+            self.octree.get_node_by_id(id)
         } else {
-            self.octree.query_octant(self.chunk_centre(coord))
+            let octant = self.octree.query_octant(self.chunk_centre(coord));
+            self.cache.insert(coord, octant.read().unwrap().id());
+            octant
         };
 
-        let read = octant.read().unwrap();
-        self.cache.insert(coord, read.id());
-        read.get_data()
+        let data = octant.read().unwrap().get_data();
+        data
     }
 
     pub fn set_chunk_data(
@@ -130,6 +131,10 @@ impl ChunkOctree {
         chunk_data
     }
 
+    // only clears the leaf's data; the underlying octree node (and its ancestors)
+    // is never freed/collapsed, so unloading chunks does not reclaim tree memory.
+    // A real fix needs parent pointers plus a debounce window to avoid thrashing
+    // as chunks repeatedly cross the render-distance boundary every frame.
     pub fn clear_chunk(&mut self, coord: ChunkCoordinate) {
         let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
 
@@ -210,6 +215,24 @@ mod tests {
         assert_eq!(
             BlockType::Air,
             queried_chunk_data.get_block_at(U16Vec3::new(0, 4, 9))
+        );
+    }
+
+    #[test]
+    fn test_set_get_chunk_data_far_from_origin() {
+        let mut octree = ChunkOctree::default();
+
+        let mut chunk_data = ChunkData::default();
+        chunk_data.set_block_at(U16Vec3::new(2, 3, 4), BlockType::Sand);
+        octree.set_chunk_data(ChunkCoordinate(I64Vec3::new(10_000, -5_000, 20_000)), chunk_data);
+
+        let queried_chunk_data = octree
+            .get_chunk_data(ChunkCoordinate(I64Vec3::new(10_000, -5_000, 20_000)))
+            .unwrap();
+
+        assert_eq!(
+            BlockType::Sand,
+            queried_chunk_data.get_block_at(U16Vec3::new(2, 3, 4))
         );
     }
 
