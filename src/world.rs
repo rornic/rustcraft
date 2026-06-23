@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, RwLock},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use bevy::{
     ecs::system::Resource,
@@ -17,7 +14,7 @@ pub struct World {
     seed: u32,
     pub height: u64,
     chunks: ChunkOctree,
-    pub noise_generator: Arc<RwLock<NoiseGenerator>>,
+    pub noise_generator: Arc<NoiseGenerator>,
 }
 
 impl World {
@@ -27,7 +24,7 @@ impl World {
             seed,
             height: 256,
             chunks: ChunkOctree::default(),
-            noise_generator: Arc::new(RwLock::new(NoiseGenerator::new(seed))),
+            noise_generator: Arc::new(NoiseGenerator::new(seed)),
         }
     }
 

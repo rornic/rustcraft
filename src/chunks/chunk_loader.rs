@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use bevy::{
     asset::{Assets, Handle},
     ecs::{
@@ -48,21 +50,46 @@ pub struct ChunkLoader {
     chunk_to_entity: HashMap<ChunkCoordinate, Entity>,
     spawn_queue: ChunkSpawnQueue,
     material: Handle<ChunkMaterial>,
+    max_in_flight_generating: usize,
 }
 
-// spawning a generation task is cheap (just hands work to the async pool)
-const MAX_CHUNKS_SPAWNED_PER_FRAME: usize = 64;
-// safety cap on how many offsets gather_chunks examines in one frame - bounds worst
-// case frame time of a full rescan (triggered every chunk crossing) regardless of
-// render distance, rather than relying on the hash lookup staying cheap forever
-const MAX_SCAN_PER_FRAME: usize = 50_000;
-// GPU buffer upload + ECS component insert on the main thread - the most expensive of
-// these per item, and the most likely source of a visible stutter, so smallest budget
-const MAX_MESHES_APPLIED_PER_FRAME: usize = 16;
+// A fixed per-frame item budget tuned at one render distance silently falls behind at a
+// much larger one: the leading-edge crescent that needs filling while moving scales with
+// the render sphere's surface area (O(r^2)), and the initial cold-load backlog scales
+// with its full volume (O(r^3)) - so any fixed item count is *some* distance's bottleneck.
+// Both gather_chunks (scanning offsets + spawning generation tasks) and load_chunks
+// (polling mesh tasks + uploading finished meshes to the GPU) instead spend up to a fixed
+// *time* budget per frame, doing as much real work as that buys - cheap chunks (or a fast
+// machine) get more done per frame automatically, expensive ones get less, and there is
+// nothing to re-tune if render distance changes.
+const GATHER_TIME_BUDGET: Duration = Duration::from_millis(3);
+const MESH_APPLY_TIME_BUDGET: Duration = Duration::from_millis(4);
+// Per-call chunk size fed to the pure, deterministically-testable `next_batch` - not a
+// per-frame cap (gather_chunks calls it repeatedly until GATHER_TIME_BUDGET runs out), just
+// how much work happens between time checks.
+const SPAWN_BATCH_SIZE: usize = 64;
+const SCAN_BATCH_SIZE: usize = 50_000;
+// safety valve against unboundedly many concurrent generation tasks if generation ever
+// falls behind frame rate - scaled with render distance so it doesn't itself become the
+// bottleneck once the time-budgeted spawn rate is higher at a larger render distance
+const BASELINE_RENDER_DISTANCE: u32 = 32;
+const BASELINE_IN_FLIGHT_GENERATING: usize = 1024;
 // Mesh generation samples the full 3x3x3 chunk neighborhood for vertex AO (including
 // corner-diagonal chunks), so the neighbour-data shell must reach far enough to cover a
 // (1,1,1) chunk-grid offset, i.e. Euclidean distance sqrt(3) =~ 1.73 - round up to 2.
 const NEIGHBOR_DATA_PADDING: u32 = 2;
+
+// Ratio of this render distance's shell surface area to the baseline's, using the same
+// effective radius (render_distance + padding) the spawn queue itself scans.
+fn shell_area_scale(render_distance: u32) -> f64 {
+    let effective = (render_distance + NEIGHBOR_DATA_PADDING) as f64;
+    let baseline_effective = (BASELINE_RENDER_DISTANCE + NEIGHBOR_DATA_PADDING) as f64;
+    (effective / baseline_effective).powi(2)
+}
+
+fn scale_budget(baseline: usize, render_distance: u32) -> usize {
+    ((baseline as f64) * shell_area_scale(render_distance)).ceil() as usize
+}
 
 impl ChunkLoader {
     pub fn new(render_distance: u32, material: Handle<ChunkMaterial>) -> Self {
@@ -75,6 +102,10 @@ impl ChunkLoader {
             // neighbourhood generated, since some of it is always further out
             spawn_queue: ChunkSpawnQueue::new(render_distance + NEIGHBOR_DATA_PADDING),
             material,
+            max_in_flight_generating: scale_budget(
+                BASELINE_IN_FLIGHT_GENERATING,
+                render_distance,
+            ),
         }
     }
 }
@@ -86,7 +117,7 @@ pub fn gather_chunks(
     camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
     generating_chunks_query: Query<&Chunk, With<GenerateChunkData>>,
 ) {
-    if generating_chunks_query.iter().count() > 1024 {
+    if generating_chunks_query.iter().count() > chunk_loader.max_in_flight_generating {
         return;
     }
 
@@ -99,29 +130,37 @@ pub fn gather_chunks(
         camera_pos.z as i64,
     ));
     let camera_forward = camera.forward();
-
-    let ChunkLoader {
-        spawn_queue,
-        chunk_to_entity,
-        ..
-    } = &mut *chunk_loader;
-    let mut next_chunks = spawn_queue.next_batch(
-        camera_chunk,
-        chunk_to_entity,
-        MAX_CHUNKS_SPAWNED_PER_FRAME,
-        MAX_SCAN_PER_FRAME,
-    );
-    sort_by_viewport_bias(&mut next_chunks, camera_chunk, camera_forward);
-
     let task_pool = AsyncComputeTaskPool::get();
-    for chunk in next_chunks {
-        generate_single_chunk(
-            &mut commands,
-            &mut world,
-            chunk,
-            task_pool,
-            &mut chunk_loader,
+    let start = Instant::now();
+
+    loop {
+        let ChunkLoader {
+            spawn_queue,
+            chunk_to_entity,
+            ..
+        } = &mut *chunk_loader;
+        let mut next_chunks = spawn_queue.next_batch(
+            camera_chunk,
+            chunk_to_entity,
+            SPAWN_BATCH_SIZE,
+            SCAN_BATCH_SIZE,
         );
+        let exhausted = spawn_queue.is_exhausted();
+        sort_by_viewport_bias(&mut next_chunks, camera_chunk, camera_forward);
+
+        for chunk in next_chunks {
+            generate_single_chunk(
+                &mut commands,
+                &mut world,
+                chunk,
+                task_pool,
+                &mut chunk_loader,
+            );
+        }
+
+        if exhausted || start.elapsed() >= GATHER_TIME_BUDGET {
+            break;
+        }
     }
 }
 
@@ -208,14 +247,25 @@ pub fn load_chunks(
     mut meshes: ResMut<Assets<Mesh>>,
     chunk_loader: ResMut<ChunkLoader>,
 ) {
-    let mut ready = vec![];
     let task_pool = AsyncComputeTaskPool::get();
+    let start = Instant::now();
 
     for (entity, chunk, mut gen_chunk_mesh) in chunks_query.iter_mut() {
         match &mut gen_chunk_mesh.task {
             Some(task) => {
+                // applied inline rather than collected into a list and applied after the
+                // loop: a time budget (instead of an item-count cap) means we can't know
+                // in advance how many will fit, and a completed task's mesh can't be
+                // polled a second time next frame if we deferred using it here.
                 if let Some(mesh) = futures::check_ready(task) {
-                    ready.push((entity, chunk, mesh));
+                    let (t, aabb) = chunk_components(chunk.coord);
+                    commands.entity(entity).insert((
+                        Mesh3d(meshes.add(mesh)),
+                        MeshMaterial3d(chunk_loader.material.clone_weak()),
+                        t,
+                        aabb,
+                    ));
+                    commands.entity(entity).remove::<GenerateChunkMesh>();
                 }
             }
             None => {
@@ -240,21 +290,9 @@ pub fn load_chunks(
             }
         }
 
-        if ready.len() >= MAX_MESHES_APPLIED_PER_FRAME {
+        if start.elapsed() >= MESH_APPLY_TIME_BUDGET {
             break;
         }
-    }
-
-    for (entity, chunk, mesh) in ready {
-        let (t, aabb) = chunk_components(chunk.coord);
-
-        commands.entity(entity).insert((
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(chunk_loader.material.clone_weak()),
-            t,
-            aabb,
-        ));
-        commands.entity(entity).remove::<GenerateChunkMesh>();
     }
 }
 
@@ -401,6 +439,15 @@ impl ChunkSpawnQueue {
 
         candidates
     }
+
+    // True once every offset in range of the current anchor has been scanned at least
+    // once. A `next_batch` call can legitimately return no candidates (a scan window
+    // landing entirely on already-loaded chunks) without this being true yet - callers
+    // that want to keep going until there's truly nothing left should check this, not
+    // an empty result, before stopping.
+    fn is_exhausted(&self) -> bool {
+        self.cursor >= self.offsets.len()
+    }
 }
 
 // distance is the primary key (closer chunks must always spawn first - never let
@@ -441,8 +488,8 @@ mod tests {
     };
 
     use super::{
-        build_offsets, offset_distance, sort_by_viewport_bias, ChunkCoordinate, ChunkSpawnQueue,
-        HashMap,
+        build_offsets, offset_distance, scale_budget, shell_area_scale, sort_by_viewport_bias,
+        ChunkCoordinate, ChunkSpawnQueue, HashMap, BASELINE_RENDER_DISTANCE,
     };
 
     #[test]
@@ -556,6 +603,38 @@ mod tests {
     }
 
     #[test]
+    fn test_is_exhausted_false_until_fully_scanned() {
+        let mut queue = ChunkSpawnQueue::new(1); // 7 offsets total
+        let anchor = ChunkCoordinate(I64Vec3::ZERO);
+        let loaded = HashMap::new();
+
+        assert!(!queue.is_exhausted());
+
+        queue.next_batch(anchor, &loaded, 100, 3); // scans only 3 of 7
+        assert!(!queue.is_exhausted());
+
+        queue.next_batch(anchor, &loaded, 100, 1000); // scans the rest
+        assert!(queue.is_exhausted());
+    }
+
+    #[test]
+    fn test_is_exhausted_can_be_true_even_with_an_empty_batch() {
+        // an exhausting call can still return zero candidates, if everything left to
+        // scan happens to already be loaded - is_exhausted must not be inferred from an
+        // empty batch alone (see its doc comment)
+        let mut queue = ChunkSpawnQueue::new(1);
+        let anchor = ChunkCoordinate(I64Vec3::ZERO);
+        let mut loaded = HashMap::new();
+        for o in queue.offsets.clone() {
+            loaded.insert(ChunkCoordinate(anchor.0 + o), Entity::PLACEHOLDER);
+        }
+
+        let batch = queue.next_batch(anchor, &loaded, 100, 1000);
+        assert!(batch.is_empty());
+        assert!(queue.is_exhausted());
+    }
+
+    #[test]
     fn test_sort_by_viewport_bias_prefers_forward_chunks() {
         let camera_chunk = ChunkCoordinate(I64Vec3::ZERO);
         let forward = Dir3::new(Vec3::new(1.0, 0.0, 0.0)).unwrap();
@@ -582,5 +661,33 @@ mod tests {
         sort_by_viewport_bias(&mut candidates, camera_chunk, forward);
 
         assert_eq!(close_behind, candidates[0]);
+    }
+
+    #[test]
+    fn test_shell_area_scale_is_one_at_baseline() {
+        assert_eq!(1.0, shell_area_scale(BASELINE_RENDER_DISTANCE));
+    }
+
+    #[test]
+    fn test_shell_area_scale_grows_quadratically_with_render_distance() {
+        // doubling render distance should roughly quadruple the shell area scale (not
+        // exactly 4x: the fixed neighbour-data padding added to both radii means the
+        // ratio of *effective* radii is slightly less than 2 at these magnitudes)
+        let scale_at_baseline = shell_area_scale(BASELINE_RENDER_DISTANCE);
+        let scale_at_double = shell_area_scale(BASELINE_RENDER_DISTANCE * 2);
+        let ratio = scale_at_double / scale_at_baseline;
+        assert!((3.0..4.0).contains(&ratio), "expected ~4x, got {ratio}x");
+    }
+
+    #[test]
+    fn test_scale_budget_matches_baseline_at_baseline_distance() {
+        assert_eq!(100, scale_budget(100, BASELINE_RENDER_DISTANCE));
+    }
+
+    #[test]
+    fn test_scale_budget_increases_for_larger_render_distance() {
+        let baseline = scale_budget(100, BASELINE_RENDER_DISTANCE);
+        let larger = scale_budget(100, BASELINE_RENDER_DISTANCE * 2);
+        assert!(larger > baseline);
     }
 }

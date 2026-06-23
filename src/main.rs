@@ -44,7 +44,7 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 32;
+    let render_distance = 64;
     let camera = commands
         .spawn((
             Transform::from_xyz(0.0, 2.0, 0.0),

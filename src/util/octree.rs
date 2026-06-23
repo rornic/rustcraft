@@ -4,6 +4,7 @@ use bevy::{math::Vec3, utils::HashMap};
 
 pub struct OctreeNode<Data> {
     id: usize,
+    parent: Option<usize>,
     centre: Vec3,
     pub size: f32,
     depth: u8,
@@ -12,9 +13,17 @@ pub struct OctreeNode<Data> {
 }
 
 impl<Data> OctreeNode<Data> {
-    fn new(id: usize, centre: Vec3, size: f32, depth: u8, data: Option<Arc<Data>>) -> Self {
+    fn new(
+        id: usize,
+        parent: Option<usize>,
+        centre: Vec3,
+        size: f32,
+        depth: u8,
+        data: Option<Arc<Data>>,
+    ) -> Self {
         Self {
             id,
+            parent,
             children: None,
             centre,
             size,
@@ -45,9 +54,6 @@ impl<Data> OctreeNode<Data> {
 }
 
 pub struct Octree<Data> {
-    // nodes are never removed/collapsed once subdivided, so this grows monotonically
-    // as new regions are explored; see ChunkOctree::clear_chunk for the consumer-side
-    // implication of this
     arena: HashMap<usize, Arc<RwLock<OctreeNode<Data>>>>,
     current_id: usize,
     _root_id: usize,
@@ -59,6 +65,7 @@ impl<Data> Octree<Data> {
         let root_id = 0;
         let root = Arc::new(RwLock::new(OctreeNode::new(
             root_id,
+            None,
             Vec3::ZERO,
             size,
             0,
@@ -86,9 +93,9 @@ impl<Data> Octree<Data> {
         read.centre
     }
 
-    fn insert_node(&mut self, centre: Vec3, size: f32, depth: u8) -> usize {
+    fn insert_node(&mut self, parent: usize, centre: Vec3, size: f32, depth: u8) -> usize {
         let new_id = self.current_id;
-        let new_node = OctreeNode::new(new_id, centre, size, depth, None);
+        let new_node = OctreeNode::new(new_id, Some(parent), centre, size, depth, None);
         self.arena
             .insert(new_node.id, Arc::new(RwLock::new(new_node)));
         self.current_id += 1;
@@ -149,7 +156,7 @@ impl<Data> Octree<Data> {
         let mut ids = [0; 8];
         for (i, id) in ids.iter_mut().enumerate() {
             let centre = child_centres[i];
-            *id = self.insert_node(centre, child_size, octree_node.depth + 1);
+            *id = self.insert_node(octant, centre, child_size, octree_node.depth + 1);
         }
         octree_node.children = Some(ids);
     }
@@ -188,6 +195,39 @@ impl<Data> Octree<Data> {
 
     pub fn get_node_by_id(&self, id: usize) -> Arc<RwLock<OctreeNode<Data>>> {
         self.get_node(id)
+    }
+
+    /// Clears a leaf's data, then collapses ancestor subtrees that have become
+    /// entirely empty leaves back into a single leaf, freeing their arena entries.
+    /// Only ever inspects/removes a node's *children* - a parent's own data is never
+    /// touched, so a future use of intermediate nodes (e.g. an LOD summary) survives
+    /// its detail children being pruned underneath it.
+    pub fn clear_data(&mut self, id: usize) {
+        self.get_node(id).write().unwrap().clear_data();
+        self.collapse_upward(id);
+    }
+
+    fn collapse_upward(&mut self, mut node_id: usize) {
+        loop {
+            let Some(parent_id) = self.get_node(node_id).read().unwrap().parent else {
+                return;
+            };
+            let children = self.get_node(parent_id).read().unwrap().children.unwrap();
+            let all_empty_leaves = children.iter().all(|&c| {
+                let node_ref = self.get_node(c);
+                let n = node_ref.read().unwrap();
+                n.children.is_none() && n.data.is_none()
+            });
+            if !all_empty_leaves {
+                return;
+            }
+
+            for c in children {
+                self.arena.remove(&c);
+            }
+            self.get_node(parent_id).write().unwrap().children = None;
+            node_id = parent_id;
+        }
     }
 }
 
@@ -286,5 +326,62 @@ mod tests {
         let octant = octant.read().unwrap();
         assert_eq!(8.0, octant.size);
         assert_eq!(Vec3::new(4.0, 4.0, 4.0), octant.centre);
+    }
+
+    #[test]
+    fn test_subdivide_sets_parent_pointer() {
+        let mut octree = Octree::<u32>::new(16.0, 1);
+        octree.subdivide(0);
+
+        let root_ref = octree.get_node(0);
+        let children = root_ref.read().unwrap().children.unwrap();
+        for child in children {
+            let child_ref = octree.get_node(child);
+            assert_eq!(Some(0), child_ref.read().unwrap().parent);
+        }
+    }
+
+    #[test]
+    fn test_clear_data_collapses_empty_parent() {
+        let mut octree = Octree::<u32>::new(16.0, 1);
+        let leaf = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
+        leaf.write().unwrap().set_data(std::sync::Arc::new(1));
+        let leaf_id = leaf.read().unwrap().id();
+
+        octree.clear_data(leaf_id);
+
+        let root_ref = octree.get_node(0);
+        assert!(root_ref.read().unwrap().children.is_none());
+        // the 8 children should have been removed from the arena entirely
+        assert_eq!(1, octree.arena.len());
+    }
+
+    #[test]
+    fn test_clear_data_does_not_collapse_if_sibling_has_data() {
+        let mut octree = Octree::<u32>::new(16.0, 1);
+        let leaf_a = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
+        leaf_a.write().unwrap().set_data(std::sync::Arc::new(1));
+        let leaf_a_id = leaf_a.read().unwrap().id();
+
+        let leaf_b = octree.query_octant(Vec3::new(-4.0, 4.0, 4.0));
+        leaf_b.write().unwrap().set_data(std::sync::Arc::new(2));
+
+        octree.clear_data(leaf_a_id);
+
+        let root_ref = octree.get_node(0);
+        assert!(root_ref.read().unwrap().children.is_some());
+    }
+
+    #[test]
+    fn test_clear_data_collapses_multiple_levels_upward() {
+        let mut octree = Octree::<u32>::new(16.0, 2);
+        let leaf = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
+        leaf.write().unwrap().set_data(std::sync::Arc::new(1));
+        let leaf_id = leaf.read().unwrap().id();
+
+        octree.clear_data(leaf_id);
+
+        // only the root should remain - both levels of subdivision collapse away
+        assert_eq!(1, octree.arena.len());
     }
 }

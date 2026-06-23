@@ -1,4 +1,5 @@
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[repr(u8)]
 pub enum BlockType {
     Air,
     Stone,
