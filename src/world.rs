@@ -56,7 +56,7 @@ impl World {
         chunk_coord: ChunkCoordinate,
     ) -> Vec<Option<Arc<ChunkData>>> {
         chunk_coord
-            .adjacent()
+            .neighbors_26()
             .iter()
             .map(|coord| self.get_chunk_data(*coord))
             .collect()

@@ -34,6 +34,35 @@ impl ChunkCoordinate {
             ChunkCoordinate(self.0 + I64Vec3::new(0, -1, 0)),
         ]
     }
+
+    // All 26 chunks in the 3x3x3 neighborhood (face + edge + corner adjacent), needed so mesh
+    // generation can sample diagonal-neighbor blocks for vertex AO at chunk boundaries. Ordered
+    // by `neighbor_26_index` so callers can index straight into the result.
+    pub fn neighbors_26(&self) -> Vec<ChunkCoordinate> {
+        let mut result = vec![*self; 26];
+        for dx in -1..=1i64 {
+            for dy in -1..=1i64 {
+                for dz in -1..=1i64 {
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        continue;
+                    }
+                    let idx = neighbor_26_index(dx as i32, dy as i32, dz as i32);
+                    result[idx] = ChunkCoordinate(self.0 + I64Vec3::new(dx, dy, dz));
+                }
+            }
+        }
+        result
+    }
+}
+
+// Maps a unit offset (dx,dy,dz), each in {-1,0,1} and not all zero, to a stable 0..26 index.
+pub fn neighbor_26_index(dx: i32, dy: i32, dz: i32) -> usize {
+    let idx3 = ((dx + 1) * 9 + (dy + 1) * 3 + (dz + 1)) as usize;
+    if idx3 < 13 {
+        idx3
+    } else {
+        idx3 - 1
+    }
 }
 
 type BlockPalette = HashMap<U16Vec3, BlockType>;
@@ -159,7 +188,27 @@ mod tests {
 
     use crate::block::BlockType;
 
-    use super::{ChunkCoordinate, ChunkData, ChunkOctree};
+    use super::{neighbor_26_index, ChunkCoordinate, ChunkData, ChunkOctree};
+
+    #[test]
+    fn test_neighbors_26_returns_26_unique_coordinates() {
+        let origin = ChunkCoordinate(I64Vec3::ZERO);
+        let neighbors = origin.neighbors_26();
+
+        assert_eq!(26, neighbors.len());
+        let unique: std::collections::HashSet<_> = neighbors.iter().map(|c| c.0).collect();
+        assert_eq!(26, unique.len());
+        assert!(!neighbors.iter().any(|c| c.0 == I64Vec3::ZERO));
+    }
+
+    #[test]
+    fn test_neighbors_26_indexed_by_neighbor_26_index() {
+        let origin = ChunkCoordinate(I64Vec3::ZERO);
+        let neighbors = origin.neighbors_26();
+
+        let idx = neighbor_26_index(1, -1, 0);
+        assert_eq!(I64Vec3::new(1, -1, 0), neighbors[idx].0);
+    }
 
     #[test]
     #[should_panic]

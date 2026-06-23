@@ -27,7 +27,11 @@ fn fragment(
     let color_lit = material_color * textureSample(material_color_texture, material_color_sampler, in.uv);
 
     let dark = color_lit * 0.7;
-    let color = mix(dark, color_lit, brightness);
+    var color = mix(dark, color_lit, brightness);
+
+#ifdef VERTEX_COLORS
+    color = vec4<f32>(color.rgb * in.color.rgb, color.a);
+#endif
 
     var output: FragmentOutput;
     output.color = color;
