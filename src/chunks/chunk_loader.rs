@@ -59,17 +59,21 @@ const MAX_SCAN_PER_FRAME: usize = 50_000;
 // GPU buffer upload + ECS component insert on the main thread - the most expensive of
 // these per item, and the most likely source of a visible stutter, so smallest budget
 const MAX_MESHES_APPLIED_PER_FRAME: usize = 16;
+// Mesh generation samples the full 3x3x3 chunk neighborhood for vertex AO (including
+// corner-diagonal chunks), so the neighbour-data shell must reach far enough to cover a
+// (1,1,1) chunk-grid offset, i.e. Euclidean distance sqrt(3) =~ 1.73 - round up to 2.
+const NEIGHBOR_DATA_PADDING: u32 = 2;
 
 impl ChunkLoader {
     pub fn new(render_distance: u32, material: Handle<ChunkMaterial>) -> Self {
         Self {
             render_distance,
             chunk_to_entity: HashMap::new(),
-            // generate one shell of chunk data beyond render_distance so the chunks
+            // generate a shell of chunk data beyond render_distance so the chunks
             // actually meshed (up to render_distance) always have complete neighbour
-            // data - without this, the outermost shell would never have all 6
-            // neighbours generated, since one of them is always one step further out
-            spawn_queue: ChunkSpawnQueue::new(render_distance + 1),
+            // data - without this, the outermost shell would never have its full
+            // neighbourhood generated, since some of it is always further out
+            spawn_queue: ChunkSpawnQueue::new(render_distance + NEIGHBOR_DATA_PADDING),
             material,
         }
     }
@@ -180,9 +184,11 @@ pub fn mark_chunks(
             return;
         }
 
+        // Mesh generation samples diagonal-neighbor chunks for vertex AO, so wait for the
+        // full 3x3x3 neighborhood, not just the 6 face-adjacent chunks.
         if chunk
             .coord
-            .adjacent()
+            .neighbors_26()
             .into_iter()
             .all(|adj| world.is_chunk_generated(adj))
         {
@@ -259,9 +265,9 @@ pub fn unload_chunks(
     chunks_query: Query<(Entity, &Chunk), (Without<GenerateChunkData>, Without<GenerateChunkMesh>)>,
 ) {
     for (entity, chunk) in chunks_query.iter() {
-        // + 1 to match the neighbour-data padding shell generated beyond render_distance
+        // matches the neighbour-data padding shell generated beyond render_distance
         if chunk_distance(chunk.coord, chunk_loader.spawn_queue.anchor)
-            > (chunk_loader.render_distance + 1) as f32
+            > (chunk_loader.render_distance + NEIGHBOR_DATA_PADDING) as f32
         {
             commands.entity(entity).despawn();
             chunk_loader.chunk_to_entity.remove(&chunk.coord);

@@ -1,7 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use bevy::{
-    math::{I64Vec2, U16Vec3, Vec3},
+    math::{I64Vec2, IVec3, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
         render_asset::RenderAssetUsages,
@@ -10,8 +10,82 @@ use bevy::{
 
 use super::noise::NoiseGenerator;
 use crate::block::{BlockType, BLOCK_COUNT};
-use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
+use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
 use crate::util::primitives::Vertex;
+
+// Face order matches `face_vertices`/`sides` below: [front, right, left, back, top, bottom].
+const FACE_NORMAL_OFFSET: [IVec3; 6] = [
+    IVec3::new(0, 0, -1), // front
+    IVec3::new(1, 0, 0),  // right
+    IVec3::new(-1, 0, 0), // left
+    IVec3::new(0, 0, 1),  // back
+    IVec3::new(0, 1, 0),  // top
+    IVec3::new(0, -1, 0), // bottom
+];
+const FACE_TANGENTS: [(IVec3, IVec3); 6] = [
+    (IVec3::new(1, 0, 0), IVec3::new(0, 1, 0)), // front
+    (IVec3::new(0, 0, 1), IVec3::new(0, 1, 0)), // right
+    (IVec3::new(0, 0, 1), IVec3::new(0, 1, 0)), // left
+    (IVec3::new(1, 0, 0), IVec3::new(0, 1, 0)), // back
+    (IVec3::new(1, 0, 0), IVec3::new(0, 0, 1)), // top
+    (IVec3::new(1, 0, 0), IVec3::new(0, 0, 1)), // bottom
+];
+const AO_STRENGTH: f32 = 0.5;
+
+// `neighbor_chunks` holds all 26 chunks in the 3x3x3 neighborhood (see `ChunkCoordinate::neighbors_26`),
+// since AO sampling near a chunk corner can need a diagonal-adjacent chunk, not just a face-adjacent one.
+fn resolve_block(chunk: &ChunkData, neighbor_chunks: &[Option<Arc<ChunkData>>], coord: IVec3) -> BlockType {
+    let size = chunk.size as i32;
+    let out = |c: i32| if c < 0 { -1 } else if c >= size { 1 } else { 0 };
+    let wrap = |c: i32, out: i32| match out {
+        -1 => size - 1,
+        1 => 0,
+        _ => c,
+    };
+    let (out_x, out_y, out_z) = (out(coord.x), out(coord.y), out(coord.z));
+
+    if out_x == 0 && out_y == 0 && out_z == 0 {
+        return chunk.get_block_at(U16Vec3::new(coord.x as u16, coord.y as u16, coord.z as u16));
+    }
+
+    let wrapped = IVec3::new(
+        wrap(coord.x, out_x),
+        wrap(coord.y, out_y),
+        wrap(coord.z, out_z),
+    );
+    let idx = neighbor_26_index(out_x, out_y, out_z);
+    neighbor_chunks[idx]
+        .as_ref()
+        .map(|c| c.get_block_at(U16Vec3::new(wrapped.x as u16, wrapped.y as u16, wrapped.z as u16)))
+        .unwrap_or_default()
+}
+
+fn vertex_ao(
+    chunk: &ChunkData,
+    adjacent_chunks: &[Option<Arc<ChunkData>>],
+    block_coord: IVec3,
+    face_index: usize,
+    vertex_local_pos: [f32; 3],
+) -> f32 {
+    let (ta, tb) = FACE_TANGENTS[face_index];
+    let axis_index = |v: IVec3| if v.x != 0 { 0 } else if v.y != 0 { 1 } else { 2 };
+    let sign_a = vertex_local_pos[axis_index(ta)].signum() as i32;
+    let sign_b = vertex_local_pos[axis_index(tb)].signum() as i32;
+    let normal_off = FACE_NORMAL_OFFSET[face_index];
+    let offset_a = ta * sign_a;
+    let offset_b = tb * sign_b;
+
+    let side_a = resolve_block(chunk, adjacent_chunks, block_coord + normal_off + offset_a);
+    let side_b = resolve_block(chunk, adjacent_chunks, block_coord + normal_off + offset_b);
+    let corner = resolve_block(
+        chunk,
+        adjacent_chunks,
+        block_coord + normal_off + offset_a + offset_b,
+    );
+
+    let sum = side_a.occlusion_weight() + side_b.occlusion_weight() + corner.occlusion_weight();
+    1.0 - (sum / 3.0).clamp(0.0, 1.0) * AO_STRENGTH
+}
 
 pub fn generate_chunk(
     noise_generator: Arc<RwLock<NoiseGenerator>>,
@@ -83,19 +157,28 @@ pub fn generate_chunk_mesh(
 ) -> Mesh {
     let mut vertices: Vec<Vertex> = vec![];
     let mut indices: Vec<u32> = vec![];
+    let mut colors: Vec<[f32; 4]> = vec![];
 
-    let mut add_vertices = |vs: &[Vertex], position: Vec3, block_type: BlockType| {
+    let mut add_vertices = |vs: &[Vertex],
+                             position: Vec3,
+                             block_type: BlockType,
+                             block_coord: IVec3,
+                             face_index: usize| {
         let uv_scale = 1.0 / (BLOCK_COUNT - 1) as f32;
 
         let triangle_start: u32 = vertices.len() as u32;
-        vertices.extend(&mut vs.iter().map(|v| Vertex {
-            position: (Vec3::from(v.position) + position).into(),
-            normal: v.normal,
-            uv: [
-                uv_scale * (v.uv[0] + (block_type as usize - 1) as f32),
-                v.uv[1],
-            ],
-        }));
+        for v in vs.iter() {
+            vertices.push(Vertex {
+                position: (Vec3::from(v.position) + position).into(),
+                normal: v.normal,
+                uv: [
+                    uv_scale * (v.uv[0] + (block_type as usize - 1) as f32),
+                    v.uv[1],
+                ],
+            });
+            let ao = vertex_ao(&chunk, &adjacent_chunks, block_coord, face_index, v.position);
+            colors.push([ao, ao, ao, 1.0]);
+        }
         indices.extend(vec![
             triangle_start,
             triangle_start + 1,
@@ -119,70 +202,27 @@ pub fn generate_chunk_mesh(
     for (coord, block) in chunk.blocks().iter() {
         let (x, y, z) = (coord.x, coord.y, coord.z);
         let world_position = Vec3::new(x as f32, y as f32, z as f32);
+        let block_coord = IVec3::new(x as i32, y as i32, z as i32);
 
-        let front = if z > 0 {
-            chunk.get_block_at(U16Vec3::new(x, y, z - 1))
-        } else {
-            let adjacent = &adjacent_chunks[1].as_ref();
-            adjacent
-                .map(|adjacent| adjacent.get_block_at(U16Vec3::new(x, y, adjacent.size - 1)))
-                .unwrap_or_default()
-        };
-
-        let back = if z < chunk.size - 1 {
-            chunk.get_block_at(U16Vec3::new(x, y, z + 1))
-        } else {
-            let adjacent = &adjacent_chunks[0].as_ref();
-            adjacent
-                .map(|adjacent| adjacent.get_block_at(U16Vec3::new(x, y, 0)))
-                .unwrap_or_default()
-        };
-
-        let left = if x > 0 {
-            chunk.get_block_at(U16Vec3::new(x - 1, y, z))
-        } else {
-            let adjacent = &adjacent_chunks[3].as_ref();
-            adjacent
-                .map(|adjacent| adjacent.get_block_at(U16Vec3::new(adjacent.size - 1, y, z)))
-                .unwrap_or_default()
-        };
-
-        let right = if x < chunk.size - 1 {
-            chunk.get_block_at(U16Vec3::new(x + 1, y, z))
-        } else {
-            let adjacent = &adjacent_chunks[2].as_ref();
-            adjacent
-                .map(|adjacent| adjacent.get_block_at(U16Vec3::new(0, y, z)))
-                .unwrap_or_default()
-        };
-
-        let top = if y < chunk.size - 1 {
-            chunk.get_block_at(U16Vec3::new(x, y + 1, z))
-        } else {
-            let adjacent = &adjacent_chunks[4].as_ref();
-            adjacent
-                .map(|adjacent| adjacent.get_block_at(U16Vec3::new(x, 0, z)))
-                .unwrap_or_default()
-        };
-
-        let bottom = if y > 0 {
-            chunk.get_block_at(U16Vec3::new(x, y - 1, z))
-        } else {
-            let adjacent = &adjacent_chunks[5].as_ref();
-            adjacent
-                .map(|adjacent| adjacent.get_block_at(U16Vec3::new(x, adjacent.size - 1, z)))
-                .unwrap_or_default()
-        };
+        // Order matches `face_vertices`/`sides` below and `FACE_NORMAL_OFFSET`.
+        let front = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[0]);
+        let right = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[1]);
+        let left = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[2]);
+        let back = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[3]);
+        let top = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[4]);
+        let bottom = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[5]);
 
         let sides = [front, right, left, back, top, bottom];
         for (i, side) in sides.iter().enumerate() {
             match side {
                 BlockType::Water => {
                     if *block != BlockType::Water {
-                        add_vertices(&face_vertices[i], world_position, *block)
+                        add_vertices(&face_vertices[i], world_position, *block, block_coord, i)
                     }
                 }
-                BlockType::Air => add_vertices(&face_vertices[i], world_position, *block),
+                BlockType::Air => {
+                    add_vertices(&face_vertices[i], world_position, *block, block_coord, i)
+                }
                 _ => (),
             };
         }
@@ -205,5 +245,89 @@ pub fn generate_chunk_mesh(
         Mesh::ATTRIBUTE_UV_0,
         VertexAttributeValues::Float32x2(vertices.iter().map(|v| v.uv).collect()),
     );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, VertexAttributeValues::Float32x4(colors));
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bevy::math::{IVec3, U16Vec3};
+
+    use crate::block::BlockType;
+
+    use super::{resolve_block, vertex_ao, AO_STRENGTH};
+    use crate::chunks::chunk::{neighbor_26_index, ChunkData};
+
+    fn no_neighbors() -> [Option<Arc<ChunkData>>; 26] {
+        std::array::from_fn(|_| None)
+    }
+
+    #[test]
+    fn test_resolve_block_within_chunk() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+
+        let block = resolve_block(&chunk, &no_neighbors(), IVec3::new(4, 4, 4));
+        assert_eq!(BlockType::Stone, block);
+    }
+
+    #[test]
+    fn test_resolve_block_crosses_single_axis_into_adjacent_chunk() {
+        let chunk = ChunkData::default();
+        let mut adjacent = ChunkData::default();
+        adjacent.set_block_at(U16Vec3::new(0, 4, 4), BlockType::Stone);
+
+        let mut neighbors = no_neighbors();
+        neighbors[neighbor_26_index(1, 0, 0)] = Some(Arc::new(adjacent));
+        let block = resolve_block(&chunk, &neighbors, IVec3::new(chunk.size as i32, 4, 4));
+        assert_eq!(BlockType::Stone, block);
+    }
+
+    #[test]
+    fn test_resolve_block_crosses_two_axes_into_diagonal_chunk() {
+        let chunk = ChunkData::default();
+        let mut diagonal = ChunkData::default();
+        diagonal.set_block_at(U16Vec3::new(0, 0, 4), BlockType::Stone);
+
+        let mut neighbors = no_neighbors();
+        neighbors[neighbor_26_index(1, 1, 0)] = Some(Arc::new(diagonal));
+        let block = resolve_block(
+            &chunk,
+            &neighbors,
+            IVec3::new(chunk.size as i32, chunk.size as i32, 4),
+        );
+        assert_eq!(BlockType::Stone, block);
+    }
+
+    #[test]
+    fn test_resolve_block_missing_diagonal_chunk_is_air() {
+        let chunk = ChunkData::default();
+        let block = resolve_block(
+            &chunk,
+            &no_neighbors(),
+            IVec3::new(chunk.size as i32, chunk.size as i32, 4),
+        );
+        assert_eq!(BlockType::Air, block);
+    }
+
+    #[test]
+    fn test_vertex_ao_no_occluders_is_unlit() {
+        let chunk = ChunkData::default();
+        let ao = vertex_ao(&chunk, &no_neighbors(), IVec3::new(4, 4, 4), 4, [0.5, 0.5, -0.5]);
+        assert_eq!(1.0, ao);
+    }
+
+    #[test]
+    fn test_vertex_ao_fully_occluded_corner() {
+        let mut chunk = ChunkData::default();
+        // Top face (index 4) at (4,4,4): occluders are the y+1 layer's tangent/diagonal cells.
+        chunk.set_block_at(U16Vec3::new(5, 5, 4), BlockType::Stone);
+        chunk.set_block_at(U16Vec3::new(4, 5, 5), BlockType::Stone);
+        chunk.set_block_at(U16Vec3::new(5, 5, 5), BlockType::Stone);
+
+        let ao = vertex_ao(&chunk, &no_neighbors(), IVec3::new(4, 4, 4), 4, [0.5, 0.5, 0.5]);
+        assert_eq!(1.0 - AO_STRENGTH, ao);
+    }
 }
