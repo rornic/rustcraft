@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use bevy::{
     math::{I64Vec2, IVec3, U16Vec3, Vec3},
@@ -88,12 +88,11 @@ fn vertex_ao(
 }
 
 pub fn generate_chunk(
-    noise_generator: Arc<RwLock<NoiseGenerator>>,
+    noise: Arc<NoiseGenerator>,
     chunk_pos: ChunkCoordinate,
     world_height: u64,
 ) -> ChunkData {
     let mut chunk_data = ChunkData::default();
-    let mut noise = noise_generator.write().unwrap();
 
     for x in 0..chunk_data.size {
         for z in 0..chunk_data.size {
@@ -199,7 +198,7 @@ pub fn generate_chunk_mesh(
         &cube_vertices[20..24], // bottom
     ];
 
-    for (coord, block) in chunk.blocks().iter() {
+    for (coord, block) in chunk.iter_non_air() {
         let (x, y, z) = (coord.x, coord.y, coord.z);
         let world_position = Vec3::new(x as f32, y as f32, z as f32);
         let block_coord = IVec3::new(x as i32, y as i32, z as i32);
@@ -216,12 +215,12 @@ pub fn generate_chunk_mesh(
         for (i, side) in sides.iter().enumerate() {
             match side {
                 BlockType::Water => {
-                    if *block != BlockType::Water {
-                        add_vertices(&face_vertices[i], world_position, *block, block_coord, i)
+                    if block != BlockType::Water {
+                        add_vertices(&face_vertices[i], world_position, block, block_coord, i)
                     }
                 }
                 BlockType::Air => {
-                    add_vertices(&face_vertices[i], world_position, *block, block_coord, i)
+                    add_vertices(&face_vertices[i], world_position, block, block_coord, i)
                 }
                 _ => (),
             };
@@ -253,12 +252,14 @@ pub fn generate_chunk_mesh(
 mod tests {
     use std::sync::Arc;
 
-    use bevy::math::{IVec3, U16Vec3};
+    use bevy::math::{I64Vec3, IVec3, U16Vec3};
+    use bevy::utils::HashMap;
 
     use crate::block::BlockType;
 
-    use super::{resolve_block, vertex_ao, AO_STRENGTH};
-    use crate::chunks::chunk::{neighbor_26_index, ChunkData};
+    use super::{generate_chunk, generate_chunk_mesh, resolve_block, vertex_ao, AO_STRENGTH};
+    use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
+    use crate::chunks::generate::noise::NoiseGenerator;
 
     fn no_neighbors() -> [Option<Arc<ChunkData>>; 26] {
         std::array::from_fn(|_| None)
@@ -329,5 +330,50 @@ mod tests {
 
         let ao = vertex_ao(&chunk, &no_neighbors(), IVec3::new(4, 4, 4), 4, [0.5, 0.5, 0.5]);
         assert_eq!(1.0 - AO_STRENGTH, ao);
+    }
+
+    // Not run as part of normal `cargo test` - this is a before/after timing comparison
+    // for the ChunkData storage representation, not a correctness check. Run with:
+    //   cargo test --release -- --ignored --nocapture bench_generate_and_mesh_chunks
+    // Capture a baseline before changing ChunkData's storage, then re-run after with the
+    // same seed/coordinates and compare - `get_block_at`/`set_block_at` are on the hot
+    // path here (every block, every face, every AO sample), so this isolates exactly the
+    // cost a storage change would add, rather than inferring it from `cargo test` passing.
+    #[test]
+    #[ignore]
+    fn bench_generate_and_mesh_chunks() {
+        let noise = Arc::new(NoiseGenerator::new(42));
+
+        // x,z: 20 chunks across; y: from deep underground (-10) to above the surface (9),
+        // so the batch mixes uniform deep chunks with real varied surface terrain.
+        let mut coords = Vec::new();
+        for x in 0..20 {
+            for y in -10..10 {
+                for z in 0..20 {
+                    coords.push(ChunkCoordinate(I64Vec3::new(x, y, z)));
+                }
+            }
+        }
+
+        let start = std::time::Instant::now();
+        let data: HashMap<ChunkCoordinate, Arc<ChunkData>> = coords
+            .iter()
+            .map(|&c| (c, Arc::new(generate_chunk(noise.clone(), c, 256))))
+            .collect();
+        let generate_elapsed = start.elapsed();
+
+        let start = std::time::Instant::now();
+        for &c in &coords {
+            let neighbours = c.neighbors_26().iter().map(|n| data.get(n).cloned()).collect();
+            generate_chunk_mesh(data[&c].clone(), neighbours);
+        }
+        let mesh_elapsed = start.elapsed();
+
+        println!(
+            "bench_generate_and_mesh_chunks: {} chunks, generate={:?}, mesh={:?}",
+            coords.len(),
+            generate_elapsed,
+            mesh_elapsed
+        );
     }
 }

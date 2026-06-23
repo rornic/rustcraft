@@ -65,10 +65,20 @@ pub fn neighbor_26_index(dx: i32, dy: i32, dz: i32) -> usize {
     }
 }
 
-type BlockPalette = HashMap<U16Vec3, BlockType>;
+// One block-type run in a chunk's linear cell ordering (see `ChunkData::linear_index`).
+// `length` covers at most size^3 = 4096 cells, comfortably within u16.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    block: BlockType,
+    length: u16,
+}
 
 pub struct ChunkData {
-    blocks: BlockPalette,
+    // Run-length encoded instead of a per-block map: most chunks are either fully
+    // uniform (e.g. deep underground, see generate_chunk) or banded, so this is far
+    // smaller in practice than one entry per block, at the cost of `get`/`set` becoming
+    // an O(runs) scan instead of O(1) - see `locate`.
+    runs: Vec<Run>,
     pub size: u16,
     pub dirty: bool,
 }
@@ -77,9 +87,13 @@ pub const CHUNK_SIZE: u16 = 16;
 
 impl Default for ChunkData {
     fn default() -> Self {
+        let size = CHUNK_SIZE;
         Self {
-            blocks: HashMap::new(),
-            size: CHUNK_SIZE,
+            runs: vec![Run {
+                block: BlockType::Air,
+                length: size * size * size,
+            }],
+            size,
             dirty: false,
         }
     }
@@ -90,12 +104,71 @@ impl ChunkData {
         return block_coord.x < self.size && block_coord.y < self.size && block_coord.z < self.size;
     }
 
-    pub fn empty(&self) -> bool {
-        self.blocks.is_empty()
+    // x outer, z middle, y inner - matches generate_chunk's nested loop order, so terrain
+    // bands form long runs and sequential column-by-column generation tends to extend
+    // the tail run rather than fragment the run list.
+    fn linear_index(&self, coord: U16Vec3) -> usize {
+        let size = self.size as usize;
+        coord.x as usize * size * size + coord.z as usize * size + coord.y as usize
     }
 
-    pub fn blocks(&self) -> &BlockPalette {
-        &self.blocks
+    fn coord_from_index(&self, index: usize) -> U16Vec3 {
+        let size = self.size as usize;
+        let x = index / (size * size);
+        let rem = index % (size * size);
+        let z = rem / size;
+        let y = rem % size;
+        U16Vec3::new(x as u16, y as u16, z as u16)
+    }
+
+    // Finds the run covering `index`, returning its position in `runs` and the linear
+    // index it starts at. Run counts stay small in practice (a uniform chunk is 1 run,
+    // banded terrain is tens), so a linear scan is fine - never worse than the old
+    // per-block map, and exact in the common case instead of needing a separate offset
+    // index kept in sync.
+    fn locate(&self, index: usize) -> (usize, usize) {
+        let mut start = 0;
+        for (i, run) in self.runs.iter().enumerate() {
+            let end = start + run.length as usize;
+            if index < end {
+                return (i, start);
+            }
+            start = end;
+        }
+        unreachable!("index {index} out of range for a {start}-cell chunk")
+    }
+
+    // Merges the run at `index` with an immediate same-type neighbour on either side, if
+    // present - keeps run count from growing unboundedly under repeated scattered edits.
+    fn merge_at(&mut self, index: usize) {
+        if index + 1 < self.runs.len() && self.runs[index + 1].block == self.runs[index].block {
+            self.runs[index].length += self.runs[index + 1].length;
+            self.runs.remove(index + 1);
+        }
+        if index > 0 && self.runs[index - 1].block == self.runs[index].block {
+            self.runs[index - 1].length += self.runs[index].length;
+            self.runs.remove(index);
+        }
+    }
+
+    pub fn empty(&self) -> bool {
+        self.runs.iter().all(|r| r.block == BlockType::Air)
+    }
+
+    // Replaces the old `blocks().iter()` contract (the underlying map never stored Air):
+    // yields every non-air block's coordinate and type, in no particular order.
+    pub fn iter_non_air(&self) -> impl Iterator<Item = (U16Vec3, BlockType)> {
+        let mut result = Vec::new();
+        let mut start = 0usize;
+        for run in &self.runs {
+            if run.block != BlockType::Air {
+                for i in start..start + run.length as usize {
+                    result.push((self.coord_from_index(i), run.block));
+                }
+            }
+            start += run.length as usize;
+        }
+        result.into_iter()
     }
 
     pub fn get_block_at(&self, block_coord: U16Vec3) -> BlockType {
@@ -103,16 +176,48 @@ impl ChunkData {
             panic!("get block {:?} not in chunk", block_coord);
         }
 
-        return *self.blocks.get(&block_coord).unwrap_or(&BlockType::Air);
+        let (run_index, _) = self.locate(self.linear_index(block_coord));
+        self.runs[run_index].block
     }
 
     pub fn set_block_at(&mut self, block_coord: U16Vec3, block_type: BlockType) {
         if !self.is_block_in_chunk(block_coord) {
             panic!("set block {:?} not in chunk", block_coord);
         }
-
-        self.blocks.insert(block_coord, block_type);
         self.dirty = true;
+
+        let index = self.linear_index(block_coord);
+        let (run_index, run_start) = self.locate(index);
+        let existing = self.runs[run_index];
+        if existing.block == block_type {
+            return; // already correct - no structural change needed
+        }
+
+        let offset = index - run_start;
+        let before_len = offset;
+        let after_len = existing.length as usize - offset - 1;
+
+        let mut replacement = Vec::with_capacity(3);
+        if before_len > 0 {
+            replacement.push(Run {
+                block: existing.block,
+                length: before_len as u16,
+            });
+        }
+        let target_pos = replacement.len();
+        replacement.push(Run {
+            block: block_type,
+            length: 1,
+        });
+        if after_len > 0 {
+            replacement.push(Run {
+                block: existing.block,
+                length: after_len as u16,
+            });
+        }
+
+        self.runs.splice(run_index..=run_index, replacement);
+        self.merge_at(run_index + target_pos);
     }
 }
 
@@ -134,17 +239,15 @@ impl Default for ChunkOctree {
 }
 
 impl ChunkOctree {
+    // cache-only: `set_chunk_data` is the only thing that ever subdivides the tree
+    // or inserts a cache entry, so a cache miss always means "no data" - no need to
+    // walk the tree on every read, and (more importantly) it means every arena node
+    // either has data or is an ancestor of one that does, which is what makes
+    // `clear_chunk`'s collapse safe (nothing else can be left pointing at a node it
+    // removes).
     pub fn get_chunk_data(&mut self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
-        let octant = if let Some(&id) = self.cache.get(&coord) {
-            self.octree.get_node_by_id(id)
-        } else {
-            let octant = self.octree.query_octant(self.chunk_centre(coord));
-            self.cache.insert(coord, octant.read().unwrap().id());
-            octant
-        };
-
-        let data = octant.read().unwrap().get_data();
-        data
+        let &id = self.cache.get(&coord)?;
+        self.octree.get_node_by_id(id).read().unwrap().get_data()
     }
 
     pub fn set_chunk_data(
@@ -153,6 +256,7 @@ impl ChunkOctree {
         chunk_data: ChunkData,
     ) -> Arc<ChunkData> {
         let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
+        self.cache.insert(coord, chunk_octant.read().unwrap().id());
 
         let chunk_data = Arc::new(chunk_data);
         let mut write = chunk_octant.write().unwrap();
@@ -160,16 +264,10 @@ impl ChunkOctree {
         chunk_data
     }
 
-    // only clears the leaf's data; the underlying octree node (and its ancestors)
-    // is never freed/collapsed, so unloading chunks does not reclaim tree memory.
-    // A real fix needs parent pointers plus a debounce window to avoid thrashing
-    // as chunks repeatedly cross the render-distance boundary every frame.
     pub fn clear_chunk(&mut self, coord: ChunkCoordinate) {
-        let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
-
-        let mut write = chunk_octant.write().unwrap();
-        write.clear_data();
-        self.cache.remove(&coord);
+        if let Some(id) = self.cache.remove(&coord) {
+            self.octree.clear_data(id);
+        }
     }
 
     pub fn chunk_centre(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
@@ -229,11 +327,83 @@ mod tests {
         let mut chunk_data = ChunkData::default();
         chunk_data.set_block_at(U16Vec3::new(4, 12, 5), BlockType::Grass);
 
-        assert_eq!(1, chunk_data.blocks.len());
+        assert_eq!(BlockType::Grass, chunk_data.get_block_at(U16Vec3::new(4, 12, 5)));
+        assert_eq!(BlockType::Air, chunk_data.get_block_at(U16Vec3::new(0, 0, 0)));
+    }
+
+    #[test]
+    fn test_set_then_get_round_trip() {
+        let mut chunk_data = ChunkData::default();
+        chunk_data.set_block_at(U16Vec3::new(7, 8, 9), BlockType::Stone);
+
+        assert_eq!(BlockType::Stone, chunk_data.get_block_at(U16Vec3::new(7, 8, 9)));
+    }
+
+    #[test]
+    fn test_set_block_mid_run_splits_without_disturbing_neighbours() {
+        let mut chunk_data = ChunkData::default();
+        // a single Air run covers everything by default - set the middle cell of one
+        // column and confirm the cells immediately above/below it are untouched.
+        chunk_data.set_block_at(U16Vec3::new(0, 5, 0), BlockType::Stone);
+
+        assert_eq!(BlockType::Air, chunk_data.get_block_at(U16Vec3::new(0, 4, 0)));
+        assert_eq!(BlockType::Stone, chunk_data.get_block_at(U16Vec3::new(0, 5, 0)));
+        assert_eq!(BlockType::Air, chunk_data.get_block_at(U16Vec3::new(0, 6, 0)));
+    }
+
+    #[test]
+    fn test_set_block_back_to_neighbour_type_merges_runs() {
+        let mut chunk_data = ChunkData::default();
+        chunk_data.set_block_at(U16Vec3::new(0, 5, 0), BlockType::Stone);
+        assert_eq!(3, chunk_data.runs.len()); // air, stone, air
+
+        chunk_data.set_block_at(U16Vec3::new(0, 5, 0), BlockType::Air);
+        assert_eq!(1, chunk_data.runs.len()); // back to a single uniform run
+    }
+
+    #[test]
+    fn test_filling_entire_chunk_with_one_type_is_a_single_run() {
+        let mut chunk_data = ChunkData::default();
+        for x in 0..chunk_data.size {
+            for y in 0..chunk_data.size {
+                for z in 0..chunk_data.size {
+                    chunk_data.set_block_at(U16Vec3::new(x, y, z), BlockType::Stone);
+                }
+            }
+        }
+
+        assert_eq!(1, chunk_data.runs.len());
+        assert_eq!(BlockType::Stone, chunk_data.get_block_at(U16Vec3::new(0, 0, 0)));
+    }
+
+    #[test]
+    fn test_empty_is_true_for_default_chunk_and_after_reset_to_air() {
+        let mut chunk_data = ChunkData::default();
+        assert!(chunk_data.empty());
+
+        chunk_data.set_block_at(U16Vec3::new(1, 1, 1), BlockType::Sand);
+        assert!(!chunk_data.empty());
+
+        chunk_data.set_block_at(U16Vec3::new(1, 1, 1), BlockType::Air);
+        assert!(chunk_data.empty());
+    }
+
+    #[test]
+    fn test_iter_non_air_yields_exactly_the_set_blocks() {
+        let mut chunk_data = ChunkData::default();
+        chunk_data.set_block_at(U16Vec3::new(1, 1, 1), BlockType::Sand);
+        chunk_data.set_block_at(U16Vec3::new(2, 2, 2), BlockType::Stone);
+
+        let mut found: Vec<_> = chunk_data.iter_non_air().collect();
+        found.sort_by_key(|(coord, _)| (coord.x, coord.y, coord.z));
+
         assert_eq!(
-            BlockType::Grass,
-            *chunk_data.blocks.get(&U16Vec3::new(4, 12, 5)).unwrap()
-        )
+            vec![
+                (U16Vec3::new(1, 1, 1), BlockType::Sand),
+                (U16Vec3::new(2, 2, 2), BlockType::Stone),
+            ],
+            found
+        );
     }
 
     #[test]
@@ -283,6 +453,30 @@ mod tests {
             BlockType::Sand,
             queried_chunk_data.get_block_at(U16Vec3::new(2, 3, 4))
         );
+    }
+
+    #[test]
+    fn test_clear_chunk_then_get_returns_none() {
+        let mut octree = ChunkOctree::default();
+        let coord = ChunkCoordinate(I64Vec3::new(3, 2, 1));
+
+        octree.set_chunk_data(coord, ChunkData::default());
+        assert!(octree.get_chunk_data(coord).is_some());
+
+        octree.clear_chunk(coord);
+
+        assert!(octree.get_chunk_data(coord).is_none());
+    }
+
+    #[test]
+    fn test_clear_chunk_leaves_no_cache_entry() {
+        let mut octree = ChunkOctree::default();
+        let coord = ChunkCoordinate(I64Vec3::new(3, 2, 1));
+
+        octree.set_chunk_data(coord, ChunkData::default());
+        octree.clear_chunk(coord);
+
+        assert!(!octree.cache.contains_key(&coord));
     }
 
     #[test]
