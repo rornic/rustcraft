@@ -9,12 +9,14 @@ mod settings;
 mod util;
 mod world;
 
+use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 use chunks::{
     chunk_loader::{
         gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
     },
-    material::ChunkMaterial,
+    material::{ChunkMaterial, WaterMaterial},
 };
 use player::{player_look, player_move, PlayerBundle};
 
@@ -28,6 +30,7 @@ fn setup_scene(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     let game_world = crate::world::World::new();
     info!("world seed is {}", game_world.seed());
@@ -45,11 +48,39 @@ fn setup_scene(
         .id();
 
     let render_distance = 64;
+    // Both Exponential and ExponentialSquared crept in well before the edge of
+    // render distance, hazing most of the view. Linear keeps fog at exactly zero
+    // until `start`, then ramps to fully opaque by `end` (the unload boundary).
+    let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
             Transform::from_xyz(0.0, 2.0, 0.0),
             Camera3d { ..default() },
+            // Depth of field needs HDR enabled on the camera.
+            Camera { hdr: true, ..default() },
+            // Camera3d requires Tonemapping, defaulting to TonyMcMapface - it
+            // deliberately desaturates brights, which dulled this game's flatter,
+            // saturated palette. None bypasses tonemapping, matching how colors
+            // looked before HDR was enabled for depth of field.
+            Tonemapping::None,
             Msaa::Off,
+            DistanceFog {
+                color: Color::srgb_u8(120, 224, 232),
+                falloff: FogFalloff::Linear {
+                    start: fog_distance - 128.0,
+                    end: fog_distance,
+                },
+                ..default()
+            },
+            // Keeps nearby gameplay (within ~1.5 chunks) sharp and softens
+            // everything farther out - Gaussian over Bokeh since render distance is
+            // already large and Bokeh is the pricier of the two modes.
+            DepthOfField {
+                mode: DepthOfFieldMode::Gaussian,
+                focal_distance: 24.0,
+                aperture_f_stops: 1.4,
+                ..default()
+            },
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
@@ -58,7 +89,12 @@ fn setup_scene(
         color: LinearRgba::WHITE,
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
     });
-    let chunk_loader = ChunkLoader::new(render_distance as u32, chunk_material_handle);
+    let water_material_handle = water_materials.add(WaterMaterial {
+        color: LinearRgba::rgb(0.0, 0.85, 0.85),
+        texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+    });
+    let chunk_loader =
+        ChunkLoader::new(render_distance as u32, chunk_material_handle, water_material_handle);
     commands.insert_resource(chunk_loader);
 
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
@@ -78,8 +114,9 @@ fn main() {
                     ..default()
                 }),
             MaterialPlugin::<ChunkMaterial>::default(),
+            MaterialPlugin::<WaterMaterial>::default(),
         ))
-        .insert_resource(ClearColor(Color::srgb_u8(135, 206, 235)))
+        .insert_resource(ClearColor(Color::srgb_u8(120, 224, 232)))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,

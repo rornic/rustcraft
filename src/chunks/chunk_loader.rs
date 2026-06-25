@@ -8,7 +8,7 @@ use bevy::{
         query::{With, Without},
         system::{Commands, Query, Res, ResMut, Resource},
     },
-    hierarchy::Parent,
+    hierarchy::{BuildChildren, ChildBuild, DespawnRecursiveExt, Parent},
     math::{Dir3, I64Vec3, Vec3},
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
@@ -20,8 +20,8 @@ use bevy::{
 
 use super::{
     chunk::{ChunkCoordinate, ChunkData},
-    generate::generator::{generate_chunk, generate_chunk_mesh},
-    material::ChunkMaterial,
+    generate::generator::{generate_chunk, generate_chunk_mesh, ChunkMeshes},
+    material::{ChunkMaterial, WaterMaterial},
 };
 use crate::{player::PlayerLook, world::World};
 
@@ -41,7 +41,7 @@ pub struct GenerateChunkData {
 #[derive(Component)]
 pub struct GenerateChunkMesh {
     coord: ChunkCoordinate,
-    task: Option<Task<Mesh>>,
+    task: Option<Task<ChunkMeshes>>,
 }
 
 #[derive(Resource)]
@@ -50,6 +50,7 @@ pub struct ChunkLoader {
     chunk_to_entity: HashMap<ChunkCoordinate, Entity>,
     spawn_queue: ChunkSpawnQueue,
     material: Handle<ChunkMaterial>,
+    water_material: Handle<WaterMaterial>,
     max_in_flight_generating: usize,
 }
 
@@ -92,7 +93,11 @@ fn scale_budget(baseline: usize, render_distance: u32) -> usize {
 }
 
 impl ChunkLoader {
-    pub fn new(render_distance: u32, material: Handle<ChunkMaterial>) -> Self {
+    pub fn new(
+        render_distance: u32,
+        material: Handle<ChunkMaterial>,
+        water_material: Handle<WaterMaterial>,
+    ) -> Self {
         Self {
             render_distance,
             chunk_to_entity: HashMap::new(),
@@ -102,6 +107,7 @@ impl ChunkLoader {
             // neighbourhood generated, since some of it is always further out
             spawn_queue: ChunkSpawnQueue::new(render_distance + NEIGHBOR_DATA_PADDING),
             material,
+            water_material,
             max_in_flight_generating: scale_budget(
                 BASELINE_IN_FLIGHT_GENERATING,
                 render_distance,
@@ -257,14 +263,25 @@ pub fn load_chunks(
                 // loop: a time budget (instead of an item-count cap) means we can't know
                 // in advance how many will fit, and a completed task's mesh can't be
                 // polled a second time next frame if we deferred using it here.
-                if let Some(mesh) = futures::check_ready(task) {
+                if let Some(chunk_meshes) = futures::check_ready(task) {
                     let (t, aabb) = chunk_components(chunk.coord);
                     commands.entity(entity).insert((
-                        Mesh3d(meshes.add(mesh)),
+                        Mesh3d(meshes.add(chunk_meshes.opaque)),
                         MeshMaterial3d(chunk_loader.material.clone_weak()),
                         t,
                         aabb,
                     ));
+                    if let Some(water_mesh) = chunk_meshes.water {
+                        let (_, water_aabb) = chunk_components(chunk.coord);
+                        commands.entity(entity).with_children(|parent| {
+                            parent.spawn((
+                                Mesh3d(meshes.add(water_mesh)),
+                                MeshMaterial3d(chunk_loader.water_material.clone_weak()),
+                                Transform::default(),
+                                water_aabb,
+                            ));
+                        });
+                    }
                     commands.entity(entity).remove::<GenerateChunkMesh>();
                 }
             }
@@ -307,7 +324,9 @@ pub fn unload_chunks(
         if chunk_distance(chunk.coord, chunk_loader.spawn_queue.anchor)
             > (chunk_loader.render_distance + NEIGHBOR_DATA_PADDING) as f32
         {
-            commands.entity(entity).despawn();
+            // recursive: chunks with water spawn a child entity for the water mesh,
+            // which must be cleaned up along with the chunk itself.
+            commands.entity(entity).despawn_recursive();
             chunk_loader.chunk_to_entity.remove(&chunk.coord);
             world.clear_chunk(chunk.coord);
         }

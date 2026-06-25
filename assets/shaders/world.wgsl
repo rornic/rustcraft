@@ -1,4 +1,4 @@
-#import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings as view_bindings}
+#import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings as view_bindings, pbr_functions::apply_fog}
 
 @group(2) @binding(0) var<uniform> material_color: vec4<f32>;
 @group(2) @binding(1) var material_color_texture: texture_2d<f32>;
@@ -32,6 +32,11 @@ fn fragment(
 #ifdef VERTEX_COLORS
     color = vec4<f32>(color.rgb * in.color.rgb, color.a);
 #endif
+
+    // This shader fully replaces Bevy's standard PBR fragment stage, so fog isn't
+    // applied automatically the way it would be for StandardMaterial - apply it
+    // explicitly so distant chunks fade into the sky instead of popping in/out.
+    color = apply_fog(view_bindings::fog, color, world_position, view_position);
 
     var output: FragmentOutput;
     output.color = color;

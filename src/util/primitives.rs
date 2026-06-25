@@ -5,6 +5,21 @@ pub struct Vertex {
     pub uv: [f32; 2],
 }
 
+// Same geometry as `cube()`, but every vertex at the top of the cube (y == 0.5) is
+// pulled down to `top_y` instead - used to give water a surface that sits below a
+// full block's height while keeping its bottom/footprint identical to other blocks.
+pub fn cube_with_top(top_y: f32) -> Vec<Vertex> {
+    cube()
+        .into_iter()
+        .map(|mut v| {
+            if v.position[1] == 0.5 {
+                v.position[1] = top_y;
+            }
+            v
+        })
+        .collect()
+}
+
 pub fn cube() -> Vec<Vertex> {
     vec![
         // Front face
