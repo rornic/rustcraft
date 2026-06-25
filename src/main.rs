@@ -12,13 +12,14 @@ mod world;
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
+use bevy::render::view::ColorGrading;
 use chunks::{
     chunk_loader::{
         gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
     },
     material::{ChunkMaterial, WaterMaterial},
 };
-use player::{player_look, player_move, PlayerBundle};
+use player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -81,6 +82,7 @@ fn setup_scene(
                 aperture_f_stops: 1.4,
                 ..default()
             },
+            ColorGrading::default(),
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
@@ -123,8 +125,7 @@ fn main() {
             (
                 (gather_chunks, generate_chunks, mark_chunks, load_chunks).before(unload_chunks),
                 unload_chunks,
-                player_move,
-                player_look,
+                (player_move, player_look, update_underwater_effects).chain(),
             ),
         )
         .run();

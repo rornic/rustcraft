@@ -2,9 +2,10 @@ use std::{fmt::Debug, sync::Arc};
 
 use bevy::{
     ecs::system::Resource,
-    math::{I64Vec3, Vec3},
+    math::{I64Vec3, U16Vec3, Vec3},
 };
 
+use crate::block::BlockType;
 use crate::chunks::generate::noise::NoiseGenerator;
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree};
@@ -76,6 +77,27 @@ impl World {
 
     pub fn block_to_chunk_coordinate(&self, block_coord: I64Vec3) -> ChunkCoordinate {
         (block_coord / self.chunks.chunk_size as i64).into()
+    }
+
+    pub fn get_block_at(&mut self, world_block_coord: I64Vec3) -> BlockType {
+        let chunk_size = self.chunks.chunk_size as i64;
+        // div_euclid/rem_euclid, not block_to_chunk_coordinate's `/` - that truncates toward
+        // zero, which puts negative coordinates in the wrong chunk and yields a negative (then
+        // wrapping-to-huge-u16) local coordinate.
+        let chunk_coord = ChunkCoordinate(I64Vec3::new(
+            world_block_coord.x.div_euclid(chunk_size),
+            world_block_coord.y.div_euclid(chunk_size),
+            world_block_coord.z.div_euclid(chunk_size),
+        ));
+        let Some(chunk_data) = self.get_chunk_data(chunk_coord) else {
+            return BlockType::Air; // ungenerated chunk under the camera isn't water
+        };
+        let local = U16Vec3::new(
+            world_block_coord.x.rem_euclid(chunk_size) as u16,
+            world_block_coord.y.rem_euclid(chunk_size) as u16,
+            world_block_coord.z.rem_euclid(chunk_size) as u16,
+        );
+        chunk_data.get_block_at(local)
     }
 }
 

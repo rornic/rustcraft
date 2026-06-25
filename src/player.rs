@@ -1,18 +1,22 @@
 use bevy::{
+    core_pipeline::dof::{DepthOfField, DepthOfFieldMode},
     ecs::{
         bundle::Bundle,
         component::Component,
         event::EventReader,
         query::{With, Without},
-        system::{Query, Res},
+        system::{Local, Query, Res, ResMut},
     },
     hierarchy::Parent,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
-    math::{Dir3, Vec3},
-    prelude::Transform,
-    render::camera::Camera,
+    math::{Dir3, I64Vec3, Vec3},
+    pbr::{DistanceFog, FogFalloff},
+    prelude::{default, ClearColor, Color, Transform},
+    render::{camera::Camera, view::ColorGrading},
     time::Time,
 };
+
+use crate::{block::BlockType, world::World};
 
 #[derive(Bundle, Default)]
 pub struct PlayerBundle {
@@ -108,5 +112,68 @@ pub fn player_look(
             Dir3::X,
             -ev.delta.y * player_look.sensitivity * time.delta_secs(),
         );
+    }
+}
+
+// Snapshots whichever DistanceFog/DepthOfField/ClearColor were active right before the camera
+// entered water, and restores that exact snapshot on exit, instead of hardcoding "dry" defaults
+// that could drift out of sync with setup_scene's render-distance-derived fog settings.
+pub fn update_underwater_effects(
+    mut world: ResMut<World>,
+    mut clear_color: ResMut<ClearColor>,
+    player_query: Query<&Transform, With<Player>>,
+    mut camera_query: Query<
+        (
+            &Parent,
+            &Transform,
+            &mut DistanceFog,
+            &mut DepthOfField,
+            &mut ColorGrading,
+        ),
+        With<Camera>,
+    >,
+    mut dry_defaults: Local<Option<(DistanceFog, DepthOfField, Color)>>,
+) {
+    let (parent, camera_transform, mut fog, mut dof, mut color_grading) =
+        camera_query.get_single_mut().expect("camera does not exist");
+    let player_transform = player_query.get(parent.get()).expect("player does not exist");
+
+    let world_pos = player_transform.translation + camera_transform.translation;
+    let block_coord = I64Vec3::new(
+        world_pos.x.floor() as i64,
+        world_pos.y.floor() as i64,
+        world_pos.z.floor() as i64,
+    );
+
+    if world.get_block_at(block_coord) == BlockType::Water {
+        if dry_defaults.is_none() {
+            *dry_defaults = Some((fog.clone(), *dof, clear_color.0));
+        }
+        // Matches ClearColor to the fog color, same trick setup_scene uses above water (its
+        // ClearColor equals the dry fog's color) - otherwise empty/unloaded space shows the old
+        // background color straight through, breaking the underwater illusion.
+        let underwater_color = Color::srgb_u8(20, 90, 130);
+        *fog = DistanceFog {
+            color: underwater_color,
+            falloff: FogFalloff::Linear {
+                start: 0.0,
+                end: 32.0,
+            },
+            ..default()
+        };
+        *dof = DepthOfField {
+            mode: DepthOfFieldMode::Gaussian,
+            focal_distance: 1.5,
+            aperture_f_stops: 0.5,
+            ..default()
+        };
+        color_grading.global.temperature = -0.4;
+        color_grading.global.post_saturation = 0.85;
+        clear_color.0 = underwater_color;
+    } else if let Some((dry_fog, dry_dof, dry_clear_color)) = dry_defaults.take() {
+        *fog = dry_fog;
+        *dof = dry_dof;
+        *color_grading = ColorGrading::default();
+        clear_color.0 = dry_clear_color;
     }
 }
