@@ -6,7 +6,9 @@ use bevy::{
 };
 
 use crate::block::BlockType;
+use crate::chunks::generate::erosion::ErosionParams;
 use crate::chunks::generate::noise::NoiseGenerator;
+use crate::chunks::generate::region_store::RegionStore;
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree};
 
@@ -15,17 +17,19 @@ pub struct World {
     seed: u32,
     pub height: u64,
     chunks: ChunkOctree,
-    pub noise_generator: Arc<NoiseGenerator>,
+    pub region_store: Arc<RegionStore>,
 }
 
 impl World {
     pub fn new() -> Self {
         let seed = rand::random();
+        let height = 256;
+        let noise_generator = Arc::new(NoiseGenerator::new(seed));
         Self {
             seed,
-            height: 256,
+            height,
             chunks: ChunkOctree::default(),
-            noise_generator: Arc::new(NoiseGenerator::new(seed)),
+            region_store: Arc::new(RegionStore::new(seed, height, noise_generator, ErosionParams::default())),
         }
     }
 

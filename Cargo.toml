@@ -15,6 +15,9 @@ serde = { version = "1.0", features = ["serde_derive"] }
 bevy = { version = "0.15.1", features = ["trace"] }
 tracing = { version = "0.1.40", features = ["attributes"] }
 
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # Enable a small amount of optimization in debug mode
 [profile.dev]
 opt-level = 1

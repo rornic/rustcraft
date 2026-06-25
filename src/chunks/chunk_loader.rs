@@ -177,14 +177,12 @@ fn generate_single_chunk(
     task_pool: &AsyncComputeTaskPool,
     chunk_loader: &mut ResMut<ChunkLoader>,
 ) {
-    let noise_generator = world.noise_generator.clone();
-    let height = world.height;
+    let region_store = world.region_store.clone();
     let entity = commands
         .spawn((
             Chunk { coord },
             GenerateChunkData {
-                task: task_pool
-                    .spawn(async move { generate_chunk(noise_generator, coord, height) }),
+                task: task_pool.spawn(async move { generate_chunk(region_store, coord) }),
             },
         ))
         .id();

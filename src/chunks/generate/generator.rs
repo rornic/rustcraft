@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use bevy::{
-    math::{I64Vec2, IVec3, U16Vec3, Vec3},
+    math::{IVec3, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
         render_asset::RenderAssetUsages,
     },
 };
 
-use super::noise::NoiseGenerator;
+use super::region_store::RegionStore;
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
 use crate::util::primitives::Vertex;
@@ -158,9 +158,8 @@ fn vertex_shore_distance(
 }
 
 pub fn generate_chunk(
-    noise: Arc<NoiseGenerator>,
+    regions: Arc<RegionStore>,
     chunk_pos: ChunkCoordinate,
-    world_height: u64,
 ) -> ChunkData {
     let mut chunk_data = ChunkData::default();
 
@@ -171,26 +170,17 @@ pub fn generate_chunk(
                 chunk_pos.0.y * chunk_data.size as i64,
                 chunk_pos.0.z * chunk_data.size as i64 + z as i64,
             );
-            let noise_val = noise.get(I64Vec2::new(world_x, world_z));
 
-            let world_height = (noise_val * world_height as f64).round() as u64;
+            let column_height = regions.get_height(world_x, world_z).round() as u64;
             let chunk_height = if world_y > 0 {
                 let positive_y = world_y as u64;
-                (world_height - positive_y.min(world_height)).min(chunk_data.size as u64)
+                (column_height - positive_y.min(column_height)).min(chunk_data.size as u64)
             } else {
                 chunk_data.size as u64
             };
 
-            let gradient_x = (world_height as f64
-                * (noise.get(I64Vec2::new(world_x + 1, world_z))
-                    - noise.get(I64Vec2::new(world_x - 1, world_z))))
-            .abs();
-            let gradient_z = (world_height as f64
-                * (noise.get(I64Vec2::new(world_x, world_z + 1))
-                    - noise.get(I64Vec2::new(world_x, world_z - 1))))
-            .abs();
-
-            let combined_gradient = gradient_x + gradient_z;
+            let (gradient_x, gradient_z) = regions.get_gradient(world_x, world_z);
+            let combined_gradient = gradient_x.abs() + gradient_z.abs();
 
             for y in 0..chunk_height {
                 let world_y = world_y + y as i64;
@@ -425,6 +415,8 @@ mod tests {
     use super::{generate_chunk, generate_chunk_mesh, resolve_block, vertex_ao, AO_STRENGTH};
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
+    use crate::chunks::generate::region_store::RegionStore;
+    use crate::chunks::generate::erosion::ErosionParams;
 
     fn no_neighbors() -> [Option<Arc<ChunkData>>; 26] {
         std::array::from_fn(|_| None)
@@ -520,10 +512,11 @@ mod tests {
             }
         }
 
+        let regions = Arc::new(RegionStore::new(42, 256, noise, ErosionParams::default()));
         let start = std::time::Instant::now();
         let data: HashMap<ChunkCoordinate, Arc<ChunkData>> = coords
             .iter()
-            .map(|&c| (c, Arc::new(generate_chunk(noise.clone(), c, 256))))
+            .map(|&c| (c, Arc::new(generate_chunk(regions.clone(), c))))
             .collect();
         let generate_elapsed = start.elapsed();
 

@@ -1,25 +1,18 @@
 use std::error::Error;
 
-use settings::Settings;
-
-mod block;
-mod chunks;
-mod player;
-mod settings;
-mod util;
-mod world;
+use rustcraft::settings::Settings;
 
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 use bevy::render::view::ColorGrading;
-use chunks::{
+use rustcraft::chunks::{
     chunk_loader::{
         gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
     },
     material::{ChunkMaterial, WaterMaterial},
 };
-use player::{player_look, player_move, update_underwater_effects, PlayerBundle};
+use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -33,7 +26,7 @@ fn setup_scene(
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let game_world = crate::world::World::new();
+    let game_world = rustcraft::world::World::new();
     info!("world seed is {}", game_world.seed());
     let spawn = Vec3::new(0.0, 20.0, 0.0);
     commands.insert_resource(game_world);
