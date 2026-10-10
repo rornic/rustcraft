@@ -29,6 +29,9 @@ pub struct PlayerBundle {
 #[derive(Component, Default)]
 pub struct Player {}
 
+// How much faster the camera moves while Shift is held.
+const SPRINT_MULTIPLIER: f32 = 4.0;
+
 #[derive(Component)]
 pub struct PlayerMovement {
     move_speed: f32,
@@ -51,7 +54,11 @@ pub fn player_move(
         .get_mut(parent.get())
         .expect("player does not exist");
 
-    let move_speed = player_movement.move_speed;
+    let move_speed = if keys.pressed(KeyCode::ShiftLeft) {
+        player_movement.move_speed * SPRINT_MULTIPLIER
+    } else {
+        player_movement.move_speed
+    };
 
     let mut movement_vector = Vec3::ZERO;
     if keys.pressed(KeyCode::KeyA) {
@@ -69,7 +76,7 @@ pub fn player_move(
     let mut vertical_movement = Vec3::ZERO;
     if keys.pressed(KeyCode::Space) {
         vertical_movement.y = move_speed;
-    } else if keys.pressed(KeyCode::ShiftLeft) {
+    } else if keys.pressed(KeyCode::ControlLeft) {
         vertical_movement.y = -move_speed;
     }
 
