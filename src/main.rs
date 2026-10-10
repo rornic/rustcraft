@@ -53,10 +53,11 @@ fn setup_scene(
         })
         .id();
 
-    // Linear fog from a quarter of the way out to the edge of render distance, so
-    // distant terrain fades gradually into the sky like a horizon and is fully
-    // fogged by the time it ends. At the default distances it starts about where
-    // full-detail terrain gives way to LODs.
+    // Exponential-squared fog: a light haze close in that thickens with distance, so
+    // distant terrain fades into the sky like a horizon. It's 95% opaque a little
+    // short of the edge of render distance, so the edge - and any distant terrain
+    // still loading there - is hidden. At the default render distance that's about
+    // 25% haze where full detail ends, 60% at 1000 blocks and 98% at the edge.
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
@@ -76,10 +77,7 @@ fn setup_scene(
             Msaa::Off,
             DistanceFog {
                 color: Color::srgb_u8(120, 224, 232),
-                falloff: FogFalloff::Linear {
-                    start: fog_distance * 0.25,
-                    end: fog_distance,
-                },
+                falloff: FogFalloff::from_visibility_squared(fog_distance * 0.85),
                 ..default()
             },
             // Keeps nearby gameplay (within ~1.5 chunks) sharp and softens
