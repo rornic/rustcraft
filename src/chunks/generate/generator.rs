@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bevy::{
     math::{IVec3, U16Vec3, Vec3},
@@ -401,6 +401,21 @@ fn water_depth(source: &impl BlockSource, block_coord: IVec3) -> u32 {
     depth
 }
 
+// Water depth at a top-face corner, averaged over the four columns sharing it (land counts as 0).
+fn vertex_water_depth(
+    depth_of: &mut impl FnMut(IVec3) -> u32,
+    block_coord: IVec3,
+    face_index: usize,
+    vertex_local_pos: [f32; 3],
+) -> f32 {
+    let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
+    let total: u32 = [IVec3::ZERO, offset_a, offset_b, offset_a + offset_b]
+        .into_iter()
+        .map(|offset| depth_of(block_coord + offset))
+        .sum();
+    total as f32 / 4.0
+}
+
 pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
@@ -456,6 +471,11 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
         &water_cube_vertices[20..24],
     ];
 
+    // columns' water depths, shared between the corners that sample them
+    let mut depths = HashMap::new();
+    let mut depth_of =
+        |coord: IVec3| *depths.entry(coord).or_insert_with(|| water_depth(source, coord));
+
     for (block_coord, block) in source.non_air() {
         let world_position = block_coord.as_vec3();
 
@@ -495,15 +515,17 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
             // their shared edge by different amounts and visibly tear apart - depth
             // only ever affects per-pixel color/alpha (G), which can't crack.
             let is_top = is_water && i == 4;
-            let depth_factor = if is_top {
-                (water_depth(source, block_coord) as i64 * cell_size) as f32 / CHUNK_SIZE as f32
-            } else {
-                0.0
-            };
             let colors: Vec<[f32; 4]> = geometry[i]
                 .iter()
                 .map(|v| {
                     if is_water {
+                        let depth_factor = if is_top {
+                            vertex_water_depth(&mut depth_of, block_coord, i, v.position)
+                                * cell_size as f32
+                                / CHUNK_SIZE as f32
+                        } else {
+                            0.0
+                        };
                         let (shore, shore_distance) = if is_top {
                             (
                                 vertex_shore_factor(source, block_coord, i, v.position),
@@ -545,8 +567,8 @@ mod tests {
     use crate::block::BlockType;
 
     use super::{
-        generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao, BlockSource,
-        ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
+        generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
+        vertex_water_depth, water_depth, BlockSource, ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
@@ -633,6 +655,36 @@ mod tests {
         };
         let ao = vertex_ao(&source, IVec3::new(4, 4, 4), 4, [0.5, 0.5, 0.5]);
         assert_eq!(1.0 - AO_STRENGTH, ao);
+    }
+
+    #[test]
+    fn test_neighbouring_water_columns_agree_on_shared_corner_depth() {
+        let mut chunk = ChunkData::default();
+        // two columns with their surface at y = 5: one 5 deep, its +x neighbour 2 deep
+        chunk.set_block_at(U16Vec3::new(4, 0, 4), BlockType::Stone);
+        for y in 1..=5 {
+            chunk.set_block_at(U16Vec3::new(4, y, 4), BlockType::Water);
+        }
+        for y in 0..=3 {
+            chunk.set_block_at(U16Vec3::new(5, y, 4), BlockType::Stone);
+        }
+        for y in 4..=5 {
+            chunk.set_block_at(U16Vec3::new(5, y, 4), BlockType::Water);
+        }
+        let neighbors = no_neighbors();
+        let source = ChunkNeighbourhood {
+            chunk: &chunk,
+            neighbors: &neighbors,
+        };
+        let mut depth_of = |coord: IVec3| water_depth(&source, coord);
+
+        // the corner between them, on the +z side: seen from each column's top face
+        let deep = vertex_water_depth(&mut depth_of, IVec3::new(4, 5, 4), 4, [0.5, 0.5, 0.5]);
+        let shallow =
+            vertex_water_depth(&mut depth_of, IVec3::new(5, 5, 4), 4, [-0.5, 0.5, 0.5]);
+        assert_eq!(deep, shallow);
+        // averaged with the two dry columns on the +z side
+        assert_eq!((5.0 + 2.0) / 4.0, deep);
     }
 
     #[test]

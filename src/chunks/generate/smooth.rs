@@ -195,9 +195,12 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
                 .into_iter()
                 .fold(f32::INFINITY, f32::min);
             if range.contains(water_y) && lowest < water_y {
-                let depth = (water_y - surface.cell_centre(i, j)).max(0.0);
-                let colour = [0.0, depth / CHUNK_SIZE as f32, 1.0, 1.0];
                 let cells = [(i, j + 1), (i, j), (i + 1, j + 1), (i + 1, j)];
+                // depth per corner, so it blends smoothly across the water
+                let colours = cells.map(|(a, b)| {
+                    let depth = (water_y - surface.corner(a, b)).max(0.0);
+                    [0.0, depth / CHUNK_SIZE as f32, 1.0, 1.0]
+                });
                 push_quad(
                     &mut water,
                     cells.map(|(a, b)| to_local(corner(a, b).with_y(water_y))),
@@ -205,7 +208,7 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
                     Vec3::Y,
                     // the middle of the water tile
                     ([0.5, 0.5], BlockType::Water as usize as f32 - 1.0),
-                    [colour; 4],
+                    colours,
                 );
             }
         }
