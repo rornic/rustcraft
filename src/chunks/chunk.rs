@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use bevy::{
-    math::{I64Vec3, U16Vec3, Vec3},
+    math::{I64Vec3, U16Vec3, UVec3, Vec3},
     utils::HashMap,
 };
 
 use crate::block::BlockType;
-use crate::util::octree::Octree;
+use crate::util::octree::{NodeId, Octree};
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ChunkCoordinate(pub I64Vec3);
@@ -221,9 +221,11 @@ impl ChunkData {
     }
 }
 
+const REGION_DEPTH: u8 = 8;
+
 pub struct ChunkOctree {
-    octree: Octree<ChunkData>,
-    cache: HashMap<ChunkCoordinate, usize>,
+    regions: HashMap<I64Vec3, Octree<ChunkData>>,
+    cache: HashMap<ChunkCoordinate, NodeId>,
     pub chunk_size: u16,
 }
 
@@ -231,7 +233,7 @@ impl Default for ChunkOctree {
     fn default() -> Self {
         let chunk_size = 16;
         Self {
-            octree: Octree::new(1_048_576.0, 16),
+            regions: HashMap::new(),
             cache: HashMap::new(),
             chunk_size,
         }
@@ -239,15 +241,10 @@ impl Default for ChunkOctree {
 }
 
 impl ChunkOctree {
-    // cache-only: `set_chunk_data` is the only thing that ever subdivides the tree
-    // or inserts a cache entry, so a cache miss always means "no data" - no need to
-    // walk the tree on every read, and (more importantly) it means every arena node
-    // either has data or is an ancestor of one that does, which is what makes
-    // `clear_chunk`'s collapse safe (nothing else can be left pointing at a node it
-    // removes).
-    pub fn get_chunk_data(&mut self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
+    pub fn get_chunk_data(&self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
         let &id = self.cache.get(&coord)?;
-        self.octree.get_node_by_id(id).read().unwrap().get_data()
+        let (region, _) = Self::region_and_cell(coord);
+        self.regions.get(&region)?.get(id).cloned()
     }
 
     pub fn set_chunk_data(
@@ -255,19 +252,36 @@ impl ChunkOctree {
         coord: ChunkCoordinate,
         chunk_data: ChunkData,
     ) -> Arc<ChunkData> {
-        let chunk_octant = self.octree.query_octant(self.chunk_centre(coord));
-        self.cache.insert(coord, chunk_octant.read().unwrap().id());
-
+        let (region, cell) = Self::region_and_cell(coord);
         let chunk_data = Arc::new(chunk_data);
-        let mut write = chunk_octant.write().unwrap();
-        write.set_data(chunk_data.clone());
+        let id = self
+            .regions
+            .entry(region)
+            .or_insert_with(|| Octree::new(REGION_DEPTH))
+            .insert(cell, chunk_data.clone());
+        self.cache.insert(coord, id);
         chunk_data
     }
 
     pub fn clear_chunk(&mut self, coord: ChunkCoordinate) {
-        if let Some(id) = self.cache.remove(&coord) {
-            self.octree.clear_data(id);
+        let Some(id) = self.cache.remove(&coord) else {
+            return;
+        };
+        let (region, _) = Self::region_and_cell(coord);
+        if let Some(octree) = self.regions.get_mut(&region) {
+            octree.remove(id);
+            if octree.is_empty() {
+                self.regions.remove(&region);
+            }
         }
+    }
+
+    fn region_and_cell(coord: ChunkCoordinate) -> (I64Vec3, UVec3) {
+        let side = 1i64 << REGION_DEPTH;
+        (
+            coord.0.div_euclid(I64Vec3::splat(side)),
+            coord.0.rem_euclid(I64Vec3::splat(side)).as_uvec3(),
+        )
     }
 
     pub fn chunk_centre(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
@@ -477,6 +491,77 @@ mod tests {
         octree.clear_chunk(coord);
 
         assert!(!octree.cache.contains_key(&coord));
+    }
+
+    #[test]
+    fn test_set_get_chunk_data_beyond_old_world_bounds() {
+        let mut octree = ChunkOctree::default();
+        // well past the old single tree's +-32,768 chunk limit
+        let coords = [
+            ChunkCoordinate(I64Vec3::new(10_000_000, 0, -10_000_000)),
+            ChunkCoordinate(I64Vec3::new(-10_000_000, -3, 10_000_000)),
+        ];
+
+        for (i, &coord) in coords.iter().enumerate() {
+            let mut chunk_data = ChunkData::default();
+            chunk_data.set_block_at(U16Vec3::new(i as u16, 0, 0), BlockType::Sand);
+            octree.set_chunk_data(coord, chunk_data);
+        }
+
+        for (i, &coord) in coords.iter().enumerate() {
+            let chunk_data = octree.get_chunk_data(coord).unwrap();
+            assert_eq!(
+                BlockType::Sand,
+                chunk_data.get_block_at(U16Vec3::new(i as u16, 0, 0))
+            );
+        }
+    }
+
+    #[test]
+    fn test_neighbouring_chunks_across_region_boundary() {
+        let mut octree = ChunkOctree::default();
+        // -1 and 0 sit in different regions on every axis
+        let below = ChunkCoordinate(I64Vec3::new(-1, -1, -1));
+        let above = ChunkCoordinate(I64Vec3::new(0, 0, 0));
+
+        let mut chunk_data = ChunkData::default();
+        chunk_data.set_block_at(U16Vec3::new(1, 1, 1), BlockType::Sand);
+        octree.set_chunk_data(below, chunk_data);
+        octree.set_chunk_data(above, ChunkData::default());
+
+        assert_eq!(2, octree.regions.len());
+        assert_eq!(
+            BlockType::Sand,
+            octree
+                .get_chunk_data(below)
+                .unwrap()
+                .get_block_at(U16Vec3::new(1, 1, 1))
+        );
+        assert_eq!(
+            BlockType::Air,
+            octree
+                .get_chunk_data(above)
+                .unwrap()
+                .get_block_at(U16Vec3::new(1, 1, 1))
+        );
+    }
+
+    #[test]
+    fn test_clear_last_chunk_drops_region() {
+        let mut octree = ChunkOctree::default();
+        let a = ChunkCoordinate(I64Vec3::new(3, 2, 1));
+        let b = ChunkCoordinate(I64Vec3::new(4, 2, 1));
+
+        octree.set_chunk_data(a, ChunkData::default());
+        octree.set_chunk_data(b, ChunkData::default());
+        assert_eq!(1, octree.regions.len());
+
+        octree.clear_chunk(a);
+        assert_eq!(1, octree.regions.len());
+        assert!(octree.get_chunk_data(b).is_some());
+
+        octree.clear_chunk(b);
+        assert!(octree.regions.is_empty());
     }
 
     #[test]

@@ -1,387 +1,276 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use bevy::{math::Vec3, utils::HashMap};
+use bevy::math::UVec3;
 
-pub struct OctreeNode<Data> {
-    id: usize,
-    parent: Option<usize>,
-    centre: Vec3,
-    pub size: f32,
-    depth: u8,
-    children: Option<[usize; 8]>,
+pub type NodeId = u32;
+
+const ROOT: NodeId = 0;
+
+struct Node<Data> {
+    parent: Option<NodeId>,
+    first_child: Option<NodeId>,
     data: Option<Arc<Data>>,
 }
 
-impl<Data> OctreeNode<Data> {
-    fn new(
-        id: usize,
-        parent: Option<usize>,
-        centre: Vec3,
-        size: f32,
-        depth: u8,
-        data: Option<Arc<Data>>,
-    ) -> Self {
+impl<Data> Node<Data> {
+    fn empty(parent: Option<NodeId>) -> Self {
         Self {
-            id,
             parent,
-            children: None,
-            centre,
-            size,
-            depth,
-            data,
+            first_child: None,
+            data: None,
         }
     }
 
-    pub fn id(&self) -> usize {
-        self.id
-    }
-
-    fn is_subdivided(&self) -> bool {
-        self.children.is_some()
-    }
-
-    pub fn get_data(&self) -> Option<Arc<Data>> {
-        self.data.clone()
-    }
-
-    pub fn set_data(&mut self, data: Arc<Data>) {
-        self.data = Some(data);
-    }
-
-    pub fn clear_data(&mut self) {
-        self.data = None;
+    fn is_empty_leaf(&self) -> bool {
+        self.first_child.is_none() && self.data.is_none()
     }
 }
 
 pub struct Octree<Data> {
-    arena: HashMap<usize, Arc<RwLock<OctreeNode<Data>>>>,
-    current_id: usize,
-    _root_id: usize,
+    nodes: Vec<Node<Data>>,
+    // first slot of each freed 8-node sibling block, reused before growing the arena
+    free_blocks: Vec<NodeId>,
     max_depth: u8,
 }
 
 impl<Data> Octree<Data> {
-    pub fn new(size: f32, max_depth: u8) -> Self {
-        let root_id = 0;
-        let root = Arc::new(RwLock::new(OctreeNode::new(
-            root_id,
-            None,
-            Vec3::ZERO,
-            size,
-            0,
-            None,
-        )));
-
-        let mut arena = HashMap::new();
-        arena.insert(0, root);
-
-        Self {
-            arena,
-            max_depth,
-            current_id: root_id + 1,
-            _root_id: root_id,
-        }
-    }
-
-    fn get_node(&self, id: usize) -> Arc<RwLock<OctreeNode<Data>>> {
-        self.arena.get(&id).unwrap().clone()
-    }
-
-    fn get_node_centre(&self, id: usize) -> Vec3 {
-        let node_ref = self.get_node(id);
-        let read = node_ref.read().unwrap();
-        read.centre
-    }
-
-    fn insert_node(&mut self, parent: usize, centre: Vec3, size: f32, depth: u8) -> usize {
-        let new_id = self.current_id;
-        let new_node = OctreeNode::new(new_id, Some(parent), centre, size, depth, None);
-        self.arena
-            .insert(new_node.id, Arc::new(RwLock::new(new_node)));
-        self.current_id += 1;
-
-        new_id
-    }
-
-    fn closest_child(&self, point: Vec3, parent: usize) -> usize {
-        let parent_ref = self.get_node(parent);
-
-        let parent_read = parent_ref.read().unwrap();
-        if !parent_read.is_subdivided() {
-            return parent;
-        }
-
-        let mut lowest_distance = f32::INFINITY;
-        let mut closest_child = 0;
-        for child in parent_read.children.unwrap() {
-            let child_centre = self.get_node_centre(child);
-
-            let distance = point.distance(child_centre);
-            if distance < lowest_distance {
-                lowest_distance = distance;
-                closest_child = child;
-            }
-        }
-        return closest_child;
-    }
-
-    pub fn subdivide(&mut self, octant: usize) {
-        let node_ref = self.get_node(octant);
-
-        let mut octree_node = node_ref.write().unwrap();
-        if octree_node.is_subdivided() || octree_node.depth >= self.max_depth {
-            return;
-        }
-
-        let child_size = octree_node.size / 2.0;
-        let offset = child_size / 2.0;
-
-        // top layer
-        // 0 1
-        // 2 3
-        // bottom layer
-        // 4 5
-        // 6 7
-        let child_centres = [
-            octree_node.centre + Vec3::new(-offset, offset, offset),
-            octree_node.centre + Vec3::new(offset, offset, offset),
-            octree_node.centre + Vec3::new(-offset, offset, -offset),
-            octree_node.centre + Vec3::new(offset, offset, -offset),
-            octree_node.centre + Vec3::new(-offset, -offset, offset),
-            octree_node.centre + Vec3::new(offset, -offset, offset),
-            octree_node.centre + Vec3::new(-offset, -offset, -offset),
-            octree_node.centre + Vec3::new(offset, -offset, -offset),
-        ];
-
-        let mut ids = [0; 8];
-        for (i, id) in ids.iter_mut().enumerate() {
-            let centre = child_centres[i];
-            *id = self.insert_node(octant, centre, child_size, octree_node.depth + 1);
-        }
-        octree_node.children = Some(ids);
-    }
-
-    pub fn query_octant(&mut self, point: Vec3) -> Arc<RwLock<OctreeNode<Data>>> {
-        let (root_centre, root_size) = {
-            let root_ref = self.get_node(self._root_id);
-            let root = root_ref.read().unwrap();
-            (root.centre, root.size)
-        };
-        let half = root_size / 2.0;
+    pub fn new(max_depth: u8) -> Self {
         assert!(
-            (point - root_centre).abs().max_element() <= half,
-            "octree query point {:?} is outside the tree's bounds (half-extent {})",
-            point,
-            half
+            max_depth < 32,
+            "octree max_depth {max_depth} doesn't fit u32 cells"
+        );
+        Self {
+            nodes: vec![Node::empty(None)],
+            free_blocks: Vec::new(),
+            max_depth,
+        }
+    }
+
+    /// True when the tree holds no data and has collapsed back to a bare root.
+    pub fn is_empty(&self) -> bool {
+        self.node(ROOT).is_empty_leaf()
+    }
+
+    pub fn get(&self, id: NodeId) -> Option<&Arc<Data>> {
+        self.node(id).data.as_ref()
+    }
+
+    pub fn insert(&mut self, pos: UVec3, data: Arc<Data>) -> NodeId {
+        let side = 1u32 << self.max_depth;
+        assert!(
+            pos.max_element() < side,
+            "octree cell {pos:?} is outside the tree's bounds (side {side})"
         );
 
-        let mut i = 0;
-
-        let mut current_id = self._root_id;
-        while i < self.max_depth {
-            let octree_node_ref = self.get_node(current_id);
-
-            let subdivided = octree_node_ref.read().unwrap().is_subdivided();
-            if !subdivided {
-                self.subdivide(current_id)
-            }
-
-            current_id = self.closest_child(point, current_id);
-            i += 1;
-        }
-
-        return self.get_node(current_id);
-    }
-
-    pub fn get_node_by_id(&self, id: usize) -> Arc<RwLock<OctreeNode<Data>>> {
-        self.get_node(id)
-    }
-
-    /// Clears a leaf's data, then collapses ancestor subtrees that have become
-    /// entirely empty leaves back into a single leaf, freeing their arena entries.
-    /// Only ever inspects/removes a node's *children* - a parent's own data is never
-    /// touched, so a future use of intermediate nodes (e.g. an LOD summary) survives
-    /// its detail children being pruned underneath it.
-    pub fn clear_data(&mut self, id: usize) {
-        self.get_node(id).write().unwrap().clear_data();
-        self.collapse_upward(id);
-    }
-
-    fn collapse_upward(&mut self, mut node_id: usize) {
-        loop {
-            let Some(parent_id) = self.get_node(node_id).read().unwrap().parent else {
-                return;
+        let mut id = ROOT;
+        for depth in 0..self.max_depth {
+            let first_child = match self.node(id).first_child {
+                Some(first_child) => first_child,
+                None => self.subdivide(id),
             };
-            let children = self.get_node(parent_id).read().unwrap().children.unwrap();
-            let all_empty_leaves = children.iter().all(|&c| {
-                let node_ref = self.get_node(c);
-                let n = node_ref.read().unwrap();
-                n.children.is_none() && n.data.is_none()
-            });
-            if !all_empty_leaves {
+            id = first_child + self.child_index(pos, depth);
+        }
+        self.node_mut(id).data = Some(data);
+        id
+    }
+
+    pub fn remove(&mut self, id: NodeId) -> Option<Arc<Data>> {
+        let data = self.node_mut(id).data.take();
+        self.collapse_upward(id);
+        data
+    }
+
+    fn child_index(&self, pos: UVec3, depth: u8) -> NodeId {
+        let bit = self.max_depth - 1 - depth;
+        ((pos.x >> bit) & 1) | ((pos.y >> bit) & 1) << 1 | ((pos.z >> bit) & 1) << 2
+    }
+
+    fn subdivide(&mut self, id: NodeId) -> NodeId {
+        let first_child = match self.free_blocks.pop() {
+            Some(first_child) => {
+                for child in first_child..first_child + 8 {
+                    *self.node_mut(child) = Node::empty(Some(id));
+                }
+                first_child
+            }
+            None => {
+                let first_child = self.nodes.len() as NodeId;
+                self.nodes.extend((0..8).map(|_| Node::empty(Some(id))));
+                first_child
+            }
+        };
+        self.node_mut(id).first_child = Some(first_child);
+        first_child
+    }
+
+    fn collapse_upward(&mut self, mut id: NodeId) {
+        while let Some(parent) = self.node(id).parent {
+            let first_child = self.node(parent).first_child.unwrap();
+            let siblings = &self.nodes[first_child as usize..first_child as usize + 8];
+            if !siblings.iter().all(Node::is_empty_leaf) {
                 return;
             }
 
-            for c in children {
-                self.arena.remove(&c);
-            }
-            self.get_node(parent_id).write().unwrap().children = None;
-            node_id = parent_id;
+            self.node_mut(parent).first_child = None;
+            self.free_blocks.push(first_child);
+            id = parent;
         }
+    }
+
+    fn node(&self, id: NodeId) -> &Node<Data> {
+        &self.nodes[id as usize]
+    }
+
+    fn node_mut(&mut self, id: NodeId) -> &mut Node<Data> {
+        &mut self.nodes[id as usize]
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
 
-    use bevy::{math::Vec3, utils::HashSet};
+    use bevy::math::UVec3;
 
-    use super::Octree;
+    use super::{Octree, ROOT};
+
+    fn live_nodes<Data>(octree: &Octree<Data>) -> usize {
+        octree.nodes.len() - octree.free_blocks.len() * 8
+    }
 
     #[test]
-    fn test_subdivide() {
-        let mut octree = Octree::<u32>::new(16.0, 2);
-        octree.subdivide(0);
+    fn test_insert_get() {
+        let mut octree = Octree::new(4);
+        let id = octree.insert(UVec3::new(3, 9, 15), Arc::new(7));
+        assert_eq!(Some(&Arc::new(7)), octree.get(id));
+    }
 
-        let root_ref = octree.get_node(0);
-        let root = root_ref.read().unwrap();
-        assert!(root.children.is_some());
+    #[test]
+    fn test_insert_subdivides_down_to_leaf() {
+        let mut octree = Octree::new(4);
+        octree.insert(UVec3::new(3, 9, 15), Arc::new(7));
+        // root + one full block of 8 children per level
+        assert_eq!(1 + 4 * 8, octree.nodes.len());
+    }
 
-        // pythagorean theorem
-        let expected_distance = (3.0 * 4.0_f32.powi(2)).sqrt();
-
-        let mut child_node_set = HashSet::new();
-        for child in root.children.unwrap().into_iter() {
-            let child_ref = octree.get_node(child);
-            let child_node = child_ref.read().unwrap();
-            assert_eq!(8.0, child_node.size);
-            assert_eq!(expected_distance, root.centre.distance(child_node.centre));
-
-            child_node_set.insert(child_node.centre.to_string());
+    #[test]
+    fn test_insert_distinct_cells_get_distinct_leaves() {
+        let mut octree = Octree::new(2);
+        let mut ids = Vec::new();
+        for x in 0..4 {
+            for y in 0..4 {
+                for z in 0..4 {
+                    ids.push(octree.insert(UVec3::new(x, y, z), Arc::new((x, y, z))));
+                }
+            }
         }
-
-        assert_eq!(8, child_node_set.len());
+        ids.sort();
+        ids.dedup();
+        assert_eq!(64, ids.len());
     }
 
     #[test]
-    fn test_closest_child_no_children() {
-        let octree = Octree::<u32>::new(16.0, 2);
-        assert_eq!(0, octree.closest_child(Vec3::ZERO, 0));
+    fn test_insert_same_cell_replaces_data() {
+        let mut octree = Octree::new(3);
+        let a = octree.insert(UVec3::new(1, 2, 3), Arc::new(1));
+        let b = octree.insert(UVec3::new(1, 2, 3), Arc::new(2));
+        assert_eq!(a, b);
+        assert_eq!(Some(&Arc::new(2)), octree.get(a));
     }
 
     #[test]
-    fn test_closest_child_subdivided_once() {
-        let mut octree = Octree::<u32>::new(16.0, 2);
-        octree.subdivide(octree._root_id);
-        assert_eq!(
-            2,
-            octree.closest_child(Vec3::new(3.0, 1.0, 5.0), octree._root_id)
-        );
-        assert_eq!(
-            7,
-            octree.closest_child(Vec3::new(-3.0, -1.0, -5.0), octree._root_id)
-        );
+    fn test_child_index_splits_on_each_axis() {
+        let octree = Octree::<u32>::new(1);
+        assert_eq!(0, octree.child_index(UVec3::new(0, 0, 0), 0));
+        assert_eq!(1, octree.child_index(UVec3::new(1, 0, 0), 0));
+        assert_eq!(2, octree.child_index(UVec3::new(0, 1, 0), 0));
+        assert_eq!(4, octree.child_index(UVec3::new(0, 0, 1), 0));
+        assert_eq!(7, octree.child_index(UVec3::new(1, 1, 1), 0));
     }
 
     #[test]
-    fn test_closest_child_subdivided_twice() {
-        let mut octree = Octree::<u32>::new(16.0, 2);
-        octree.subdivide(octree._root_id);
-        octree.subdivide(1);
-        assert_eq!(9, octree.closest_child(Vec3::new(-15.0, 15.0, 15.0), 1));
-        assert_eq!(14, octree.closest_child(Vec3::new(-3.0, 1.0, 8.0), 1));
-        assert_eq!(16, octree.closest_child(Vec3::new(-3.0, 1.0, 3.0), 1));
-    }
-
-    #[test]
-    fn test_max_depth_not_exceeded() {
-        let mut octree = Octree::<u32>::new(16.0, 0);
-        octree.subdivide(octree._root_id);
-        assert_eq!(1, octree.arena.len());
+    fn test_insert_max_depth_zero_uses_root() {
+        let mut octree = Octree::new(0);
+        assert_eq!(ROOT, octree.insert(UVec3::ZERO, Arc::new(1)));
+        assert_eq!(1, octree.nodes.len());
     }
 
     #[test]
     #[should_panic]
-    fn test_query_octant_out_of_bounds_panics() {
-        let mut octree = Octree::<u32>::new(16.0, 2);
-        octree.query_octant(Vec3::new(100.0, 0.0, 0.0));
-    }
-
-    #[test]
-    fn test_query_octant_max_depth_zero() {
-        let mut octree = Octree::<u32>::new(16.0, 0);
-
-        let octant = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
-        let octant = octant.read().unwrap();
-        assert_eq!(16.0, octant.size);
-        assert_eq!(Vec3::new(0.0, 0.0, 0.0), octant.centre);
-    }
-
-    #[test]
-    fn test_query_octant_first_subdivision() {
-        let mut octree = Octree::<u32>::new(16.0, 1);
-        octree.subdivide(0);
-
-        let octant = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
-        let octant = octant.read().unwrap();
-        assert_eq!(8.0, octant.size);
-        assert_eq!(Vec3::new(4.0, 4.0, 4.0), octant.centre);
+    fn test_insert_out_of_bounds_panics() {
+        let mut octree = Octree::new(2);
+        octree.insert(UVec3::new(4, 0, 0), Arc::new(1));
     }
 
     #[test]
     fn test_subdivide_sets_parent_pointer() {
-        let mut octree = Octree::<u32>::new(16.0, 1);
-        octree.subdivide(0);
-
-        let root_ref = octree.get_node(0);
-        let children = root_ref.read().unwrap().children.unwrap();
-        for child in children {
-            let child_ref = octree.get_node(child);
-            assert_eq!(Some(0), child_ref.read().unwrap().parent);
+        let mut octree = Octree::<u32>::new(1);
+        let first_child = octree.subdivide(ROOT);
+        for child in first_child..first_child + 8 {
+            assert_eq!(Some(ROOT), octree.node(child).parent);
         }
     }
 
     #[test]
-    fn test_clear_data_collapses_empty_parent() {
-        let mut octree = Octree::<u32>::new(16.0, 1);
-        let leaf = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
-        leaf.write().unwrap().set_data(std::sync::Arc::new(1));
-        let leaf_id = leaf.read().unwrap().id();
+    fn test_remove_collapses_empty_parent() {
+        let mut octree = Octree::new(1);
+        let leaf = octree.insert(UVec3::new(1, 1, 1), Arc::new(1));
 
-        octree.clear_data(leaf_id);
+        assert_eq!(Some(Arc::new(1)), octree.remove(leaf));
 
-        let root_ref = octree.get_node(0);
-        assert!(root_ref.read().unwrap().children.is_none());
-        // the 8 children should have been removed from the arena entirely
-        assert_eq!(1, octree.arena.len());
+        assert!(octree.is_empty());
+        assert_eq!(1, live_nodes(&octree));
     }
 
     #[test]
-    fn test_clear_data_does_not_collapse_if_sibling_has_data() {
-        let mut octree = Octree::<u32>::new(16.0, 1);
-        let leaf_a = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
-        leaf_a.write().unwrap().set_data(std::sync::Arc::new(1));
-        let leaf_a_id = leaf_a.read().unwrap().id();
+    fn test_remove_does_not_collapse_if_sibling_has_data() {
+        let mut octree = Octree::new(1);
+        let a = octree.insert(UVec3::new(1, 1, 1), Arc::new(1));
+        let b = octree.insert(UVec3::new(0, 1, 1), Arc::new(2));
 
-        let leaf_b = octree.query_octant(Vec3::new(-4.0, 4.0, 4.0));
-        leaf_b.write().unwrap().set_data(std::sync::Arc::new(2));
+        octree.remove(a);
 
-        octree.clear_data(leaf_a_id);
-
-        let root_ref = octree.get_node(0);
-        assert!(root_ref.read().unwrap().children.is_some());
+        assert!(!octree.is_empty());
+        assert_eq!(Some(&Arc::new(2)), octree.get(b));
     }
 
     #[test]
-    fn test_clear_data_collapses_multiple_levels_upward() {
-        let mut octree = Octree::<u32>::new(16.0, 2);
-        let leaf = octree.query_octant(Vec3::new(4.0, 4.0, 4.0));
-        leaf.write().unwrap().set_data(std::sync::Arc::new(1));
-        let leaf_id = leaf.read().unwrap().id();
+    fn test_remove_collapses_multiple_levels_upward() {
+        let mut octree = Octree::new(3);
+        let leaf = octree.insert(UVec3::new(5, 2, 7), Arc::new(1));
 
-        octree.clear_data(leaf_id);
+        octree.remove(leaf);
 
-        // only the root should remain - both levels of subdivision collapse away
-        assert_eq!(1, octree.arena.len());
+        // only the root should remain - every level of subdivision collapses away
+        assert!(octree.is_empty());
+        assert_eq!(1, live_nodes(&octree));
+    }
+
+    #[test]
+    fn test_freed_blocks_are_reused() {
+        let mut octree = Octree::new(3);
+        let leaf = octree.insert(UVec3::new(5, 2, 7), Arc::new(1));
+        octree.remove(leaf);
+        let arena_len = octree.nodes.len();
+
+        let leaf = octree.insert(UVec3::new(0, 6, 1), Arc::new(2));
+
+        assert_eq!(arena_len, octree.nodes.len());
+        assert!(octree.free_blocks.is_empty());
+        assert_eq!(Some(&Arc::new(2)), octree.get(leaf));
+    }
+
+    #[test]
+    fn test_remove_keeps_other_ids_valid() {
+        let mut octree = Octree::new(4);
+        let a = octree.insert(UVec3::new(0, 0, 0), Arc::new(1));
+        let b = octree.insert(UVec3::new(15, 15, 15), Arc::new(2));
+
+        octree.remove(a);
+        // reuses a's freed blocks, must not disturb b
+        let c = octree.insert(UVec3::new(1, 0, 0), Arc::new(3));
+
+        assert_eq!(Some(&Arc::new(2)), octree.get(b));
+        assert_eq!(Some(&Arc::new(3)), octree.get(c));
     }
 }
