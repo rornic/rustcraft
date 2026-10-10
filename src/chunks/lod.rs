@@ -7,13 +7,13 @@ use bevy::{
         component::Component,
         entity::Entity,
         query::{Added, Or, With},
-        system::{Commands, Query, Res, ResMut, Resource},
+        system::{Commands, Local, Query, Res, ResMut, Resource},
     },
     hierarchy::{BuildChildren, ChildBuild},
     math::{I64Vec3, Vec3},
-    pbr::MeshMaterial3d,
+    pbr::{DistanceFog, FogFalloff, MeshMaterial3d},
     prelude::Mesh3d,
-    render::{mesh::Mesh, primitives::Aabb, view::Visibility},
+    render::{camera::Camera, mesh::Mesh, primitives::Aabb, view::Visibility},
     tasks::{AsyncComputeTaskPool, Task},
     time::Time,
     transform::components::Transform,
@@ -265,6 +265,30 @@ impl LodState<'_> {
                 .is_some_and(|ancestor| (self.node_ready)(ancestor))
         }
     }
+
+    /// How far out, in chunks, terrain is drawn without gaps: the distance to the
+    /// nearest selected node that isn't ready and has nothing drawn in its place yet, or
+    /// the full render distance once there are none. A node still covered by the
+    /// coarser or finer terrain it's replacing doesn't count, so moving around doesn't
+    /// pull this in - only areas that haven't loaded at all do.
+    pub fn loaded_distance(&self) -> f32 {
+        self.selected
+            .iter()
+            .filter(|&&key| !(self.node_ready)(key) && !self.covered_while_loading(key))
+            .map(|key| key.distance(self.anchor))
+            .fold(lod_render_distance(self.max_level), f32::min)
+    }
+
+    fn covered_while_loading(&self, key: LodKey) -> bool {
+        self.has_existing_ancestor(key)
+            || if key.level == 1 {
+                key.chunks().any(|chunk| (self.chunk_ready)(chunk))
+            } else {
+                key.children()
+                    .into_iter()
+                    .any(|child| (self.node_exists)(child))
+            }
+    }
 }
 
 #[derive(Component)]
@@ -489,7 +513,9 @@ pub fn retire_lods(
     // frame, while the node itself fades out.
     for key in retired {
         if let Some(entity) = lods.nodes.remove(&key) {
-            let visible = visibility.get(entity).is_ok_and(|v| *v != Visibility::Hidden);
+            let visible = visibility
+                .get(entity)
+                .is_ok_and(|v| *v != Visibility::Hidden);
             fade_out_and_despawn(&mut commands, entity, visible, time.elapsed_secs());
         }
         lods.dirty_areas.push(key);
@@ -576,6 +602,73 @@ pub fn refresh_lod_visibility(
 
     lods.refresh_all = false;
     lods.dirty_areas.clear();
+}
+
+// Fog is 95% opaque at this fraction of the distance terrain has loaded to, so the
+// loaded edge is all but hidden.
+pub const FOG_VISIBILITY: f32 = 0.85;
+const FOG_UPDATE_INTERVAL: f32 = 0.25;
+// How quickly fog eases towards its target, in seconds: in quickly when an unloaded gap
+// appears closer, out gently as terrain loads.
+const FOG_PULL_IN_SECONDS: f32 = 0.3;
+const FOG_EASE_OUT_SECONDS: f32 = 2.0;
+
+/// Keeps fog just short of how far terrain has actually loaded, so distant terrain
+/// always fades into the horizon instead of ending at a hard edge, however far render
+/// distance reaches or however much of it has loaded. Runs before the underwater
+/// effects, which replace the fog while the camera is in water.
+#[allow(clippy::too_many_arguments)]
+pub fn update_horizon_fog(
+    lods: Res<LodLoader>,
+    chunk_loader: Res<ChunkLoader>,
+    time: Res<Time>,
+    pending_lods: Query<(), With<GenerateLodMesh>>,
+    pending_chunks: Query<(), PendingChunk>,
+    mut fog: Query<&mut DistanceFog, With<Camera>>,
+    mut target: Local<Option<f32>>,
+    mut visibility: Local<Option<f32>>,
+    mut since_update: Local<f32>,
+) {
+    let Some(anchor) = lods.anchor else {
+        return;
+    };
+
+    *since_update += time.delta_secs();
+    if target.is_none() || *since_update >= FOG_UPDATE_INTERVAL {
+        *since_update = 0.0;
+        let nodes = &lods.nodes;
+        let node_exists = |key: LodKey| nodes.contains_key(&key);
+        let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+        let chunk_ready = |chunk: ChunkCoordinate| {
+            chunk_loader
+                .chunk_entity(chunk)
+                .is_some_and(|e| !pending_chunks.contains(e))
+        };
+        let state = LodState {
+            anchor,
+            max_level: lods.max_level,
+            band: lods.band,
+            selected: &lods.selected,
+            node_exists: &node_exists,
+            node_ready: &node_ready,
+            chunk_ready: &chunk_ready,
+        };
+        *target = Some(state.loaded_distance() * CHUNK_SIZE as f32 * FOG_VISIBILITY);
+    }
+
+    let target = target.unwrap();
+    let current = visibility.unwrap_or(target);
+    let seconds = if target < current {
+        FOG_PULL_IN_SECONDS
+    } else {
+        FOG_EASE_OUT_SECONDS
+    };
+    let eased = current + (target - current) * (1.0 - (-time.delta_secs() / seconds).exp());
+    *visibility = Some(eased);
+
+    if let Ok(mut fog) = fog.get_single_mut() {
+        fog.falloff = FogFalloff::from_visibility_squared(eased);
+    }
 }
 
 #[cfg(test)]
@@ -812,6 +905,60 @@ mod tests {
             false,
             |s| s.can_retire(far)
         ));
+    }
+
+    #[test]
+    fn test_loaded_distance_is_full_range_once_everything_is_ready() {
+        let anchor = chunk(0, 4, 0);
+        let selected = select_lods(anchor, 3, BAND);
+        let none = |_| false;
+        let all_ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
+        assert_eq!(
+            lod_render_distance(3),
+            with_state(anchor, &selected, &none, &all_ready, true, |s| s
+                .loaded_distance())
+        );
+    }
+
+    #[test]
+    fn test_loaded_distance_stops_at_nearest_unloaded_gap() {
+        let anchor = chunk(0, 4, 0);
+        let selected = select_lods(anchor, 3, BAND);
+        let gap = *selected.iter().find(|k| k.level == 3).unwrap();
+        let none = |_| false;
+        let mut ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
+        ready.insert(gap, false);
+        assert_eq!(
+            gap.distance(anchor),
+            with_state(anchor, &selected, &none, &ready, true, |s| s
+                .loaded_distance())
+        );
+    }
+
+    #[test]
+    fn test_loaded_distance_ignores_nodes_still_covered_by_what_they_replace() {
+        let anchor = chunk(0, 4, 0);
+        let selected = select_lods(anchor, 3, BAND);
+        let node = *selected.iter().find(|k| k.level == 2).unwrap();
+        let mut ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
+        ready.insert(node, false);
+
+        // the coarser node it's replacing is still up
+        let parent = node.parent();
+        let parent_exists = move |k| k == parent;
+        assert_eq!(
+            lod_render_distance(3),
+            with_state(anchor, &selected, &parent_exists, &ready, true, |s| s
+                .loaded_distance())
+        );
+        // the finer nodes it's replacing are still up
+        let children = node.children();
+        let children_exist = move |k| children.contains(&k);
+        assert_eq!(
+            lod_render_distance(3),
+            with_state(anchor, &selected, &children_exist, &ready, true, |s| s
+                .loaded_distance())
+        );
     }
 
     #[test]

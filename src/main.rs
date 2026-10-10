@@ -14,7 +14,7 @@ use rustcraft::chunks::{
     fade::{apply_fades, FadeMaterials, FULLY_VISIBLE},
     lod::{
         load_lods, lod_render_distance, max_level_for, refresh_lod_visibility, retire_lods,
-        spawn_lods, update_lod_selection, LodLoader,
+        spawn_lods, update_horizon_fog, update_lod_selection, LodLoader, FOG_VISIBILITY,
     },
     material::{ChunkMaterial, WaterMaterial},
 };
@@ -54,10 +54,8 @@ fn setup_scene(
         .id();
 
     // Exponential-squared fog: a light haze close in that thickens with distance, so
-    // distant terrain fades into the sky like a horizon. It's 95% opaque a little
-    // short of the edge of render distance, so the edge - and any distant terrain
-    // still loading there - is hidden. At the default render distance that's about
-    // 25% haze where full detail ends, 60% at 1000 blocks and 98% at the edge.
+    // distant terrain fades into the sky like a horizon. `update_horizon_fog` keeps it
+    // just short of however far terrain has loaded; this is where it starts.
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
@@ -77,7 +75,7 @@ fn setup_scene(
             Msaa::Off,
             DistanceFog {
                 color: Color::srgb_u8(120, 224, 232),
-                falloff: FogFalloff::from_visibility_squared(fog_distance * 0.85),
+                falloff: FogFalloff::from_visibility_squared(fog_distance * FOG_VISIBILITY),
                 ..default()
             },
             // Keeps nearby gameplay (within ~1.5 chunks) sharp and softens
@@ -171,6 +169,9 @@ fn main() {
                     .after(gather_chunks)
                     .before(unload_chunks),
                 unload_chunks,
+                update_horizon_fog
+                    .after(refresh_lod_visibility)
+                    .before(update_underwater_effects),
                 (player_move, player_look, update_underwater_effects).chain(),
             ),
         )
