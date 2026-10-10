@@ -2,17 +2,12 @@ use std::sync::Arc;
 
 use bevy::math::UVec3;
 
-/// Index of a node in an [`Octree`]'s arena. Stays valid for as long as the node exists - a
-/// slot is only reused after `remove` collapses its whole sibling block away, which never
-/// happens to a block containing a node with data.
 pub type NodeId = u32;
 
 const ROOT: NodeId = 0;
 
 struct Node<Data> {
     parent: Option<NodeId>,
-    // children are always allocated together as 8 consecutive arena slots starting here, in
-    // `child_index` order
     first_child: Option<NodeId>,
     data: Option<Arc<Data>>,
 }
@@ -31,14 +26,6 @@ impl<Data> Node<Data> {
     }
 }
 
-/// Octree over the integer cell grid `[0, 2^max_depth)^3`. Leaves at `max_depth` are single
-/// cells; a node at depth `d` covers `2^(max_depth - d)` cells per side. A node's position and
-/// size aren't stored - they fall out of the path taken from the root.
-///
-/// Nodes live in a flat arena with each set of siblings in 8 consecutive slots, so descending
-/// is index arithmetic rather than lookups. Subdividing always creates all 8 children, so a
-/// subdivided node is always fully covered by its children - what LOD needs to swap a parent
-/// out for its children without leaving holes.
 pub struct Octree<Data> {
     nodes: Vec<Node<Data>>,
     // first slot of each freed 8-node sibling block, reused before growing the arena
@@ -68,8 +55,6 @@ impl<Data> Octree<Data> {
         self.node(id).data.as_ref()
     }
 
-    /// Stores `data` in the leaf cell at `pos`, subdividing down to it as needed, and returns
-    /// the leaf's id.
     pub fn insert(&mut self, pos: UVec3, data: Arc<Data>) -> NodeId {
         let side = 1u32 << self.max_depth;
         assert!(
@@ -89,18 +74,12 @@ impl<Data> Octree<Data> {
         id
     }
 
-    /// Takes a node's data, then collapses ancestor subtrees that have become entirely empty
-    /// leaves back into a single leaf, freeing their slots for reuse. Only ever frees a node's
-    /// *children* - a parent's own data is never touched, so a future use of intermediate
-    /// nodes (e.g. an LOD summary) survives its detail children being pruned underneath it.
     pub fn remove(&mut self, id: NodeId) -> Option<Arc<Data>> {
         let data = self.node_mut(id).data.take();
         self.collapse_upward(id);
         data
     }
 
-    // which of the 8 children of a depth-`depth` node contains `pos`: one bit per axis, taken
-    // from the coordinate bit that splits that node in half
     fn child_index(&self, pos: UVec3, depth: u8) -> NodeId {
         let bit = self.max_depth - 1 - depth;
         ((pos.x >> bit) & 1) | ((pos.y >> bit) & 1) << 1 | ((pos.z >> bit) & 1) << 2

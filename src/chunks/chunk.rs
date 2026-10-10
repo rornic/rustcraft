@@ -221,9 +221,6 @@ impl ChunkData {
     }
 }
 
-// Chunks per region side as a power of two: 2^8 = 256 chunks (4096 blocks at chunk_size 16).
-// Each region is its own octree, created on demand and dropped once its last chunk is
-// cleared, so the world has no bounds and unloading a distant area frees its whole tree.
 const REGION_DEPTH: u8 = 8;
 
 pub struct ChunkOctree {
@@ -244,10 +241,6 @@ impl Default for ChunkOctree {
 }
 
 impl ChunkOctree {
-    // cache-only: `set_chunk_data` is the only thing that ever subdivides a region's tree or
-    // inserts a cache entry, so a cache miss always means "no data" - no need to walk the tree
-    // on every read, and (more importantly) a cached leaf always has data, so `clear_chunk`'s
-    // collapse can never free a slot another cache entry still points at.
     pub fn get_chunk_data(&self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
         let &id = self.cache.get(&coord)?;
         let (region, _) = Self::region_and_cell(coord);
@@ -283,8 +276,6 @@ impl ChunkOctree {
         }
     }
 
-    // the region a chunk falls in, and its cell within that region's octree - div/rem_euclid
-    // so negative chunk coordinates land in the region below rather than wrapping
     fn region_and_cell(coord: ChunkCoordinate) -> (I64Vec3, UVec3) {
         let side = 1i64 << REGION_DEPTH;
         (
