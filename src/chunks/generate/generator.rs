@@ -42,6 +42,11 @@ pub(super) const WATER_TOP: f32 = 0.4;
 trait BlockSource {
     fn block(&self, coord: IVec3) -> BlockType;
     fn non_air(&self) -> Vec<(IVec3, BlockType)>;
+
+    /// The terrain itself, without the skirts `block` adds around a LOD node's edges.
+    fn terrain(&self, coord: IVec3) -> BlockType {
+        self.block(coord)
+    }
 }
 
 struct ChunkNeighbourhood<'a> {
@@ -110,6 +115,10 @@ impl LodBlocks {
 }
 
 impl BlockSource for LodBlocks {
+    fn terrain(&self, coord: IVec3) -> BlockType {
+        self.raw(coord)
+    }
+
     fn block(&self, coord: IVec3) -> BlockType {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         let block = self.raw(coord);
@@ -392,7 +401,7 @@ fn water_depth(source: &impl BlockSource, block_coord: IVec3) -> u32 {
     let mut depth = 0u32;
     let mut y = block_coord.y;
     while y >= 0 {
-        if source.block(IVec3::new(block_coord.x, y, block_coord.z)) != BlockType::Water {
+        if source.terrain(IVec3::new(block_coord.x, y, block_coord.z)) != BlockType::Water {
             break;
         }
         depth += 1;
@@ -757,6 +766,23 @@ mod tests {
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
         // below the node isn't a horizontal border, so no skirt
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
+    }
+
+    #[test]
+    fn test_water_depth_on_lod_border_ignores_skirts() {
+        // ground up to y = 3 everywhere, water from 4 to 7
+        let mut lod = flat_lod(4);
+        for x in -1..=16 {
+            for z in -1..=16 {
+                for y in 4..8 {
+                    lod.cells[LodBlocks::index(16, IVec3::new(x, y, z))] = BlockType::Water;
+                }
+            }
+        }
+        // the border's top solid cells read as water for the skirt, but don't add depth
+        assert_eq!(BlockType::Water, lod.block(IVec3::new(-1, 3, 4)));
+        assert_eq!(4, water_depth(&lod, IVec3::new(4, 7, 4)));
+        assert_eq!(4, water_depth(&lod, IVec3::new(-1, 7, 4)));
     }
 
     #[test]
