@@ -20,8 +20,8 @@ use rustcraft::chunks::{
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 
-// Deep sky blue, shared by the sky and the fog distant terrain fades into.
-const SKY_COLOR: Color = Color::srgb(0.0, 191.0 / 255.0, 1.0);
+// A clear daytime sky blue, shared by the sky and the fog distant terrain fades into.
+const SKY_COLOR: Color = Color::srgb(100.0 / 255.0, 150.0 / 255.0, 220.0 / 255.0);
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
