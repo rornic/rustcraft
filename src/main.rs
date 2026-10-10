@@ -19,9 +19,7 @@ use rustcraft::chunks::{
     material::{ChunkMaterial, WaterMaterial},
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
-
-// A clear daytime sky blue, shared by the sky and the fog distant terrain fades into.
-const SKY_COLOR: Color = Color::srgb(100.0 / 255.0, 150.0 / 255.0, 220.0 / 255.0);
+use rustcraft::sky::{follow_camera, spawn_sky, SkyMaterial, HORIZON_COLOR};
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -34,6 +32,8 @@ fn setup_scene(
     asset_server: Res<AssetServer>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut sky_materials: ResMut<Assets<SkyMaterial>>,
 ) {
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
@@ -78,7 +78,7 @@ fn setup_scene(
             Tonemapping::None,
             Msaa::Off,
             DistanceFog {
-                color: SKY_COLOR,
+                color: HORIZON_COLOR,
                 falloff: FogFalloff::Linear {
                     start: layout.fog_start(),
                     end: fog_distance.max(layout.fog_start() + 1.0),
@@ -98,6 +98,13 @@ fn setup_scene(
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
+    // between the furthest terrain and the camera's far plane
+    spawn_sky(
+        &mut commands,
+        &mut meshes,
+        &mut sky_materials,
+        fog_distance + 128.0,
+    );
 
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
@@ -160,8 +167,9 @@ fn main() {
                 }),
             MaterialPlugin::<ChunkMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
+            MaterialPlugin::<SkyMaterial>::default(),
         ))
-        .insert_resource(ClearColor(SKY_COLOR))
+        .insert_resource(ClearColor(HORIZON_COLOR))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
@@ -183,6 +191,7 @@ fn main() {
                     .after(refresh_lod_visibility)
                     .before(update_underwater_effects),
                 (player_move, player_look, update_underwater_effects).chain(),
+                follow_camera,
             ),
         )
         .run();

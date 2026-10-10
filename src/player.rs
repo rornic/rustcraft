@@ -2,6 +2,7 @@ use bevy::{
     core_pipeline::dof::{DepthOfField, DepthOfFieldMode},
     ecs::{
         bundle::Bundle,
+        change_detection::DetectChangesMut,
         component::Component,
         event::EventReader,
         query::{With, Without},
@@ -12,11 +13,14 @@ use bevy::{
     math::{Dir3, I64Vec3, Vec3},
     pbr::{DistanceFog, FogFalloff},
     prelude::{default, ClearColor, Color, Transform},
-    render::{camera::Camera, view::ColorGrading},
+    render::{
+        camera::Camera,
+        view::{ColorGrading, Visibility},
+    },
     time::Time,
 };
 
-use crate::{block::BlockType, world::World};
+use crate::{block::BlockType, sky::Sky, world::World};
 
 #[derive(Bundle, Default)]
 pub struct PlayerBundle {
@@ -140,6 +144,7 @@ pub fn update_underwater_effects(
         With<Camera>,
     >,
     mut dry_defaults: Local<Option<(DistanceFog, DepthOfField, Color)>>,
+    mut sky: Query<&mut Visibility, With<Sky>>,
 ) {
     let (parent, camera_transform, mut fog, mut dof, mut color_grading) =
         camera_query.get_single_mut().expect("camera does not exist");
@@ -152,7 +157,17 @@ pub fn update_underwater_effects(
         world_pos.z.floor() as i64,
     );
 
-    if world.get_block_at(block_coord) == BlockType::Water {
+    let underwater = world.get_block_at(block_coord) == BlockType::Water;
+    // the sky is drawn without fog, so underwater it's hidden behind the fog colour instead
+    if let Ok(mut sky) = sky.get_single_mut() {
+        sky.set_if_neq(if underwater {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
+
+    if underwater {
         if dry_defaults.is_none() {
             *dry_defaults = Some((fog.clone(), *dof, clear_color.0));
         }
