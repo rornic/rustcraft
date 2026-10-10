@@ -20,20 +20,21 @@ const WARP_STRENGTH: f64 = 1800.0;
 // Continentalness: few octaves, so coastlines are long and smooth rather than archipelagos.
 const CONTINENT_WAVELENGTH: f64 = 9000.0;
 // Shifts continentalness down so most of the world is ocean.
-const OCEAN_BIAS: f64 = 0.12;
+const OCEAN_BIAS: f64 = 0.08;
 
 // Ruggedness decides where inland is calm plains and where it's mountain ranges.
 const RUGGEDNESS_WAVELENGTH: f64 = 3000.0;
 
 const RIDGE_WAVELENGTH: f64 = 1600.0;
 const RIDGE_OCTAVES: usize = 6;
-const MOUNTAIN_HEIGHT: f64 = 150.0;
+const RIDGE_WARP: f64 = 0.15;
+const MOUNTAIN_HEIGHT: f64 = 165.0;
 
 const DETAIL_WAVELENGTH: f64 = 350.0;
 
 // Where the ocean ring around the world starts and ends, as a fraction of the half size.
-const EDGE_FALLOFF_START: f64 = 0.72;
-const EDGE_FALLOFF_END: f64 = 0.94;
+const EDGE_FALLOFF_START: f64 = 0.8;
+const EDGE_FALLOFF_END: f64 = 0.97;
 
 // Continentalness to height above sea level: deep ocean, continental shelf, coast, inland.
 const CONTINENT_SPLINE: [(f64, f64); 9] = [
@@ -94,8 +95,9 @@ impl NoiseGenerator {
     }
 
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
-        let wx = x + self.warp_x.get([x, z]) * WARP_STRENGTH;
-        let wz = z + self.warp_z.get([x, z]) * WARP_STRENGTH;
+        let warp_x = self.warp_x.get([x, z]) * WARP_STRENGTH;
+        let warp_z = self.warp_z.get([x, z]) * WARP_STRENGTH;
+        let (wx, wz) = (x + warp_x, z + warp_z);
 
         let edge = edge_falloff(wx, wz);
         let continentalness = lerp(self.continents.get([wx, wz]) - OCEAN_BIAS, -1.0, edge);
@@ -104,9 +106,12 @@ impl NoiseGenerator {
         let base = spline(&CONTINENT_SPLINE, continentalness);
 
         let inland = smoothstep(0.02, 0.25, continentalness);
-        let mountain_mask = inland * smoothstep(-0.05, 0.35, ruggedness);
+        let mountain_mask = inland * smoothstep(-0.2, 0.25, ruggedness);
         let mountains = if mountain_mask > 0.0 {
-            self.ridged(wx, wz).powf(1.6) * mountain_mask * MOUNTAIN_HEIGHT
+            // A full strength warp shears ridges into long streaks, so they get only a little.
+            let ridge_x = x + warp_x * RIDGE_WARP;
+            let ridge_z = z + warp_z * RIDGE_WARP;
+            self.ridged(ridge_x, ridge_z).powf(1.3) * mountain_mask * MOUNTAIN_HEIGHT
         } else {
             0.0
         };

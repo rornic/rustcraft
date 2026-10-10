@@ -320,8 +320,9 @@ mod tests {
 
     #[test]
     fn test_flat_surface_drawn_by_the_node_it_falls_in() {
-        let surface = flat(50.0);
-        let inside = mesh_surface(&surface, node(0));
+        // above sea level, so the node draws no water
+        let surface = flat(80.0);
+        let inside = mesh_surface(&surface, node(1));
         // a quad per cell, plus a skirt quad per cell edge around the border
         assert_eq!(
             (CELLS * CELLS + 4 * CELLS) as usize * 4,
@@ -329,7 +330,7 @@ mod tests {
         );
         assert!(inside.water.is_none());
 
-        let above = mesh_surface(&surface, node(1));
+        let above = mesh_surface(&surface, node(2));
         assert_eq!(0, above.opaque.count_vertices());
     }
 
