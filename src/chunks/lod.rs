@@ -77,6 +77,10 @@ impl LodLayout {
 }
 
 const LOD_TASKS_PER_THREAD: usize = 4;
+// The spawn queue is re-sorted this often, since nodes drift between covered and gap as terrain loads.
+const LOD_RESORT_INTERVAL: f32 = 2.0;
+// LOD meshing waits while more full-detail chunk tasks than this are running, so nearby chunks aren't queued behind it.
+const LOD_PAUSE_CHUNK_WORK: usize = 32;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -436,8 +440,45 @@ pub fn spawn_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
     world: Res<World>,
+    time: Res<Time>,
+    chunk_loader: Res<ChunkLoader>,
     pending: Query<(), With<GenerateLodMesh>>,
+    pending_chunks: Query<(), PendingChunk>,
+    chunk_work: Query<(), Or<(With<GenerateChunkData>, With<GenerateChunkMesh>)>>,
+    mut since_resort: Local<f32>,
 ) {
+    if !chunk_loader.fully_queued() || chunk_work.iter().count() > LOD_PAUSE_CHUNK_WORK {
+        return;
+    }
+
+    *since_resort += time.delta_secs();
+    if *since_resort >= LOD_RESORT_INTERVAL {
+        *since_resort = 0.0;
+        if let Some(anchor) = lods.anchor {
+            let remaining = std::mem::take(&mut lods.to_spawn);
+            let nodes = &lods.nodes;
+            let node_exists = |key: LodKey| nodes.contains_key(&key);
+            let node_ready =
+                |key: LodKey| nodes.get(&key).is_some_and(|e| !pending.contains(*e));
+            let chunk_ready = |chunk: ChunkCoordinate| {
+                chunk_loader
+                    .chunk_entity(chunk)
+                    .is_some_and(|e| !pending_chunks.contains(e))
+            };
+            let state = LodState {
+                anchor,
+                layout: lods.layout,
+                band: lods.band,
+                selected: &lods.selected,
+                node_exists: &node_exists,
+                node_ready: &node_ready,
+                chunk_ready: &chunk_ready,
+            };
+            let resorted = spawn_order(&state, remaining.into_iter());
+            lods.to_spawn = resorted;
+        }
+    }
+
     let task_pool = AsyncComputeTaskPool::get();
     let max_in_flight = LOD_TASKS_PER_THREAD * task_pool.thread_num();
     let mut in_flight = pending.iter().count();
@@ -661,6 +702,10 @@ const FOG_MIN_DEPTH: f32 = 128.0;
 const FOG_UPDATE_INTERVAL: f32 = 0.25;
 // How fast fog can close in, in blocks per second, so outrunning loading never snaps it in.
 const FOG_PULL_IN_SPEED: f32 = 100.0;
+// Fog can also close in by this fraction of its distance per second, so huge render distances don't take minutes.
+const FOG_PULL_IN_FRACTION: f32 = 0.1;
+// A dip in loaded distance must last this long before fog starts closing in, so brief gaps after a move don't ping it.
+const FOG_PULL_IN_DELAY: f32 = 1.5;
 const FOG_EASE_OUT_SECONDS: f32 = 2.0;
 
 #[allow(clippy::too_many_arguments)]
@@ -674,6 +719,7 @@ pub fn update_horizon_fog(
     mut target: Local<Option<f32>>,
     mut visibility: Local<Option<f32>>,
     mut since_update: Local<f32>,
+    mut dipping_for: Local<f32>,
 ) {
     let Some(anchor) = lods.anchor else {
         return;
@@ -705,8 +751,12 @@ pub fn update_horizon_fog(
 
     let target = target.unwrap();
     let current = visibility.unwrap_or(target);
-    let end = if target < current {
-        (current - FOG_PULL_IN_SPEED * time.delta_secs()).max(target)
+    *dipping_for = if target < current { *dipping_for + time.delta_secs() } else { 0.0 };
+    let end = if target < current && *dipping_for < FOG_PULL_IN_DELAY {
+        current
+    } else if target < current {
+        let speed = FOG_PULL_IN_SPEED.max(current * FOG_PULL_IN_FRACTION);
+        (current - speed * time.delta_secs()).max(target)
     } else {
         current + (target - current) * (1.0 - (-time.delta_secs() / FOG_EASE_OUT_SECONDS).exp())
     };
@@ -1052,13 +1102,13 @@ mod tests {
     fn test_fog_starts_part_way_out_but_not_over_full_detail() {
         let lods = super::LodLoader::new(
             layout(2),
-            0.6,
+            0.5,
             2,
             256,
             Default::default(),
             Default::default(),
         );
-        assert_eq!(2048.0 * 0.6, lods.fog_start(2048.0));
+        assert_eq!(2048.0 * 0.5, lods.fog_start(2048.0));
         assert_eq!(512.0, lods.fog_start(600.0));
         assert_eq!(499.0, lods.fog_start(500.0));
     }

@@ -28,7 +28,7 @@ impl Default for RendererSettings {
             full_detail_distance: 32,
             smooth_lod_level: 2,
             lod_fade_seconds: 0.6,
-            fog_start_fraction: 0.6,
+            fog_start_fraction: 0.5,
         }
     }
 }

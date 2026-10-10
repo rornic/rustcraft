@@ -76,7 +76,7 @@ const SCAN_BATCH_SIZE: usize = 50_000;
 // falls behind frame rate - scaled with render distance so it doesn't itself become the
 // bottleneck once the time-budgeted spawn rate is higher at a larger render distance
 const BASELINE_RENDER_DISTANCE: u32 = 32;
-const BASELINE_IN_FLIGHT_GENERATING: usize = 1024;
+const BASELINE_IN_FLIGHT_GENERATING: usize = 512;
 // Mesh generation samples the full 3x3x3 chunk neighborhood for vertex AO (including
 // corner-diagonal chunks), so the neighbour-data shell must reach far enough to cover a
 // (1,1,1) chunk-grid offset, i.e. Euclidean distance sqrt(3) =~ 1.73 - round up to 2.
@@ -119,6 +119,11 @@ impl ChunkLoader {
         }
     }
 
+    /// Whether every chunk in range has been queued for generation.
+    pub fn fully_queued(&self) -> bool {
+        self.spawn_queue.is_exhausted()
+    }
+
     pub fn anchor(&self) -> ChunkCoordinate {
         self.spawn_queue.anchor
     }
@@ -135,7 +140,8 @@ pub fn gather_chunks(
     camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
     generating_chunks_query: Query<&Chunk, With<GenerateChunkData>>,
 ) {
-    if generating_chunks_query.iter().count() > chunk_loader.max_in_flight_generating {
+    let mut in_flight = generating_chunks_query.iter().count();
+    if in_flight > chunk_loader.max_in_flight_generating {
         return;
     }
 
@@ -152,6 +158,9 @@ pub fn gather_chunks(
     let start = Instant::now();
 
     loop {
+        if in_flight >= chunk_loader.max_in_flight_generating {
+            break;
+        }
         let ChunkLoader {
             spawn_queue,
             chunk_to_entity,
@@ -166,6 +175,7 @@ pub fn gather_chunks(
         let exhausted = spawn_queue.is_exhausted();
         sort_by_viewport_bias(&mut next_chunks, camera_chunk, camera_forward);
 
+        in_flight += next_chunks.len();
         for chunk in next_chunks {
             generate_single_chunk(
                 &mut commands,
