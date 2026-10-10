@@ -9,6 +9,8 @@ pub const WORLD_HALF_SIZE: i64 = WORLD_SIZE / 2;
 
 // A little headroom under the 512 block world height.
 const MAX_HEIGHT: f64 = 496.0;
+// Peaks above this are eased towards MAX_HEIGHT instead of being cut off flat.
+const PEAK_EASE_START: f64 = 400.0;
 
 // Each field gets its own block of seeds, since a fractal seeds its octaves seed, seed+1, ...
 const SEED_STRIDE: u32 = 101;
@@ -23,14 +25,14 @@ const CONTINENT_WAVELENGTH: f64 = 9000.0;
 const OCEAN_BIAS: f64 = 0.08;
 
 // Ruggedness decides where inland is calm plains and where it's mountain ranges.
-const RUGGEDNESS_WAVELENGTH: f64 = 4500.0;
+const RUGGEDNESS_WAVELENGTH: f64 = 7000.0;
 
-const RIDGE_WAVELENGTH: f64 = 1100.0;
+const RIDGE_WAVELENGTH: f64 = 1500.0;
 const RIDGE_OCTAVES: usize = 7;
 const RIDGE_WARP: f64 = 0.3;
 // A range is a broad uplifted massif with ridged peaks and valleys carved into it.
-const UPLIFT_HEIGHT: f64 = 150.0;
-const RIDGE_HEIGHT: f64 = 190.0;
+const UPLIFT_HEIGHT: f64 = 190.0;
+const RIDGE_HEIGHT: f64 = 230.0;
 
 // Hills between the coast and the mountains, strong in some areas and gentle in others.
 const HILL_WAVELENGTH: f64 = 900.0;
@@ -127,7 +129,7 @@ impl NoiseGenerator {
         let base = spline(&CONTINENT_SPLINE, continentalness);
 
         let inland = smoothstep(0.02, 0.25, continentalness);
-        let mountain_mask = inland * smoothstep(-0.3, 0.35, ruggedness);
+        let mountain_mask = inland * smoothstep(-0.2, 0.25, ruggedness);
         let mountains = if mountain_mask > 0.0 {
             // A full strength warp shears ridges into long streaks, so they get only a little.
             let ridge_x = x + warp_x * RIDGE_WARP;
@@ -144,7 +146,8 @@ impl NoiseGenerator {
         let hills = if continentalness > 0.0 {
             let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get([wx, wz]));
             let hill_amplitude = lerp(0.15, 1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
-            (self.hills.get([x, z]) * 0.8 + 0.3).max(0.0) * hill_amplitude
+            // Ranges carry their own relief, so hills fade out into them.
+            (self.hills.get([x, z]) * 0.8 + 0.3).max(0.0) * hill_amplitude * (1.0 - mountain_mask)
         } else {
             0.0
         };
@@ -156,7 +159,7 @@ impl NoiseGenerator {
         let detail_amplitude = lerp(SEA_FLOOR_DETAIL, land_detail, sea_floor_blend) * shore_calm;
         let detail = self.detail.get([x, z]) * detail_amplitude;
 
-        let height = (WATER_LEVEL as f64 + base + hills + mountains + detail).clamp(0.0, MAX_HEIGHT);
+        let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail).max(0.0);
         TerrainSample {
             continentalness,
             ruggedness,
@@ -203,6 +206,15 @@ impl NoiseGenerator {
     }
 }
 
+// Leaves heights below PEAK_EASE_START alone and approaches MAX_HEIGHT without reaching it.
+fn ease_peaks(height: f64) -> f64 {
+    if height <= PEAK_EASE_START {
+        return height;
+    }
+    let room = MAX_HEIGHT - PEAK_EASE_START;
+    MAX_HEIGHT - room * (-(height - PEAK_EASE_START) / room).exp()
+}
+
 // 0 inside the world, rising to 1 in the ocean ring at its edge.
 fn edge_falloff(x: f64, z: f64) -> f64 {
     let distance = x.abs().max(z.abs()) / WORLD_HALF_SIZE as f64;
@@ -244,6 +256,13 @@ mod tests {
         assert_eq!(5.0, spline(&points, 0.5));
         assert_eq!(20.0, spline(&points, 1.5));
         assert_eq!(30.0, spline(&points, 9.0));
+    }
+
+    #[test]
+    fn test_peaks_ease_under_max_height() {
+        assert_eq!(300.0, ease_peaks(300.0));
+        assert!(ease_peaks(450.0) > ease_peaks(420.0));
+        assert!(ease_peaks(1000.0) < MAX_HEIGHT);
     }
 
     #[test]
