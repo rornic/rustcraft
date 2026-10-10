@@ -188,50 +188,61 @@ pub fn spawn_points(seed: u32, world_origin: I64Vec2, width: u32, height: u32, c
     points
 }
 
-// Distributes `amount` over a weighted disk of cells around `pos` (closer cells get
-// more weight), rather than a single cell, to avoid spiky single-cell artifacts.
-fn apply_brush(grid: &mut HeightGrid, pos: Vec2, radius: i32, amount: f32, sign: f32) {
-    if amount <= 0.0 {
-        return;
-    }
-    let cx = pos.x.floor() as i32;
-    let cz = pos.y.floor() as i32;
-    let r = radius.max(0);
-    let r2 = (r * r) as f32;
+// A weighted disk of cells around a droplet (closer cells get more weight), so erosion
+// and deposition spread out rather than leaving spiky single-cell artifacts. Built once
+// per erosion pass, since every droplet step uses it.
+struct Brush {
+    // (dx, dz, weight), weights summing to 1
+    cells: Vec<(i32, i32, f32)>,
+}
 
-    let mut weights = Vec::new();
-    let mut total_weight = 0.0f32;
-    for dz in -r..=r {
-        for dx in -r..=r {
-            let dist_sq = (dx * dx + dz * dz) as f32;
-            if dist_sq > r2 {
-                continue;
+impl Brush {
+    fn new(radius: i32) -> Self {
+        let r = radius.max(0);
+        let r2 = (r * r) as f32;
+        let mut cells = Vec::new();
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let dist_sq = (dx * dx + dz * dz) as f32;
+                if dist_sq > r2 {
+                    continue;
+                }
+                let weight = 1.0 - dist_sq.sqrt() / r.max(1) as f32;
+                if weight > 0.0 {
+                    cells.push((dx, dz, weight));
+                }
             }
-            let weight = 1.0 - dist_sq.sqrt() / r.max(1) as f32;
-            if weight <= 0.0 {
-                continue;
-            }
-            weights.push((dx, dz, weight));
-            total_weight += weight;
+        }
+        let total: f32 = cells.iter().map(|c| c.2).sum();
+        for cell in &mut cells {
+            cell.2 /= total;
+        }
+        Self { cells }
+    }
+
+    fn apply(&self, grid: &mut HeightGrid, pos: Vec2, amount: f32) {
+        if amount == 0.0 {
+            return;
+        }
+        let cx = pos.x.floor() as i32;
+        let cz = pos.y.floor() as i32;
+        for &(dx, dz, weight) in &self.cells {
+            let (x, z) = (cx + dx, cz + dz);
+            grid.set(x, z, grid.get(x, z) + amount * weight);
         }
     }
-    if total_weight <= 0.0 {
-        return;
-    }
-    for (dx, dz, weight) in weights {
-        let delta = sign * amount * (weight / total_weight);
-        let x = cx + dx;
-        let z = cz + dz;
-        grid.set(x, z, grid.get(x, z) + delta);
+}
+
+fn deposit_at(grid: &mut HeightGrid, pos: Vec2, amount: f32, brush: &Brush) {
+    if amount > 0.0 {
+        brush.apply(grid, pos, amount);
     }
 }
 
-fn deposit_at(grid: &mut HeightGrid, pos: Vec2, amount: f32, radius: i32) {
-    apply_brush(grid, pos, radius, amount, 1.0);
-}
-
-fn erode_at(grid: &mut HeightGrid, pos: Vec2, amount: f32, radius: i32) {
-    apply_brush(grid, pos, radius, amount, -1.0);
+fn erode_at(grid: &mut HeightGrid, pos: Vec2, amount: f32, brush: &Brush) {
+    if amount > 0.0 {
+        brush.apply(grid, pos, -amount);
+    }
 }
 
 // Simulates one droplet's full lifetime, mutating `grid` in place. Any sediment
@@ -239,7 +250,7 @@ fn erode_at(grid: &mut HeightGrid, pos: Vec2, amount: f32, radius: i32) {
 // pit) is deposited at its final position - without this, droplets that exit early
 // would silently destroy mass, and the dump tool's eroded/deposited balance check
 // (see examples/erosion_dump.rs) would never close.
-fn simulate_droplet(grid: &mut HeightGrid, spawn: Vec2, params: &ErosionParams) {
+fn simulate_droplet(grid: &mut HeightGrid, spawn: Vec2, params: &ErosionParams, brush: &Brush) {
     let mut pos = spawn;
     let mut dir = Vec2::ZERO;
     let mut speed = params.initial_speed;
@@ -273,10 +284,10 @@ fn simulate_droplet(grid: &mut HeightGrid, spawn: Vec2, params: &ErosionParams) 
                 (sediment - capacity) * params.deposit_speed
             };
             sediment -= deposit;
-            deposit_at(grid, pos, deposit, params.erosion_radius);
+            deposit_at(grid, pos, deposit, brush);
         } else {
             let erode = ((capacity - sediment) * params.erode_speed).min(-delta_height);
-            erode_at(grid, pos, erode, params.erosion_radius);
+            erode_at(grid, pos, erode, brush);
             sediment += erode;
         }
 
@@ -292,14 +303,15 @@ fn simulate_droplet(grid: &mut HeightGrid, spawn: Vec2, params: &ErosionParams) 
     }
 
     if sediment > 0.0 {
-        deposit_at(grid, pos, sediment, params.erosion_radius);
+        deposit_at(grid, pos, sediment, brush);
     }
 }
 
 pub fn erode(grid: &mut HeightGrid, seed: u32, world_origin: I64Vec2, params: &ErosionParams) {
     let spawns = spawn_points(seed, world_origin, grid.width, grid.height, params.droplet_count);
+    let brush = Brush::new(params.erosion_radius);
     for spawn in spawns {
-        simulate_droplet(grid, spawn, params);
+        simulate_droplet(grid, spawn, params, &brush);
     }
 }
 

@@ -161,10 +161,10 @@ pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient:
         if above_sea >= 220 && combined_gradient <= 2.0 {
             BlockType::Snow
         } else if above_sea >= 120 && combined_gradient >= 2.0
-            || (above_sea >= 4 && combined_gradient >= 3.5)
+            || (above_sea >= 2 && combined_gradient >= 3.5)
         {
             BlockType::Stone
-        } else if above_sea >= 4 {
+        } else if above_sea >= 2 {
             BlockType::Grass
         } else {
             BlockType::Sand

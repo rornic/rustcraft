@@ -32,6 +32,11 @@ const RIDGE_WARP: f64 = 0.3;
 const UPLIFT_HEIGHT: f64 = 150.0;
 const RIDGE_HEIGHT: f64 = 190.0;
 
+// Hills between the coast and the mountains, strong in some areas and gentle in others.
+const HILL_WAVELENGTH: f64 = 900.0;
+const HILLINESS_WAVELENGTH: f64 = 2500.0;
+const HILL_HEIGHT: f64 = 45.0;
+
 const DETAIL_WAVELENGTH: f64 = 350.0;
 
 // Where the ocean ring around the world starts and ends, as a fraction of the half size.
@@ -39,15 +44,16 @@ const EDGE_FALLOFF_START: f64 = 0.8;
 const EDGE_FALLOFF_END: f64 = 0.97;
 
 // Continentalness to height above sea level: deep ocean, continental shelf, coast, inland.
-const CONTINENT_SPLINE: [(f64, f64); 9] = [
+const CONTINENT_SPLINE: [(f64, f64); 10] = [
     (-1.0, -46.0),
     (-0.4, -44.0),
     (-0.22, -30.0),
     (-0.12, -10.0),
     (-0.03, -3.0),
-    (0.0, 1.0),
-    (0.06, 4.0),
-    (0.2, 14.0),
+    (0.0, 0.5),
+    (0.015, 3.0),
+    (0.05, 8.0),
+    (0.2, 18.0),
     (0.5, 36.0),
 ];
 
@@ -66,6 +72,8 @@ pub struct NoiseGenerator {
     continents: Fbm<Perlin>,
     ruggedness: Fbm<Perlin>,
     ridges: Vec<Perlin>,
+    hills: Fbm<Perlin>,
+    hilliness: Fbm<Perlin>,
     detail: Fbm<Perlin>,
 }
 
@@ -88,6 +96,8 @@ impl NoiseGenerator {
                 .map(|i| Perlin::new(field_seed(4).wrapping_add(i)))
                 .collect(),
             detail: fbm(5, DETAIL_WAVELENGTH, 5),
+            hills: fbm(6, HILL_WAVELENGTH, 4),
+            hilliness: fbm(7, HILLINESS_WAVELENGTH, 2),
         }
     }
 
@@ -121,12 +131,21 @@ impl NoiseGenerator {
             0.0
         };
 
+        // Kept above zero, so hills rise out of flat valley floors instead of dipping into lakes.
+        let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get([wx, wz]));
+        let hill_amplitude = lerp(0.15, 1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
+        let hills = if hill_amplitude > 0.0 {
+            (self.hills.get([x, z]) * 0.8 + 0.3).max(0.0) * hill_amplitude
+        } else {
+            0.0
+        };
+
         // Calm the detail near the shoreline, or it breaks the coast up into specks of land.
         let shore_calm = lerp(0.2, 1.0, smoothstep(0.0, 0.1, continentalness.abs()));
         let detail_amplitude = lerp(3.0, 12.0, smoothstep(-0.3, 0.4, ruggedness)) * shore_calm;
         let detail = self.detail.get([x, z]) * detail_amplitude;
 
-        let height = (WATER_LEVEL as f64 + base + mountains + detail).clamp(0.0, MAX_HEIGHT);
+        let height = (WATER_LEVEL as f64 + base + hills + mountains + detail).clamp(0.0, MAX_HEIGHT);
         TerrainSample {
             continentalness,
             ruggedness,
