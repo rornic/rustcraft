@@ -12,9 +12,31 @@ use crate::util::primitives::Vertex;
 const CELLS: i32 = CHUNK_SIZE as i32;
 // Corners sampled per side: every cell corner plus one extra ring for normals.
 const CORNERS: i32 = CELLS + 3;
-// How far below a node's edge its skirt hangs, in cells. Covers the gap where a
+// Cells sampled per side for colour: every cell plus a ring around the node, so
+// colours blend across node edges.
+const COLOUR_CELLS: i32 = CELLS + 2;
+// How far below a node's outer edge its skirt hangs, in cells. Covers the gap where a
 // neighbour at another LOD puts the surface at a slightly different height.
-const SKIRT_CELLS: f32 = 2.0;
+const SKIRT_CELLS: f32 = 1.0;
+// How much darker a surface gets as it steepens. Up close a slope is a staircase of
+// lit tops and darker, ambient-occluded sides; this stands in for those sides.
+const SLOPE_SHADE: f32 = 0.7;
+// Smooth terrain is coloured entirely by its vertex colours. A negative u tells the
+// terrain shader to skip the block texture.
+const UNTEXTURED_UV: [f32; 2] = [-1.0, 0.0];
+
+// Each block's average texture colour in linear RGB, measured from blocks.png. From
+// this far away a block reads as its overall colour rather than its texture.
+fn block_colour(block: BlockType) -> Vec3 {
+    match block {
+        BlockType::Stone => Vec3::new(0.118, 0.118, 0.118),
+        BlockType::Grass => Vec3::new(0.027, 0.132, 0.001),
+        BlockType::Sand => Vec3::new(0.478, 0.363, 0.183),
+        BlockType::Water => Vec3::new(0.066, 0.101, 0.915),
+        BlockType::Snow => Vec3::new(0.945, 0.992, 0.992),
+        BlockType::Air => Vec3::ZERO,
+    }
+}
 
 // The world height of the water surface, matching full-detail water.
 fn water_surface_y() -> f32 {
@@ -28,7 +50,7 @@ fn surface_y(height: f32) -> f32 {
 }
 
 /// The terrain surface across one LOD node's footprint: its height at every cell
-/// corner, and the block on top of every cell the node draws.
+/// corner, and the block on top of every cell.
 pub(super) struct Surface {
     corners: Vec<f32>,
     blocks: Vec<BlockType>,
@@ -47,29 +69,23 @@ impl Surface {
                 corners.push(surface_y(height as f32));
             }
         }
-        let mut surface = Self {
-            corners,
-            blocks: vec![BlockType::Air; (CELLS * CELLS) as usize],
-        };
 
-        let range = NodeRange::new(key);
-        for i in 0..CELLS {
-            for j in 0..CELLS {
-                if !range.contains(surface.cell_centre(i, j)) {
-                    continue;
-                }
+        let mut blocks = Vec::with_capacity((COLOUR_CELLS * COLOUR_CELLS) as usize);
+        for i in -1..=CELLS {
+            for j in -1..=CELLS {
                 let world_x = base.x + i as i64 * cell + cell / 2;
                 let world_z = base.z + j as i64 * cell + cell / 2;
                 let height = heights.height(world_x, world_z).round() as i64;
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
-                surface.blocks[(i * CELLS + j) as usize] = terrain_block(
+                blocks.push(terrain_block(
                     height.max(SOLID_FLOOR) - 1,
                     height,
                     gradient_x.abs() + gradient_z.abs(),
-                );
+                ));
             }
         }
-        surface
+
+        Self { corners, blocks }
     }
 
     // `i` and `j` run from -1 to CELLS + 1
@@ -85,8 +101,19 @@ impl Surface {
             / 4.0
     }
 
+    // `i` and `j` run from -1 to CELLS
     fn block(&self, i: i32, j: i32) -> BlockType {
-        self.blocks[(i * CELLS + j) as usize]
+        self.blocks[((i + 1) * COLOUR_CELLS + j + 1) as usize]
+    }
+
+    // The average colour of the four cells meeting at a corner, so colours blend
+    // across the surface instead of changing in hard-edged squares.
+    fn corner_colour(&self, i: i32, j: i32) -> Vec3 {
+        (block_colour(self.block(i - 1, j - 1))
+            + block_colour(self.block(i, j - 1))
+            + block_colour(self.block(i - 1, j))
+            + block_colour(self.block(i, j)))
+            / 4.0
     }
 }
 
@@ -133,32 +160,32 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
         let slope_z = (surface.corner(i, j + 1) - surface.corner(i, j - 1)) / (2.0 * cell);
         Vec3::new(-slope_x, 1.0, -slope_z).normalize()
     };
-    let drawn = |i: i32, j: i32| {
-        (0..CELLS).contains(&i)
-            && (0..CELLS).contains(&j)
-            && range.contains(surface.cell_centre(i, j))
+    let colour = |i: i32, j: i32| {
+        let shade = 1.0 - SLOPE_SHADE * (1.0 - normal(i, j).y);
+        (surface.corner_colour(i, j) * shade).extend(1.0).to_array()
     };
+    let in_footprint = |i: i32, j: i32| (0..CELLS).contains(&i) && (0..CELLS).contains(&j);
     let water_y = water_surface_y();
 
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
     for i in 0..CELLS {
         for j in 0..CELLS {
-            if drawn(i, j) {
-                let uv_offset = surface.block(i, j) as usize as f32 - 1.0;
+            if range.contains(surface.cell_centre(i, j)) {
                 let cells = [(i, j + 1), (i, j), (i + 1, j + 1), (i + 1, j)];
                 push_quad(
                     &mut opaque,
                     cells.map(|(a, b)| to_local(corner(a, b))),
                     cells.map(|(a, b)| normal(a, b)),
                     Vec3::Y,
-                    uv_offset,
-                    [1.0; 4],
+                    (UNTEXTURED_UV, 0.0),
+                    cells.map(|(a, b)| colour(a, b)),
                 );
 
-                // a skirt down every edge whose neighbouring cell this node doesn't draw
+                // A skirt down each outer edge of the node. Where a node stacked above
+                // or below takes over the surface the two meet exactly, so no skirt.
                 for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-                    if drawn(i + di, j + dj) {
+                    if in_footprint(i + di, j + dj) {
                         continue;
                     }
                     let edge = if di != 0 {
@@ -170,6 +197,8 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
                     };
                     let (top_a, top_b) =
                         (corner(edge[0].0, edge[0].1), corner(edge[1].0, edge[1].1));
+                    let (colour_a, colour_b) =
+                        (colour(edge[0].0, edge[0].1), colour(edge[1].0, edge[1].1));
                     let drop = Vec3::new(0.0, SKIRT_CELLS * cell, 0.0);
                     let outward = Vec3::new(di as f32, 0.0, dj as f32);
                     push_quad(
@@ -177,8 +206,8 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
                         [top_a, top_a - drop, top_b, top_b - drop].map(to_local),
                         [outward; 4],
                         outward,
-                        uv_offset,
-                        [1.0; 4],
+                        (UNTEXTURED_UV, 0.0),
+                        [colour_a, colour_a, colour_b, colour_b],
                     );
                 }
             }
@@ -191,15 +220,16 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
                 let depth = (water_y - surface.cell_centre(i, j)).max(0.0);
                 // R/G/B/A: shore, depth / CHUNK_SIZE, is-top, shore distance - see the
                 // full-detail water mesh
-                let color = [0.0, depth / CHUNK_SIZE as f32, 1.0, 1.0];
+                let colour = [0.0, depth / CHUNK_SIZE as f32, 1.0, 1.0];
                 let cells = [(i, j + 1), (i, j), (i + 1, j + 1), (i + 1, j)];
                 push_quad(
                     &mut water,
                     cells.map(|(a, b)| to_local(corner(a, b).with_y(water_y))),
                     [Vec3::Y; 4],
                     Vec3::Y,
-                    BlockType::Water as usize as f32 - 1.0,
-                    color,
+                    // the middle of the water tile
+                    ([0.5, 0.5], BlockType::Water as usize as f32 - 1.0),
+                    [colour; 4],
                 );
             }
         }
@@ -214,13 +244,14 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
 // Pushes a quad laid out like the cube's faces: triangles (0, 1, 2) and (2, 1, 3).
 // Terrain is drawn with front faces culled, so a face points away from the side its
 // corners wind anticlockwise on - the corners are swapped if needed to face `outward`.
+// `uv` is the uv and atlas tile every corner samples.
 fn push_quad(
     buffers: &mut MeshBuffers,
     mut corners: [Vec3; 4],
     mut normals: [Vec3; 4],
     outward: Vec3,
-    uv_offset: f32,
-    color: [f32; 4],
+    (uv, uv_offset): ([f32; 2], f32),
+    mut colours: [[f32; 4]; 4],
 ) {
     if (corners[1] - corners[0])
         .cross(corners[2] - corners[0])
@@ -229,6 +260,7 @@ fn push_quad(
     {
         corners.swap(1, 2);
         normals.swap(1, 2);
+        colours.swap(1, 2);
     }
     let vertices: Vec<Vertex> = corners
         .iter()
@@ -236,12 +268,10 @@ fn push_quad(
         .map(|(position, normal)| Vertex {
             position: position.to_array(),
             normal: normal.to_array(),
-            // the middle of the block's atlas tile: from this far away a block reads
-            // as its overall colour, not its texture
-            uv: [0.5, 0.5],
+            uv,
         })
         .collect();
-    buffers.push_face(&vertices, Vec3::ZERO, uv_offset, &[color; 4]);
+    buffers.push_face(&vertices, Vec3::ZERO, uv_offset, &colours);
 }
 
 #[cfg(test)]
@@ -249,7 +279,7 @@ mod tests {
     use bevy::math::{I64Vec3, Vec3};
     use bevy::render::mesh::{Mesh, VertexAttributeValues};
 
-    use super::{mesh_surface, surface_y, Surface, CELLS, CORNERS};
+    use super::{block_colour, mesh_surface, surface_y, Surface, CELLS, COLOUR_CELLS, CORNERS};
     use crate::block::BlockType;
     use crate::chunks::lod::LodKey;
     use crate::util::primitives::cube;
@@ -257,7 +287,28 @@ mod tests {
     fn flat(height: f32) -> Surface {
         Surface {
             corners: vec![surface_y(height); (CORNERS * CORNERS) as usize],
-            blocks: vec![BlockType::Grass; (CELLS * CELLS) as usize],
+            blocks: vec![BlockType::Grass; (COLOUR_CELLS * COLOUR_CELLS) as usize],
+        }
+    }
+
+    // Ground at y 40 for x cells below 8, and a cliff up to y 90 above it.
+    fn cliff() -> Surface {
+        let mut corners = Vec::new();
+        for i in -1..=CELLS + 1 {
+            for _ in -1..=CELLS + 1 {
+                corners.push(if i <= 8 { 40.0 } else { 90.0 });
+            }
+        }
+        Surface {
+            corners,
+            blocks: vec![BlockType::Grass; (COLOUR_CELLS * COLOUR_CELLS) as usize],
+        }
+    }
+
+    fn colours(mesh: &Mesh) -> Vec<[f32; 4]> {
+        match mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap() {
+            VertexAttributeValues::Float32x4(v) => v.clone(),
+            _ => unreachable!(),
         }
     }
 
@@ -337,6 +388,51 @@ mod tests {
         let mesh = mesh_surface(&flat(50.0), node(0)).opaque;
         for (winding, facing) in triangle_normals(&mesh) {
             assert_eq!(convention, winding.dot(facing).signum());
+        }
+    }
+
+    #[test]
+    fn test_no_skirt_where_a_stacked_node_takes_over() {
+        // node(0) draws the 8 columns of low ground, node(1) the cliff top above it
+        let low = mesh_surface(&cliff(), node(0)).opaque;
+        let owned = 8 * CELLS;
+        // skirts only on the node's outer edges: the 16 cells along x = 0, and 8 cells
+        // along each of the two z edges - none along the cliff
+        let skirts = CELLS + 2 * 8;
+        assert_eq!((owned + skirts) as usize * 4, low.count_vertices());
+    }
+
+    #[test]
+    fn test_colours_blend_between_cells() {
+        let mut surface = flat(50.0);
+        // snow on every cell with i >= 8
+        for i in -1..=CELLS {
+            for j in -1..=CELLS {
+                if i >= 8 {
+                    surface.blocks[((i + 1) * COLOUR_CELLS + j + 1) as usize] = BlockType::Snow;
+                }
+            }
+        }
+        let expected = (block_colour(BlockType::Grass) + block_colour(BlockType::Snow)) / 2.0;
+        // corners on the boundary between the two halves are half grass, half snow
+        assert_eq!(expected, surface.corner_colour(8, 5));
+        assert_eq!(block_colour(BlockType::Grass), surface.corner_colour(7, 5));
+    }
+
+    #[test]
+    fn test_steeper_ground_is_darker() {
+        let flat_colour = colours(&mesh_surface(&flat(50.0), node(0)).opaque)[0];
+        let mesh = mesh_surface(&cliff(), node(0)).opaque;
+        let darkest = colours(&mesh).iter().map(|c| c[1]).fold(f32::MAX, f32::min);
+        assert!(darkest < flat_colour[1]);
+    }
+
+    #[test]
+    fn test_terrain_is_untextured() {
+        let mesh = mesh_surface(&flat(50.0), node(0)).opaque;
+        match mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() {
+            VertexAttributeValues::Float32x2(uvs) => assert!(uvs.iter().all(|uv| uv[0] < 0.0)),
+            _ => unreachable!(),
         }
     }
 

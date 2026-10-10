@@ -30,7 +30,10 @@ fn fragment(
 
     let brightness = dot(normalize(in.world_normal), normalize(vec3(-0.2, 0.7, 0.2)));
 
-    let color_lit = material_color * textureSample(material_color_texture, material_color_sampler, in.uv);
+    // Smooth distant terrain carries its colour in its vertex colours and marks itself
+    // with a negative u, so it skips the block texture.
+    let texel = textureSample(material_color_texture, material_color_sampler, in.uv);
+    let color_lit = material_color * select(texel, vec4<f32>(1.0), in.uv.x < 0.0);
 
     let dark = color_lit * 0.7;
     var color = mix(dark, color_lit, brightness);
