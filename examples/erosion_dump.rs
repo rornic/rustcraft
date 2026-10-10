@@ -11,7 +11,7 @@ use rustcraft::chunks::generate::noise::NoiseGenerator;
 
 // Matches the `world_height` value passed to `generate_chunk` elsewhere (see
 // `World::height` / `bench_generate_and_mesh_chunks`).
-const WORLD_HEIGHT: u64 = 256;
+const WORLD_HEIGHT: u64 = 512;
 
 struct Args {
     seed: u32,

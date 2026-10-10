@@ -7,8 +7,8 @@ use super::generator::WATER_LEVEL;
 pub const WORLD_SIZE: i64 = 32_768;
 pub const WORLD_HALF_SIZE: i64 = WORLD_SIZE / 2;
 
-// Leaves headroom under the 256 block world height for erosion deposits.
-const MAX_HEIGHT: f64 = 248.0;
+// Leaves headroom under the 512 block world height for erosion deposits.
+const MAX_HEIGHT: f64 = 496.0;
 
 // Each field gets its own block of seeds, since a fractal seeds its octaves seed, seed+1, ...
 const SEED_STRIDE: u32 = 101;
@@ -23,12 +23,14 @@ const CONTINENT_WAVELENGTH: f64 = 9000.0;
 const OCEAN_BIAS: f64 = 0.08;
 
 // Ruggedness decides where inland is calm plains and where it's mountain ranges.
-const RUGGEDNESS_WAVELENGTH: f64 = 3000.0;
+const RUGGEDNESS_WAVELENGTH: f64 = 4500.0;
 
-const RIDGE_WAVELENGTH: f64 = 1600.0;
-const RIDGE_OCTAVES: usize = 6;
-const RIDGE_WARP: f64 = 0.15;
-const MOUNTAIN_HEIGHT: f64 = 165.0;
+const RIDGE_WAVELENGTH: f64 = 1100.0;
+const RIDGE_OCTAVES: usize = 7;
+const RIDGE_WARP: f64 = 0.3;
+// A range is a broad uplifted massif with ridged peaks and valleys carved into it.
+const UPLIFT_HEIGHT: f64 = 150.0;
+const RIDGE_HEIGHT: f64 = 190.0;
 
 const DETAIL_WAVELENGTH: f64 = 350.0;
 
@@ -106,12 +108,15 @@ impl NoiseGenerator {
         let base = spline(&CONTINENT_SPLINE, continentalness);
 
         let inland = smoothstep(0.02, 0.25, continentalness);
-        let mountain_mask = inland * smoothstep(-0.2, 0.25, ruggedness);
+        let mountain_mask = inland * smoothstep(-0.3, 0.35, ruggedness);
         let mountains = if mountain_mask > 0.0 {
             // A full strength warp shears ridges into long streaks, so they get only a little.
             let ridge_x = x + warp_x * RIDGE_WARP;
             let ridge_z = z + warp_z * RIDGE_WARP;
-            self.ridged(ridge_x, ridge_z).powf(1.3) * mountain_mask * MOUNTAIN_HEIGHT
+            let uplift = smoothstep(0.0, 1.0, mountain_mask) * UPLIFT_HEIGHT;
+            // Peaks grow towards the heart of a range, leaving foothills at its edges.
+            let ridges = self.ridged(ridge_x, ridge_z).powf(1.3) * mountain_mask.powf(1.5) * RIDGE_HEIGHT;
+            uplift + ridges
         } else {
             0.0
         };

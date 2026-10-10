@@ -158,9 +158,9 @@ fn is_solid(block: BlockType) -> bool {
 pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
     if world_y < column_height.max(SOLID_FLOOR) {
         let above_sea = world_y - WATER_LEVEL;
-        if above_sea >= 110 && combined_gradient <= 2.0 {
+        if above_sea >= 220 && combined_gradient <= 2.0 {
             BlockType::Snow
-        } else if above_sea >= 60 && combined_gradient >= 2.0
+        } else if above_sea >= 120 && combined_gradient >= 2.0
             || (above_sea >= 4 && combined_gradient >= 3.5)
         {
             BlockType::Stone

@@ -66,7 +66,7 @@ fn setup_scene(
             Camera3d { ..default() },
             gradient_skybox(&mut images),
             Projection::Perspective(PerspectiveProjection {
-                far: fog_distance + 256.0,
+                far: fog_distance + world_height as f32,
                 ..default()
             }),
             // Depth of field needs HDR enabled on the camera.

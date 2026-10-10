@@ -25,7 +25,7 @@ impl World {
     /// `render_distance` is how far, in chunks, terrain will be drawn.
     pub fn new(render_distance: u32) -> Self {
         let seed = rand::random();
-        let height = 256;
+        let height = 512;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
         let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
         let chunks = ChunkOctree::default();

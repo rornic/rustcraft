@@ -85,8 +85,8 @@ fn height_colour(above_sea: f64) -> [f64; 3] {
         (0.01, [210.0, 200.0, 140.0]),
         (4.0, [90.0, 150.0, 70.0]),
         (40.0, [60.0, 115.0, 50.0]),
-        (90.0, [125.0, 110.0, 95.0]),
-        (130.0, [245.0, 245.0, 250.0]),
+        (140.0, [125.0, 110.0, 95.0]),
+        (250.0, [245.0, 245.0, 250.0]),
     ];
     if above_sea <= STOPS[0].0 {
         return STOPS[0].1;
@@ -115,7 +115,7 @@ fn render(samples: &[TerrainSample], args: &Args) -> image::RgbImage {
             if above_sea > 0.0 {
                 let dx = (height_at(x + 1, z) - height_at(x.saturating_sub(1), z)) / (2.0 * args.scale);
                 let dz = (height_at(x, z + 1) - height_at(x, z.saturating_sub(1))) / (2.0 * args.scale);
-                let shade = (1.0 - (dx + dz) * 6.0).clamp(0.4, 1.4);
+                let shade = (1.0 - (dx + dz) * 3.0).clamp(0.4, 1.4);
                 colour = colour.map(|c| c * shade);
             }
             img.put_pixel(x, z, image::Rgb(colour.map(|c| c.clamp(0.0, 255.0) as u8)));
