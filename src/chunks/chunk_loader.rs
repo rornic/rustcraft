@@ -21,7 +21,7 @@ use bevy::{
 use super::{
     chunk::{ChunkCoordinate, ChunkData},
     generate::generator::{generate_chunk, generate_chunk_mesh, ChunkMeshes},
-    lod::LodLayout,
+    lod::{GenerateLodMesh, LodLayout, LodLoader},
     material::{ChunkMaterial, WaterMaterial},
 };
 use crate::{player::PlayerLook, world::World};
@@ -337,11 +337,14 @@ pub fn unload_chunks(
     mut world: ResMut<World>,
     mut chunk_loader: ResMut<ChunkLoader>,
     chunks_query: Query<(Entity, &Chunk), (Without<GenerateChunkData>, Without<GenerateChunkMesh>)>,
+    lods: Res<LodLoader>,
+    pending_lods: Query<(), With<GenerateLodMesh>>,
 ) {
     for (entity, chunk) in chunks_query.iter() {
         // matches the neighbour-data padding shell generated beyond render_distance
         if chunk_distance(chunk.coord, chunk_loader.spawn_queue.anchor)
             > (chunk_loader.render_distance + NEIGHBOR_DATA_PADDING) as f32
+            && lods.chunk_covered(chunk.coord, &pending_lods)
         {
             // recursive: chunks with water spawn a child entity for the water mesh,
             // which must be cleaned up along with the chunk itself.

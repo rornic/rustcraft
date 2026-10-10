@@ -336,6 +336,24 @@ impl LodLoader {
             .min(end - 1.0)
     }
 
+    /// Whether a chunk outside full detail can be unloaded without leaving a hole.
+    pub fn chunk_covered(&self, chunk: ChunkCoordinate, pending: &Query<(), With<GenerateLodMesh>>) -> bool {
+        let Some(anchor) = self.anchor else {
+            return false;
+        };
+        if self.layout.full_detail(chunk, anchor) {
+            return false;
+        }
+        let mut key = LodKey::containing(chunk, 0);
+        while key.level < self.layout.max_level {
+            key = key.parent();
+            if self.selected.contains(&key) {
+                return self.nodes.get(&key).is_some_and(|e| !pending.contains(*e));
+            }
+        }
+        true
+    }
+
     pub fn new(
         layout: LodLayout,
         fog_start_fraction: f32,
@@ -371,19 +389,29 @@ type PendingChunk = Or<(
     With<GenerateChunkMesh>,
 )>;
 
-// Nodes to spawn, popped from the end: gaps with nothing drawn yet first, then nearest first.
+// A level-1 node standing in for chunks that are still loaded and about to be unloaded.
+fn replaces_loaded_chunks(key: LodKey, chunk_ready: &dyn Fn(ChunkCoordinate) -> bool) -> bool {
+    key.level == 1 && key.chunks().any(chunk_ready)
+}
+
+// Nodes to spawn, popped from the end: chunk swaps first, then gaps with nothing drawn yet, then nearest first.
 fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec<LodKey> {
-    let mut queued: Vec<(bool, f32, LodKey)> = unspawned
+    let mut queued: Vec<(bool, bool, f32, LodKey)> = unspawned
         .map(|key| {
             (
+                replaces_loaded_chunks(key, state.chunk_ready),
                 !state.covered_while_loading(key),
                 key.distance(state.anchor),
                 key,
             )
         })
         .collect();
-    queued.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
-    queued.into_iter().map(|(_, _, key)| key).collect()
+    queued.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.cmp(&b.1))
+            .then(b.2.total_cmp(&a.2))
+    });
+    queued.into_iter().map(|(.., key)| key).collect()
 }
 
 pub fn update_lod_selection(
@@ -447,9 +475,12 @@ pub fn spawn_lods(
     chunk_work: Query<(), Or<(With<GenerateChunkData>, With<GenerateChunkMesh>)>>,
     mut since_resort: Local<f32>,
 ) {
-    if !chunk_loader.fully_queued() || chunk_work.iter().count() > LOD_PAUSE_CHUNK_WORK {
-        return;
-    }
+    let paused = !chunk_loader.fully_queued() || chunk_work.iter().count() > LOD_PAUSE_CHUNK_WORK;
+    let chunk_ready = |chunk: ChunkCoordinate| {
+        chunk_loader
+            .chunk_entity(chunk)
+            .is_some_and(|e| !pending_chunks.contains(e))
+    };
 
     *since_resort += time.delta_secs();
     if *since_resort >= LOD_RESORT_INTERVAL {
@@ -460,11 +491,6 @@ pub fn spawn_lods(
             let node_exists = |key: LodKey| nodes.contains_key(&key);
             let node_ready =
                 |key: LodKey| nodes.get(&key).is_some_and(|e| !pending.contains(*e));
-            let chunk_ready = |chunk: ChunkCoordinate| {
-                chunk_loader
-                    .chunk_entity(chunk)
-                    .is_some_and(|e| !pending_chunks.contains(e))
-            };
             let state = LodState {
                 anchor,
                 layout: lods.layout,
@@ -489,6 +515,10 @@ pub fn spawn_lods(
         };
         if !lods.selected.contains(&key) || lods.nodes.contains_key(&key) {
             continue;
+        }
+        if paused && !replaces_loaded_chunks(key, &chunk_ready) {
+            lods.to_spawn.push(key);
+            break;
         }
 
         let regions = world.region_store.clone();
@@ -1082,7 +1112,7 @@ mod tests {
         let selected = select_lods(after, layout(2), BAND);
         let exists = |k| loaded.contains(&k);
         let ready: HashMap<_, _> = loaded.iter().map(|&k| (k, true)).collect();
-        with_state(after, &selected, &exists, &ready, true, |s| {
+        with_state(after, &selected, &exists, &ready, false, |s| {
             let mut queue =
                 super::spawn_order(s, selected.iter().filter(|k| !exists(**k)).copied());
             let mut seen_covered = false;
@@ -1095,6 +1125,19 @@ mod tests {
                 seen_covered |= !gap;
             }
             assert!(seen_covered);
+        });
+    }
+
+    #[test]
+    fn test_nodes_replacing_loaded_chunks_spawn_first() {
+        let anchor = chunk(6, 4, 0);
+        let selected = select_lods(anchor, layout(2), BAND);
+        let exists = |_| false;
+        let ready = HashMap::new();
+        with_state(anchor, &selected, &exists, &ready, true, |s| {
+            let mut queue = super::spawn_order(s, selected.iter().copied());
+            let first = queue.pop().unwrap();
+            assert!(super::replaces_loaded_chunks(first, s.chunk_ready));
         });
     }
 
