@@ -20,6 +20,9 @@ use rustcraft::chunks::{
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 
+// Deep sky blue, shared by the sky and the fog distant terrain fades into.
+const SKY_COLOR: Color = Color::srgb(0.0, 191.0 / 255.0, 1.0);
+
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
     let settings = toml::from_str(&settings_str)?;
@@ -75,7 +78,7 @@ fn setup_scene(
             Tonemapping::None,
             Msaa::Off,
             DistanceFog {
-                color: Color::srgb_u8(120, 224, 232),
+                color: SKY_COLOR,
                 falloff: FogFalloff::Linear {
                     start: layout.fog_start(),
                     end: fog_distance.max(layout.fog_start() + 1.0),
@@ -158,7 +161,7 @@ fn main() {
             MaterialPlugin::<ChunkMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
         ))
-        .insert_resource(ClearColor(Color::srgb_u8(120, 224, 232)))
+        .insert_resource(ClearColor(SKY_COLOR))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
