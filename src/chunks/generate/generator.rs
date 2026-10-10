@@ -35,7 +35,7 @@ const FACE_TANGENTS: [(IVec3, IVec3); 6] = [
 const AO_STRENGTH: f32 = 0.5;
 
 pub(super) const SOLID_FLOOR: i64 = 16;
-pub(super) const WATER_LEVEL: i64 = 32;
+pub const WATER_LEVEL: i64 = 64;
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
 pub(super) const WATER_TOP: f32 = 0.4;
 
@@ -157,13 +157,14 @@ fn is_solid(block: BlockType) -> bool {
 
 pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
     if world_y < column_height.max(SOLID_FLOOR) {
-        if world_y >= 90 && combined_gradient <= 2.0 {
+        let above_sea = world_y - WATER_LEVEL;
+        if above_sea >= 110 && combined_gradient <= 2.0 {
             BlockType::Snow
-        } else if world_y >= 70 && combined_gradient >= 2.0
-            || (world_y >= 36 && combined_gradient >= 3.5)
+        } else if above_sea >= 60 && combined_gradient >= 2.0
+            || (above_sea >= 4 && combined_gradient >= 3.5)
         {
             BlockType::Stone
-        } else if world_y >= 36 {
+        } else if above_sea >= 4 {
             BlockType::Grass
         } else {
             BlockType::Sand
@@ -801,6 +802,7 @@ mod tests {
     use super::{
         generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
         vertex_water_depth, water_depth, BlockSource, ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
+        WATER_LEVEL,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
@@ -924,8 +926,8 @@ mod tests {
         // below the solid floor even a zero-height column is solid
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0));
         assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0));
-        assert_eq!(BlockType::Air, terrain_block(40, 0, 0.0));
-        assert_eq!(BlockType::Grass, terrain_block(40, 50, 0.0));
+        assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0));
+        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, 80, 0.0));
     }
 
     fn test_regions() -> Arc<RegionStore> {

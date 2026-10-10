@@ -46,7 +46,7 @@ fn setup_scene(
     let game_world = rustcraft::world::World::new(render_distance);
     let world_height = game_world.height;
     info!("world seed is {}", game_world.seed());
-    let spawn = Vec3::new(0.0, 20.0, 0.0);
+    let spawn = game_world.spawn();
     commands.insert_resource(game_world);
 
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);

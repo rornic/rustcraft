@@ -36,8 +36,7 @@ impl Default for ErosionParams {
     }
 }
 
-// Plain row-major height buffer used only during simulation, in real block-height
-// units (not raw 0..10 noise units) so gravity/erode_speed have sensible magnitudes.
+// Plain row-major height buffer used only during simulation, in block-height units.
 pub struct HeightGrid {
     width: u32,
     height: u32,
@@ -56,8 +55,7 @@ impl HeightGrid {
         for z in 0..height {
             for x in 0..width {
                 let pos = I64Vec2::new(origin.x + x as i64, origin.y + z as i64);
-                let noise_val = noise.get(pos);
-                data.push((noise_val * world_height as f64) as f32);
+                data.push(noise.get(pos).min(world_height as f64) as f32);
             }
         }
         Self { width, height, data }
