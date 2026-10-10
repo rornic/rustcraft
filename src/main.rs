@@ -14,7 +14,7 @@ use rustcraft::chunks::{
     fade::{apply_fades, FadeMaterials, FULLY_VISIBLE},
     lod::{
         load_lods, lod_render_distance, max_level_for, refresh_lod_visibility, retire_lods,
-        spawn_lods, update_horizon_fog, update_lod_selection, LodLoader, FOG_VISIBILITY,
+        spawn_lods, update_horizon_fog, update_lod_selection, LodLoader, FOG_START,
     },
     material::{ChunkMaterial, WaterMaterial},
 };
@@ -53,9 +53,9 @@ fn setup_scene(
         })
         .id();
 
-    // Exponential-squared fog: a light haze close in that thickens with distance, so
-    // distant terrain fades into the sky like a horizon. `update_horizon_fog` keeps it
-    // just short of however far terrain has loaded; this is where it starts.
+    // Fog fades in from the edge of the full-detail area, so distant terrain fades into
+    // the sky like a horizon. `update_horizon_fog` moves where it's fully opaque to
+    // however far terrain has loaded; this is where it starts.
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
@@ -75,7 +75,10 @@ fn setup_scene(
             Msaa::Off,
             DistanceFog {
                 color: Color::srgb_u8(120, 224, 232),
-                falloff: FogFalloff::from_visibility_squared(fog_distance * FOG_VISIBILITY),
+                falloff: FogFalloff::Linear {
+                    start: FOG_START,
+                    end: fog_distance.max(FOG_START + 1.0),
+                },
                 ..default()
             },
             // Keeps nearby gameplay (within ~1.5 chunks) sharp and softens

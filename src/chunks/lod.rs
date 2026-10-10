@@ -604,19 +604,23 @@ pub fn refresh_lod_visibility(
     lods.dirty_areas.clear();
 }
 
-// Fog is 95% opaque at this fraction of the distance terrain has loaded to, so the
-// loaded edge is all but hidden.
-pub const FOG_VISIBILITY: f32 = 0.85;
+/// Where fog starts, in blocks: the edge of the full-detail area, so nearby terrain is
+/// never hazed - including at spawn, before anything further out has loaded.
+pub const FOG_START: f32 = LOD0_DISTANCE * CHUNK_SIZE as f32;
+// The shortest distance fog thickens over, so it never becomes a hard wall right at the
+// full-detail edge while the first LODs are still loading.
+const FOG_MIN_DEPTH: f32 = 128.0;
 const FOG_UPDATE_INTERVAL: f32 = 0.25;
 // How quickly fog eases towards its target, in seconds: in quickly when an unloaded gap
 // appears closer, out gently as terrain loads.
 const FOG_PULL_IN_SECONDS: f32 = 0.3;
 const FOG_EASE_OUT_SECONDS: f32 = 2.0;
 
-/// Keeps fog just short of how far terrain has actually loaded, so distant terrain
-/// always fades into the horizon instead of ending at a hard edge, however far render
-/// distance reaches or however much of it has loaded. Runs before the underwater
-/// effects, which replace the fog while the camera is in water.
+/// Fades fog in linearly from the edge of the full-detail area to fully opaque where
+/// terrain has loaded to, so distant terrain always fades into the horizon instead of
+/// ending at a hard edge, however far render distance reaches or however much of it
+/// has loaded. Runs before the underwater effects, which replace the fog while the
+/// camera is in water.
 #[allow(clippy::too_many_arguments)]
 pub fn update_horizon_fog(
     lods: Res<LodLoader>,
@@ -653,7 +657,8 @@ pub fn update_horizon_fog(
             node_ready: &node_ready,
             chunk_ready: &chunk_ready,
         };
-        *target = Some(state.loaded_distance() * CHUNK_SIZE as f32 * FOG_VISIBILITY);
+        let loaded = state.loaded_distance() * CHUNK_SIZE as f32;
+        *target = Some(loaded.max(FOG_START + FOG_MIN_DEPTH));
     }
 
     let target = target.unwrap();
@@ -667,7 +672,10 @@ pub fn update_horizon_fog(
     *visibility = Some(eased);
 
     if let Ok(mut fog) = fog.get_single_mut() {
-        fog.falloff = FogFalloff::from_visibility_squared(eased);
+        fog.falloff = FogFalloff::Linear {
+            start: FOG_START,
+            end: eased,
+        };
     }
 }
 
