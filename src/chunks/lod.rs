@@ -9,12 +9,13 @@ use bevy::{
         query::{Added, Or, With},
         system::{Commands, Query, Res, ResMut, Resource},
     },
-    hierarchy::{BuildChildren, ChildBuild, DespawnRecursiveExt},
+    hierarchy::{BuildChildren, ChildBuild},
     math::{I64Vec3, Vec3},
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
     render::{mesh::Mesh, primitives::Aabb, view::Visibility},
     tasks::{AsyncComputeTaskPool, Task},
+    time::Time,
     transform::components::Transform,
     utils::{futures, HashMap, HashSet},
 };
@@ -22,6 +23,7 @@ use bevy::{
 use super::{
     chunk::{ChunkCoordinate, CHUNK_SIZE},
     chunk_loader::{Chunk, ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
+    fade::{fade_out_and_despawn, set_shown, Fade},
     generate::generator::{generate_lod_mesh, ChunkMeshes},
     material::{ChunkMaterial, WaterMaterial},
 };
@@ -440,9 +442,11 @@ pub fn load_lods(
 pub fn retire_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
+    time: Res<Time>,
     chunk_loader: Res<ChunkLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
     pending_chunks: Query<(), PendingChunk>,
+    visibility: Query<&Visibility>,
 ) {
     let Some(anchor) = lods.anchor else {
         return;
@@ -480,9 +484,12 @@ pub fn retire_lods(
     let lods = &mut *lods;
     lods.retiring
         .retain(|key| !retired.contains(key) && !lods.selected.contains(key));
+    // Leaving `nodes` straight away lets whatever replaces a node start fading in this
+    // frame, while the node itself fades out.
     for key in retired {
         if let Some(entity) = lods.nodes.remove(&key) {
-            commands.entity(entity).despawn_recursive();
+            let visible = visibility.get(entity).is_ok_and(|v| *v != Visibility::Hidden);
+            fade_out_and_despawn(&mut commands, entity, visible, time.elapsed_secs());
         }
         lods.dirty_areas.push(key);
     }
@@ -490,18 +497,21 @@ pub fn retire_lods(
 
 #[allow(clippy::too_many_arguments)]
 pub fn refresh_lod_visibility(
+    mut commands: Commands,
     mut lods: ResMut<LodLoader>,
+    time: Res<Time>,
     chunk_loader: Res<ChunkLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
     all_chunks: Query<(Entity, &Chunk), With<Mesh3d>>,
     new_chunks: Query<(Entity, &Chunk), Added<Mesh3d>>,
     all_nodes: Query<(Entity, &LodNode)>,
-    mut visibility: Query<&mut Visibility>,
+    mut visibility: Query<(&mut Visibility, Option<&Fade>)>,
 ) {
     let Some(anchor) = lods.anchor else {
         return;
     };
 
+    let now = time.elapsed_secs();
     let lods = &mut *lods;
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
@@ -516,26 +526,21 @@ pub fn refresh_lod_visibility(
         chunk_ready: &|_| false,
     };
     let mut set = |entity: Entity, visible: bool| {
-        if let Ok(mut v) = visibility.get_mut(entity) {
-            v.set_if_neq(if visible {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            });
+        if let Ok((mut v, fade)) = visibility.get_mut(entity) {
+            set_shown(&mut commands, entity, &mut v, fade, visible, now);
         }
     };
+    // a node fades in once its mesh is ready, not when it's first spawned
+    let node_shown = |key: LodKey| state.node_visible(key) && node_ready(key);
 
     if lods.refresh_all {
         for (entity, chunk) in all_chunks.iter() {
             set(entity, state.chunk_visible(chunk.coord));
         }
         for (entity, node) in all_nodes.iter() {
-            set(entity, state.node_visible(node.key));
+            set(entity, node_shown(node.key));
         }
     } else {
-        for (entity, chunk) in new_chunks.iter() {
-            set(entity, state.chunk_visible(chunk.coord));
-        }
         for &area in &lods.dirty_areas {
             for chunk in area.chunks() {
                 if let Some(entity) = chunk_loader.chunk_entity(chunk) {
@@ -546,7 +551,7 @@ pub fn refresh_lod_visibility(
             loop {
                 for &key in &level_keys {
                     if let Some(&entity) = nodes.get(&key) {
-                        set(entity, state.node_visible(key));
+                        set(entity, node_shown(key));
                     }
                 }
                 if level_keys[0].level <= 1 {
@@ -554,6 +559,17 @@ pub fn refresh_lod_visibility(
                 }
                 level_keys = level_keys.iter().flat_map(|key| key.children()).collect();
             }
+        }
+    }
+
+    // newly meshed chunks just appear, hidden straight away if a node still covers them
+    for (entity, chunk) in new_chunks.iter() {
+        if let Ok((mut v, _)) = visibility.get_mut(entity) {
+            v.set_if_neq(if state.chunk_visible(chunk.coord) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            });
         }
     }
 

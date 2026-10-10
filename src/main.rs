@@ -10,6 +10,7 @@ use rustcraft::chunks::{
     chunk_loader::{
         gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
     },
+    fade::{apply_fades, FadeMaterials, FULLY_VISIBLE},
     lod::{
         load_lods, lod_render_distance, max_level_for, refresh_lod_visibility, retire_lods,
         spawn_lods, update_lod_selection, LodLoader,
@@ -38,7 +39,7 @@ fn setup_scene(
     let game_world = rustcraft::world::World::new(render_distance);
     let world_height = game_world.height;
     info!("world seed is {}", game_world.seed());
-    let spawn = Vec3::new(0.0, 170.0, 0.0);
+    let spawn = Vec3::new(0.0, 20.0, 0.0);
     commands.insert_resource(game_world);
 
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
@@ -46,7 +47,7 @@ fn setup_scene(
     let player = commands
         .spawn(PlayerBundle {
             transform: Transform::from_xyz(spawn.x, spawn.y, spawn.z)
-                .looking_to(Vec3::new(1.0, 0.0, 0.3), Vec3::new(0.0, 1.0, 0.0)),
+                .looking_to(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)),
             ..default()
         })
         .id();
@@ -57,7 +58,7 @@ fn setup_scene(
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
-            Transform::from_xyz(0.0, 2.0, 0.0).with_rotation(Quat::from_rotation_x(-0.35)),
+            Transform::from_xyz(0.0, 2.0, 0.0),
             Camera3d { ..default() },
             Projection::Perspective(PerspectiveProjection {
                 far: fog_distance + 256.0,
@@ -96,11 +97,19 @@ fn setup_scene(
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        fade: FULLY_VISIBLE,
     });
     let water_material_handle = water_materials.add(WaterMaterial {
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        fade: FULLY_VISIBLE,
     });
+    commands.insert_resource(FadeMaterials::new(
+        chunk_material_handle.clone(),
+        water_material_handle.clone(),
+        &mut chunk_materials,
+        &mut water_materials,
+    ));
     commands.insert_resource(LodLoader::new(
         max_lod_level,
         world_height,
@@ -138,54 +147,14 @@ fn main() {
                     load_lods,
                     retire_lods,
                     refresh_lod_visibility,
+                    apply_fades,
                 )
                     .chain()
                     .after(gather_chunks)
                     .before(unload_chunks),
                 unload_chunks,
                 (player_move, player_look, update_underwater_effects).chain(),
-                debug_probe,
             ),
         )
         .run();
-}
-
-fn debug_probe(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut last: Local<f32>,
-    mut shots: Local<u32>,
-    nodes: Query<&rustcraft::chunks::lod::LodNode>,
-    pending: Query<(), With<rustcraft::chunks::lod::GenerateLodMesh>>,
-    meshed_nodes: Query<(), (With<rustcraft::chunks::lod::LodNode>, With<Mesh3d>)>,
-    chunks: Query<(), With<rustcraft::chunks::chunk_loader::Chunk>>,
-    mut player: Query<&mut Transform, With<rustcraft::player::Player>>,
-    mut exit: EventWriter<AppExit>,
-) {
-    use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-    let t = time.elapsed_secs();
-    let schedule = [(150.0, "a_overview"), (190.0, "b_moving"), (230.0, "c_settled")];
-    if t > 150.0 && t < 190.0 {
-        player.single_mut().translation.x += 80.0 * time.delta_secs();
-    }
-    if t - *last >= 10.0 {
-        *last = t;
-        println!(
-            "PROBE t={t:.0} fps={:.1} lod_nodes={} lod_pending={} lod_meshed={} chunks={}",
-            1.0 / time.delta_secs(),
-            nodes.iter().count(),
-            pending.iter().count(),
-            meshed_nodes.iter().count(),
-            chunks.iter().count()
-        );
-    }
-    if let Some((at, name)) = schedule.get(*shots as usize) {
-        if t >= *at {
-            let path = format!("/tmp/claude-0/-home-user-rustcraft/fcfd7dd2-90b8-5f73-9fc1-4522f7e380f0/scratchpad/{name}.png");
-            commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
-            *shots += 1;
-        }
-    } else if t >= 240.0 {
-        exit.send(AppExit::Success);
-    }
 }

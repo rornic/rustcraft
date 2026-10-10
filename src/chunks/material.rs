@@ -18,6 +18,9 @@ pub struct ChunkMaterial {
     #[texture(1)]
     #[sampler(2)]
     pub texture: Option<Handle<Image>>,
+    // the dither window drawn, see `fade::FadeMaterials`
+    #[uniform(3)]
+    pub fade: Vec4,
 }
 
 impl Material for ChunkMaterial {
@@ -47,6 +50,9 @@ pub struct WaterMaterial {
     #[texture(1)]
     #[sampler(2)]
     pub texture: Option<Handle<Image>>,
+    // the dither window drawn, see `fade::FadeMaterials`
+    #[uniform(3)]
+    pub fade: Vec4,
 }
 
 impl Material for WaterMaterial {
