@@ -9,6 +9,7 @@ use bevy::{
 };
 
 use super::region_store::RegionStore;
+use super::smooth::{mesh_surface, Surface};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -35,10 +36,12 @@ const AO_STRENGTH: f32 = 0.5;
 
 // Every block below this height is solid whatever the heightmap says, and every
 // non-solid block below `WATER_LEVEL` is water.
-const SOLID_FLOOR: i64 = 16;
-const WATER_LEVEL: i64 = 32;
+pub(super) const SOLID_FLOOR: i64 = 16;
+pub(super) const WATER_LEVEL: i64 = 32;
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
-const WATER_TOP: f32 = 0.4;
+pub(super) const WATER_TOP: f32 = 0.4;
+// LOD levels from here out are drawn as a smooth surface instead of blocks.
+const SMOOTH_LOD_LEVEL: u8 = 2;
 
 // The block meshing reads from: a cube of cells starting at the origin, plus whatever
 // lies just outside it for face culling, AO and shoreline sampling.
@@ -158,7 +161,7 @@ fn is_solid(block: BlockType) -> bool {
 
 // The block at `world_y` in a column whose surface is at `column_height`. Shared by
 // full-detail chunks and LOD cells so both put terrain and water in the same places.
-fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
+pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
     if world_y < column_height.max(SOLID_FLOOR) {
         if world_y >= 90 && combined_gradient <= 2.0 {
             BlockType::Snow
@@ -330,14 +333,14 @@ pub fn generate_chunk(
 // opaque blocks, a second for water, so they can become separate `Mesh`es with
 // separate materials (water needs alpha blending, opaque blocks don't).
 #[derive(Default)]
-struct MeshBuffers {
+pub(super) struct MeshBuffers {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     colors: Vec<[f32; 4]>,
 }
 
 impl MeshBuffers {
-    fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
+    pub(super) fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
         let uv_scale = 1.0 / (BLOCK_COUNT - 1) as f32;
 
         let triangle_start: u32 = self.vertices.len() as u32;
@@ -359,7 +362,11 @@ impl MeshBuffers {
         ]);
     }
 
-    fn build_mesh(self) -> Mesh {
+    pub(super) fn is_empty(&self) -> bool {
+        self.vertices.is_empty()
+    }
+
+    pub(super) fn build_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
             bevy::render::mesh::PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
@@ -422,8 +429,11 @@ pub fn generate_chunk_mesh(
 // Meshes one LOD node, or returns None if it has nothing to draw. Mesh coordinates
 // are in cells, so the node's transform scales them up by `key.cell_size()`.
 pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
-    let blocks = LodBlocks::sample(&regions, key);
-    let meshes = mesh_blocks(&blocks, key.cell_size());
+    let meshes = if key.level >= SMOOTH_LOD_LEVEL {
+        mesh_surface(&Surface::sample(&regions, key), key)
+    } else {
+        mesh_blocks(&LodBlocks::sample(&regions, key), key.cell_size())
+    };
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
     }

@@ -80,9 +80,9 @@ const BASELINE_IN_FLIGHT_GENERATING: usize = 1024;
 // corner-diagonal chunks), so the neighbour-data shell must reach far enough to cover a
 // (1,1,1) chunk-grid offset, i.e. Euclidean distance sqrt(3) =~ 1.73 - round up to 2.
 const NEIGHBOR_DATA_PADDING: u32 = 2;
-// Full-detail chunks are those whose level-1 LOD node is within LOD0_DISTANCE (16) of
-// the camera, so they reach out to 16 plus that node's diagonal (2 * sqrt(3)).
-const FULL_DETAIL_DISTANCE: u32 = 20;
+// Full-detail chunks are those whose level-1 LOD node is within LOD0_DISTANCE (32) of
+// the camera, so they reach out to 32 plus that node's diagonal (2 * sqrt(3)).
+const FULL_DETAIL_DISTANCE: u32 = 36;
 
 // Ratio of this render distance's shell surface area to the baseline's, using the same
 // effective radius (render_distance + padding) the spawn queue itself scans.

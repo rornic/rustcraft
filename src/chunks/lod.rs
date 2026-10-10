@@ -30,7 +30,7 @@ use super::{
 use crate::world::World;
 
 /// Chunks within this many chunks of the camera are drawn at full detail.
-pub const LOD0_DISTANCE: f32 = 16.0;
+pub const LOD0_DISTANCE: f32 = 32.0;
 // A node splits into its 8 children when the camera is closer than this many of its
 // own widths, so each LOD reaches twice as far as the one before it.
 const SPLIT_FACTOR: f32 = LOD0_DISTANCE / 2.0;
@@ -646,18 +646,18 @@ mod tests {
 
     #[test]
     fn test_max_level_for() {
-        assert_eq!(0, max_level_for(16));
-        assert_eq!(1, max_level_for(17));
-        assert_eq!(3, max_level_for(128));
-        assert_eq!(128.0, lod_render_distance(3));
+        assert_eq!(0, max_level_for(32));
+        assert_eq!(1, max_level_for(33));
+        assert_eq!(2, max_level_for(128));
+        assert_eq!(128.0, lod_render_distance(2));
     }
 
     #[test]
     fn test_lod0_wanted_reaches_lod0_distance() {
         let anchor = chunk(0, 5, 0);
         assert!(lod0_wanted(chunk(0, 5, 0), anchor));
-        assert!(lod0_wanted(chunk(15, 5, 0), anchor));
-        assert!(!lod0_wanted(chunk(20, 5, 0), anchor));
+        assert!(lod0_wanted(chunk(31, 5, 0), anchor));
+        assert!(!lod0_wanted(chunk(36, 5, 0), anchor));
     }
 
     // Every chunk in the band within range is drawn exactly once: at full detail, or
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn test_merged_node_retires_once_parent_ready() {
         // far enough that the level-3 node is drawn whole
-        let far = chunk(100, 4, 0);
+        let far = chunk(200, 4, 0);
         let selected = select_lods(far, 3, BAND);
         let child = LodKey {
             level: 1,
@@ -758,7 +758,7 @@ mod tests {
         // close enough to split, far enough that part of it is drawn by level-1 nodes
         let split = LodKey {
             level: 3,
-            coord: I64Vec3::new(2, 0, 0),
+            coord: I64Vec3::new(4, 0, 0),
         };
         assert!(!selected.contains(&split));
         assert!(selected
@@ -848,7 +848,7 @@ mod tests {
     fn test_unwanted_chunk_hidden_once_covering_node_ready() {
         let anchor = chunk(0, 4, 0);
         let selected = select_lods(anchor, 3, BAND);
-        let c = chunk(24, 4, 0);
+        let c = chunk(48, 4, 0);
         assert!(!lod0_wanted(c, anchor));
         let cover = (1..=3)
             .map(|level| LodKey::containing(c, level))
