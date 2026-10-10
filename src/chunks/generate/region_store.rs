@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
+use bevy::math::I64Vec2;
+
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 
@@ -93,6 +95,25 @@ impl RegionStore {
             .clone()
     }
 
+    /// The highest terrain in the block range `min..=max` (x, z), rounded out to whole
+    /// tiles, or None if a region it touches hasn't been computed yet. Never blocks.
+    pub fn loaded_max_height(&self, min: I64Vec2, max: I64Vec2) -> Option<f32> {
+        let lru = self.lru.read().unwrap();
+        let (first, last) = (RegionCoord::from_world(min.x, min.y), RegionCoord::from_world(max.x, max.y));
+        let mut highest = f32::MIN;
+        for rz in first.0.y..=last.0.y {
+            for rx in first.0.x..=last.0.x {
+                let coord = RegionCoord(I64Vec2::new(rx, rz));
+                let region = lru.entries.get(&coord)?.0.get()?;
+                let origin = coord.origin();
+                let local_min = (min - origin).max(I64Vec2::ZERO);
+                let local_max = (max - origin).min(I64Vec2::splat(REGION_SIZE - 1));
+                highest = highest.max(region.max_height(local_min, local_max));
+            }
+        }
+        Some(highest)
+    }
+
     pub fn sampler(&self) -> HeightSampler<'_> {
         HeightSampler {
             store: self,
@@ -151,7 +172,6 @@ mod tests {
     use std::sync::Barrier;
 
     use super::*;
-    use bevy::math::I64Vec2;
 
     #[test]
     fn test_resident_cap_covers_render_area() {
@@ -174,6 +194,25 @@ mod tests {
             assert_eq!(expected, sampler.height(x, z));
         }
         assert!(sampler.recent.len() <= SAMPLER_REGIONS);
+    }
+
+    #[test]
+    fn test_loaded_max_height_waits_for_every_region_it_touches() {
+        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        // spans the corner of regions (0, 0) to (1, 1)
+        let (min, max) = (I64Vec2::splat(200), I64Vec2::splat(300));
+        assert_eq!(None, store.loaded_max_height(min, max));
+        store.get_region(RegionCoord(I64Vec2::new(0, 0)));
+        assert_eq!(None, store.loaded_max_height(min, max));
+        for (x, z) in [(1, 0), (0, 1), (1, 1)] {
+            store.get_region(RegionCoord(I64Vec2::new(x, z)));
+        }
+        let mut sampler = store.sampler();
+        let highest = (200..=300)
+            .flat_map(|z| (200..=300).map(move |x| (x, z)))
+            .map(|(x, z)| sampler.height(x, z) as f32)
+            .fold(f32::MIN, f32::max);
+        assert!(store.loaded_max_height(min, max).unwrap() >= highest);
     }
 
     #[test]
