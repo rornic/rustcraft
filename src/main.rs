@@ -19,7 +19,7 @@ use rustcraft::chunks::{
     material::{ChunkMaterial, WaterMaterial},
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
-use rustcraft::sky::{follow_camera, spawn_sky, SkyMaterial, HORIZON_COLOR};
+use rustcraft::sky::{gradient_skybox, HORIZON_COLOR};
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -32,8 +32,7 @@ fn setup_scene(
     asset_server: Res<AssetServer>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut sky_materials: ResMut<Assets<SkyMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
@@ -65,6 +64,7 @@ fn setup_scene(
         .spawn((
             Transform::from_xyz(0.0, 2.0, 0.0),
             Camera3d { ..default() },
+            gradient_skybox(&mut images),
             Projection::Perspective(PerspectiveProjection {
                 far: fog_distance + 256.0,
                 ..default()
@@ -98,13 +98,6 @@ fn setup_scene(
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
-    // between the furthest terrain and the camera's far plane
-    spawn_sky(
-        &mut commands,
-        &mut meshes,
-        &mut sky_materials,
-        fog_distance + 128.0,
-    );
 
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
@@ -167,7 +160,6 @@ fn main() {
                 }),
             MaterialPlugin::<ChunkMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
-            MaterialPlugin::<SkyMaterial>::default(),
         ))
         .insert_resource(ClearColor(HORIZON_COLOR))
         .add_systems(Startup, setup_scene)
@@ -191,7 +183,6 @@ fn main() {
                     .after(refresh_lod_visibility)
                     .before(update_underwater_effects),
                 (player_move, player_look, update_underwater_effects).chain(),
-                follow_camera,
             ),
         )
         .run();
