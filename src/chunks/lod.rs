@@ -11,9 +11,9 @@ use bevy::{
     },
     hierarchy::{BuildChildren, ChildBuild},
     math::{I64Vec3, Vec3},
-    pbr::{DistanceFog, FogFalloff, MeshMaterial3d},
+    pbr::MeshMaterial3d,
     prelude::Mesh3d,
-    render::{camera::Camera, mesh::Mesh, primitives::Aabb, view::Visibility},
+    render::{mesh::Mesh, primitives::Aabb, view::Visibility},
     tasks::{AsyncComputeTaskPool, Task},
     time::Time,
     transform::components::Transform,
@@ -80,11 +80,6 @@ impl LodLayout {
     /// How far full-detail chunks reach: a level-1 node in range, plus its diagonal.
     pub fn full_detail_reach(self) -> u32 {
         (self.full_detail_distance + 2.0 * 3f32.sqrt()).ceil() as u32
-    }
-
-    /// Where fog starts, in blocks: the edge of the full-detail area.
-    pub fn fog_start(self) -> f32 {
-        self.full_detail_distance * CHUNK_SIZE as f32
     }
 }
 
@@ -290,14 +285,6 @@ impl LodState<'_> {
         }
     }
 
-    pub fn loaded_distance(&self) -> f32 {
-        self.selected
-            .iter()
-            .filter(|&&key| !(self.node_ready)(key) && !self.covered_while_loading(key))
-            .map(|key| key.distance(self.anchor))
-            .fold(self.layout.render_distance(), f32::min)
-    }
-
     fn covered_while_loading(&self, key: LodKey) -> bool {
         self.has_existing_ancestor(key)
             || if key.level == 1 {
@@ -323,7 +310,6 @@ pub struct GenerateLodMesh {
 #[derive(Resource)]
 pub struct LodLoader {
     layout: LodLayout,
-    fog_start_fraction: f32,
     // LOD levels from here out are drawn as a smooth surface instead of blocks
     smooth_level: u8,
     band: LodBand,
@@ -341,13 +327,6 @@ pub struct LodLoader {
 }
 
 impl LodLoader {
-    /// Where fog starts if it's fully opaque at `end`, never over the full-detail area.
-    pub fn fog_start(&self, end: f32) -> f32 {
-        (end * self.fog_start_fraction)
-            .max(self.layout.fog_start())
-            .min(end - 1.0)
-    }
-
     /// Whether a chunk outside full detail can be unloaded without leaving a hole.
     pub fn chunk_covered(&self, chunk: ChunkCoordinate, pending: &Query<(), With<GenerateLodMesh>>) -> bool {
         let Some(anchor) = self.anchor else {
@@ -368,7 +347,6 @@ impl LodLoader {
 
     pub fn new(
         layout: LodLayout,
-        fog_start_fraction: f32,
         smooth_level: u8,
         world_height: u64,
         material: Handle<ChunkMaterial>,
@@ -376,7 +354,6 @@ impl LodLoader {
     ) -> Self {
         Self {
             layout,
-            fog_start_fraction,
             smooth_level,
             band: LodBand {
                 min_y: 0,
@@ -406,8 +383,8 @@ fn replaces_loaded_chunks(key: LodKey, chunk_ready: &dyn Fn(ChunkCoordinate) -> 
     key.level == 1 && key.chunks().any(chunk_ready)
 }
 
-// Gaps with nothing drawn yet count as this fraction of their distance, so the loaded
-// edge (and the fog that follows it) keeps up, without holding up more detail near the player.
+// Gaps with nothing drawn yet count as this fraction of their distance, so holes fill in
+// quickly without holding up more detail near the player.
 const GAP_DISTANCE_WEIGHT: f32 = 0.5;
 
 // Nodes to spawn, popped from the end: chunk swaps first, then nearest first, with gaps
@@ -742,78 +719,6 @@ pub fn refresh_lod_visibility(
     lods.dirty_areas.clear();
 }
 
-const FOG_MIN_DEPTH: f32 = 128.0;
-const FOG_UPDATE_INTERVAL: f32 = 0.25;
-// How fast fog can close in, in blocks per second, so outrunning loading never snaps it in.
-const FOG_PULL_IN_SPEED: f32 = 100.0;
-// Fog can also close in by this fraction of its distance per second, so huge render distances don't take minutes.
-const FOG_PULL_IN_FRACTION: f32 = 0.1;
-// A dip in loaded distance must last this long before fog starts closing in, so brief gaps after a move don't ping it.
-const FOG_PULL_IN_DELAY: f32 = 1.5;
-const FOG_EASE_OUT_SECONDS: f32 = 2.0;
-
-#[allow(clippy::too_many_arguments)]
-pub fn update_horizon_fog(
-    lods: Res<LodLoader>,
-    chunk_loader: Res<ChunkLoader>,
-    time: Res<Time>,
-    pending_lods: Query<(), With<GenerateLodMesh>>,
-    pending_chunks: Query<(), PendingChunk>,
-    mut fog: Query<&mut DistanceFog, With<Camera>>,
-    mut target: Local<Option<f32>>,
-    mut visibility: Local<Option<f32>>,
-    mut since_update: Local<f32>,
-    mut dipping_for: Local<f32>,
-) {
-    let Some(anchor) = lods.anchor else {
-        return;
-    };
-
-    *since_update += time.delta_secs();
-    if target.is_none() || *since_update >= FOG_UPDATE_INTERVAL {
-        *since_update = 0.0;
-        let nodes = &lods.nodes;
-        let node_exists = |key: LodKey| nodes.contains_key(&key);
-        let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
-        let chunk_ready = |chunk: ChunkCoordinate| {
-            chunk_loader
-                .chunk_entity(chunk)
-                .is_some_and(|e| !pending_chunks.contains(e))
-        };
-        let state = LodState {
-            anchor,
-            layout: lods.layout,
-            band: lods.band,
-            selected: &lods.selected,
-            node_exists: &node_exists,
-            node_ready: &node_ready,
-            chunk_ready: &chunk_ready,
-        };
-        let loaded = state.loaded_distance() * CHUNK_SIZE as f32;
-        *target = Some(loaded.max(lods.layout.fog_start() + FOG_MIN_DEPTH));
-    }
-
-    let target = target.unwrap();
-    let current = visibility.unwrap_or(target);
-    *dipping_for = if target < current { *dipping_for + time.delta_secs() } else { 0.0 };
-    let end = if target < current && *dipping_for < FOG_PULL_IN_DELAY {
-        current
-    } else if target < current {
-        let speed = FOG_PULL_IN_SPEED.max(current * FOG_PULL_IN_FRACTION);
-        (current - speed * time.delta_secs()).max(target)
-    } else {
-        current + (target - current) * (1.0 - (-time.delta_secs() / FOG_EASE_OUT_SECONDS).exp())
-    };
-    *visibility = Some(end);
-
-    if let Ok(mut fog) = fog.get_single_mut() {
-        fog.falloff = FogFalloff::Linear {
-            start: lods.fog_start(end),
-            end,
-        };
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bevy::{
@@ -928,7 +833,6 @@ mod tests {
         let near = LodLayout::new(16, 128, 2);
         assert!(near.full_detail(chunk(15, 5, 0), anchor));
         assert!(!near.full_detail(chunk(20, 5, 0), anchor));
-        assert_eq!(16.0 * 16.0, near.fog_start());
         assert_eq!(20, near.full_detail_reach());
     }
 
@@ -1092,60 +996,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn test_loaded_distance_is_full_range_once_everything_is_ready() {
-        let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, layout(3), BAND);
-        let none = |_| false;
-        let all_ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
-        assert_eq!(
-            layout(3).render_distance(),
-            with_state(anchor, &selected, &none, &all_ready, true, |s| s
-                .loaded_distance())
-        );
-    }
-
-    #[test]
-    fn test_loaded_distance_stops_at_nearest_unloaded_gap() {
-        let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, layout(3), BAND);
-        let gap = *selected.iter().find(|k| k.level == 3).unwrap();
-        let none = |_| false;
-        let mut ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
-        ready.insert(gap, false);
-        assert_eq!(
-            gap.distance(anchor),
-            with_state(anchor, &selected, &none, &ready, true, |s| s
-                .loaded_distance())
-        );
-    }
-
-    #[test]
-    fn test_loaded_distance_ignores_nodes_still_covered_by_what_they_replace() {
-        let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, layout(3), BAND);
-        let node = *selected.iter().find(|k| k.level == 2).unwrap();
-        let mut ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
-        ready.insert(node, false);
-
-        // the coarser node it's replacing is still up
-        let parent = node.parent();
-        let parent_exists = move |k| k == parent;
-        assert_eq!(
-            layout(3).render_distance(),
-            with_state(anchor, &selected, &parent_exists, &ready, true, |s| s
-                .loaded_distance())
-        );
-        // the finer nodes it's replacing are still up
-        let children = node.children();
-        let children_exist = move |k| children.contains(&k);
-        assert_eq!(
-            layout(3).render_distance(),
-            with_state(anchor, &selected, &children_exist, &ready, true, |s| s
-                .loaded_distance())
-        );
-    }
-
     // A node that, once it exists, keeps `key` covered while `key` loads.
     fn cover_for(key: LodKey) -> LodKey {
         if key.level > 1 {
@@ -1217,21 +1067,6 @@ mod tests {
             let first = queue.pop().unwrap();
             assert!(super::replaces_loaded_chunks(first, s.chunk_ready));
         });
-    }
-
-    #[test]
-    fn test_fog_starts_part_way_out_but_not_over_full_detail() {
-        let lods = super::LodLoader::new(
-            layout(2),
-            0.5,
-            2,
-            256,
-            Default::default(),
-            Default::default(),
-        );
-        assert_eq!(2048.0 * 0.5, lods.fog_start(2048.0));
-        assert_eq!(512.0, lods.fog_start(600.0));
-        assert_eq!(499.0, lods.fog_start(500.0));
     }
 
     #[test]

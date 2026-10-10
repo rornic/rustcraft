@@ -20,7 +20,7 @@ pub struct RendererSettings {
     pub smooth_lod_level: u8,
     /// How long swapping between LOD levels takes to cross-fade, in seconds.
     pub lod_fade_seconds: f32,
-    /// How far out fog starts, as a fraction of the distance to where it's fully opaque.
+    /// How far out fog starts, as a fraction of the render distance, where it's fully opaque.
     pub fog_start_fraction: f32,
 }
 

@@ -13,7 +13,7 @@ use rustcraft::chunks::{
     },
     fade::{apply_fades, FadeMaterials, FULLY_VISIBLE},
     lod::{
-        load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_horizon_fog,
+        load_lods, refresh_lod_visibility, retire_lods, spawn_lods,
         update_lod_selection, LodLayout, LodLoader,
     },
     material::{ChunkMaterial, WaterMaterial},
@@ -84,8 +84,8 @@ fn setup_scene(
             DistanceFog {
                 color: HORIZON_COLOR.with_alpha(FOG_MAX_OPACITY),
                 falloff: FogFalloff::Linear {
-                    start: layout.fog_start(),
-                    end: fog_distance.max(layout.fog_start() + 1.0),
+                    start: fog_distance * renderer.fog_start_fraction.clamp(0.0, 0.99),
+                    end: fog_distance,
                 },
                 ..default()
             },
@@ -122,7 +122,6 @@ fn setup_scene(
     ));
     commands.insert_resource(LodLoader::new(
         layout,
-        renderer.fog_start_fraction,
         renderer.smooth_lod_level,
         world_height,
         chunk_material_handle.clone(),
@@ -184,9 +183,6 @@ fn main() {
                     .after(gather_chunks)
                     .before(unload_chunks),
                 unload_chunks,
-                update_horizon_fog
-                    .after(refresh_lod_visibility)
-                    .before(update_underwater_effects),
                 (player_move, player_look, update_underwater_effects).chain(),
             ),
         )
