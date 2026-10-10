@@ -86,13 +86,14 @@ impl LodBlocks {
         let cell = key.cell_size();
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
+        let mut heights = regions.sampler();
 
         for cx in -1..=size {
             for cz in -1..=size {
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
-                let column_height = regions.get_height(world_x, world_z).round() as i64;
-                let (gradient_x, gradient_z) = regions.get_gradient(world_x, world_z);
+                let column_height = heights.height(world_x, world_z).round() as i64;
+                let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
 
                 for cy in -1..=size {
@@ -304,6 +305,7 @@ pub fn generate_chunk(
     chunk_pos: ChunkCoordinate,
 ) -> ChunkData {
     let mut chunk_data = ChunkData::default();
+    let mut heights = regions.sampler();
 
     for x in 0..chunk_data.size {
         for z in 0..chunk_data.size {
@@ -313,8 +315,8 @@ pub fn generate_chunk(
                 chunk_pos.0.z * chunk_data.size as i64 + z as i64,
             );
 
-            let column_height = regions.get_height(world_x, world_z).round() as i64;
-            let (gradient_x, gradient_z) = regions.get_gradient(world_x, world_z);
+            let column_height = heights.height(world_x, world_z).round() as i64;
+            let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
             let combined_gradient = gradient_x.abs() + gradient_z.abs();
 
             for y in 0..chunk_data.size {

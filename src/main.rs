@@ -2,6 +2,7 @@ use std::error::Error;
 
 use rustcraft::settings::Settings;
 
+use bevy::core::TaskPoolThreadAssignmentPolicy;
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
@@ -126,6 +127,24 @@ fn main() {
         .add_plugins((
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
+                .set(TaskPoolPlugin {
+                    task_pool_options: TaskPoolOptions {
+                        // Bevy gives async compute 25% of cores (at most 4) by default,
+                        // but all terrain generation and meshing runs there, so it gets
+                        // 60% instead. Asset IO gets one thread and systems the rest.
+                        io: TaskPoolThreadAssignmentPolicy {
+                            min_threads: 1,
+                            max_threads: 1,
+                            percent: 0.0,
+                        },
+                        async_compute: TaskPoolThreadAssignmentPolicy {
+                            min_threads: 1,
+                            max_threads: usize::MAX,
+                            percent: 0.6,
+                        },
+                        ..default()
+                    },
+                })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         present_mode: bevy::window::PresentMode::AutoNoVsync,

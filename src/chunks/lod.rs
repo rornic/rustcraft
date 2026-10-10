@@ -35,9 +35,9 @@ pub const LOD0_DISTANCE: f32 = 32.0;
 // own widths, so each LOD reaches twice as far as the one before it.
 const SPLIT_FACTOR: f32 = LOD0_DISTANCE / 2.0;
 
-// Kept small so full-detail chunk tasks, which share the task pool, aren't left
-// queued behind a long backlog of distant nodes.
-const MAX_IN_FLIGHT_LOD_TASKS: usize = 16;
+// LOD tasks queued per generation thread. Kept small so full-detail chunk tasks, which
+// share the task pool, aren't left queued behind a long backlog of distant nodes.
+const LOD_TASKS_PER_THREAD: usize = 4;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
 /// An octree node at `level`, covering `2^level` chunks per side. Level 0 is a single
@@ -360,9 +360,10 @@ pub fn spawn_lods(
     pending: Query<(), With<GenerateLodMesh>>,
 ) {
     let task_pool = AsyncComputeTaskPool::get();
+    let max_in_flight = LOD_TASKS_PER_THREAD * task_pool.thread_num();
     let mut in_flight = pending.iter().count();
 
-    while in_flight < MAX_IN_FLIGHT_LOD_TASKS {
+    while in_flight < max_in_flight {
         let Some(key) = lods.to_spawn.pop() else {
             break;
         };

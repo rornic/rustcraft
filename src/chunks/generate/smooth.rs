@@ -38,11 +38,12 @@ impl Surface {
     pub(super) fn sample(regions: &RegionStore, key: LodKey) -> Self {
         let cell = key.cell_size();
         let base = key.min_block();
+        let mut heights = regions.sampler();
 
         let mut corners = Vec::with_capacity((CORNERS * CORNERS) as usize);
         for i in -1..=CELLS + 1 {
             for j in -1..=CELLS + 1 {
-                let height = regions.get_height(base.x + i as i64 * cell, base.z + j as i64 * cell);
+                let height = heights.height(base.x + i as i64 * cell, base.z + j as i64 * cell);
                 corners.push(surface_y(height as f32));
             }
         }
@@ -59,8 +60,8 @@ impl Surface {
                 }
                 let world_x = base.x + i as i64 * cell + cell / 2;
                 let world_z = base.z + j as i64 * cell + cell / 2;
-                let height = regions.get_height(world_x, world_z).round() as i64;
-                let (gradient_x, gradient_z) = regions.get_gradient(world_x, world_z);
+                let height = heights.height(world_x, world_z).round() as i64;
+                let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 surface.blocks[(i * CELLS + j) as usize] = terrain_block(
                     height.max(SOLID_FLOOR) - 1,
                     height,
