@@ -21,11 +21,8 @@ impl RegionCoord {
 }
 
 // One region's column heights, REGION_SIZE x REGION_SIZE, row-major [z][x].
-// `discharge` is reserved for a future flow-accumulation/rivers pass - left all-zero
-// for now so callers don't need to change once that lands.
 pub struct Region {
     pub heights: Vec<f32>,
-    pub discharge: Vec<f32>,
 }
 
 impl Region {
@@ -36,28 +33,20 @@ impl Region {
     pub fn height_at(&self, local_x: i64, local_z: i64) -> f32 {
         self.heights[Self::index(local_x, local_z)]
     }
-
-    pub fn discharge_at(&self, local_x: i64, local_z: i64) -> f32 {
-        self.discharge[Self::index(local_x, local_z)]
-    }
 }
 
 // Samples REGION_SIZE^2 columns of noise - run from an async task-pool task, never
 // a Bevy system body on the main thread. Caching/coalescing concurrent calls is
 // RegionStore's job.
-pub fn compute_region(noise: &NoiseGenerator, coord: RegionCoord, world_height: u64) -> Region {
+pub fn compute_region(noise: &NoiseGenerator, coord: RegionCoord) -> Region {
     let origin = coord.origin();
     let mut heights = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
     for z in 0..REGION_SIZE {
         for x in 0..REGION_SIZE {
-            let height = noise.get(I64Vec2::new(origin.x + x, origin.y + z));
-            heights.push(height.min(world_height as f64) as f32);
+            heights.push(noise.get(I64Vec2::new(origin.x + x, origin.y + z)) as f32);
         }
     }
-    Region {
-        heights,
-        discharge: vec![0.0; (REGION_SIZE * REGION_SIZE) as usize],
-    }
+    Region { heights }
 }
 
 #[cfg(test)]
@@ -74,7 +63,7 @@ mod tests {
     #[test]
     fn test_compute_region_produces_region_sized_height_array() {
         let noise = NoiseGenerator::new(1);
-        let region = compute_region(&noise, RegionCoord::from_world(0, 0), 256);
+        let region = compute_region(&noise, RegionCoord::from_world(0, 0));
         assert_eq!((REGION_SIZE * REGION_SIZE) as usize, region.heights.len());
     }
 }

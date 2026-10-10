@@ -1,5 +1,9 @@
+use std::error::Error;
+
 use bevy::ecs::component::Component;
 use serde::Deserialize;
+
+use crate::chunks::lod::LodLayout;
 
 #[derive(Default, Deserialize, Clone, Copy, Component)]
 pub struct Settings {
@@ -22,6 +26,22 @@ pub struct RendererSettings {
     pub lod_fade_seconds: f32,
     /// How far out fog starts, as a fraction of the render distance, where it's fully opaque.
     pub fog_start_fraction: f32,
+}
+
+impl Settings {
+    pub fn read(file: &str) -> Result<Self, Box<dyn Error>> {
+        Ok(toml::from_str(&std::fs::read_to_string(file)?)?)
+    }
+}
+
+impl RendererSettings {
+    pub fn lod_layout(&self) -> LodLayout {
+        LodLayout::new(
+            self.full_detail_distance,
+            self.render_distance,
+            self.lod_level_scale,
+        )
+    }
 }
 
 impl Default for RendererSettings {

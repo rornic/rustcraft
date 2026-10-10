@@ -1,31 +1,17 @@
-use std::error::Error;
-
 use rustcraft::settings::Settings;
 
-use bevy::core::TaskPoolThreadAssignmentPolicy;
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
 use bevy::render::view::ColorGrading;
 use rustcraft::chunks::{
-    chunk_loader::{
-        gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
-    },
-    fade::{apply_fades, FadeMaterials, FULLY_VISIBLE},
-    lod::{
-        load_lods, refresh_lod_visibility, retire_lods, spawn_lods,
-        update_lod_selection, LodLayout, LodLoader,
-    },
+    fade::FULLY_VISIBLE,
+    insert_terrain_resources,
     material::{ChunkMaterial, WaterMaterial},
+    task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 use rustcraft::sky::{gradient_skybox, FOG_MAX_OPACITY, HORIZON_COLOR};
-
-fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
-    let settings_str = std::fs::read_to_string(file)?;
-    let settings = toml::from_str(&settings_str)?;
-    Ok(settings)
-}
 
 fn setup_scene(
     mut commands: Commands,
@@ -34,13 +20,9 @@ fn setup_scene(
     mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
+    let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
-    let layout = LodLayout::new(
-        renderer.full_detail_distance,
-        renderer.render_distance,
-        renderer.lod_level_scale,
-    );
+    let layout = renderer.lod_layout();
     let render_distance = layout.render_distance() as u32;
     info!(
         "drawing terrain {render_distance} chunks out with {} LOD levels",
@@ -113,25 +95,15 @@ fn setup_scene(
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
         fade: FULLY_VISIBLE,
     });
-    commands.insert_resource(FadeMaterials::new(
-        renderer.lod_fade_seconds,
-        chunk_material_handle.clone(),
-        water_material_handle.clone(),
-        &mut chunk_materials,
-        &mut water_materials,
-    ));
-    commands.insert_resource(LodLoader::new(
-        layout,
-        renderer.smooth_lod_level,
+    insert_terrain_resources(
+        &mut commands,
+        &renderer,
         world_height,
-        chunk_material_handle.clone(),
-        water_material_handle.clone(),
-    ));
-    commands.insert_resource(ChunkLoader::new(
-        layout,
         chunk_material_handle,
         water_material_handle,
-    ));
+        &mut chunk_materials,
+        &mut water_materials,
+    );
     commands.spawn(settings);
 }
 
@@ -140,21 +112,7 @@ fn main() {
         .add_plugins((
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
-                .set(TaskPoolPlugin {
-                    task_pool_options: TaskPoolOptions {
-                        io: TaskPoolThreadAssignmentPolicy {
-                            min_threads: 1,
-                            max_threads: 1,
-                            percent: 0.0,
-                        },
-                        async_compute: TaskPoolThreadAssignmentPolicy {
-                            min_threads: 1,
-                            max_threads: usize::MAX,
-                            percent: 0.6,
-                        },
-                        ..default()
-                    },
-                })
+                .set(task_pool_plugin())
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         present_mode: bevy::window::PresentMode::AutoNoVsync,
@@ -164,27 +122,13 @@ fn main() {
                 }),
             MaterialPlugin::<ChunkMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
+            TerrainPlugin,
         ))
         .insert_resource(ClearColor(HORIZON_COLOR))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
-            (
-                (gather_chunks, generate_chunks, mark_chunks, load_chunks).before(unload_chunks),
-                (
-                    update_lod_selection,
-                    spawn_lods,
-                    load_lods,
-                    retire_lods,
-                    refresh_lod_visibility,
-                    apply_fades,
-                )
-                    .chain()
-                    .after(gather_chunks)
-                    .before(unload_chunks),
-                unload_chunks,
-                (player_move, player_look, update_underwater_effects).chain(),
-            ),
+            (player_move, player_look, update_underwater_effects).chain(),
         )
         .run();
 }

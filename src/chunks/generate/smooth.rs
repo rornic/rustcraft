@@ -1,9 +1,8 @@
 use bevy::math::Vec3;
 
-use super::generator::{
-    terrain_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_LEVEL, WATER_TOP,
-};
+use super::generator::{terrain_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_TOP};
 use super::region_store::RegionStore;
+use super::WATER_LEVEL;
 use crate::block::BlockType;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;

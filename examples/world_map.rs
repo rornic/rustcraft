@@ -7,7 +7,9 @@
 
 use std::env;
 
-use rustcraft::chunks::generate::generator::WATER_LEVEL;
+use bevy::math::DVec3;
+
+use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
 
 struct Args {
@@ -51,10 +53,7 @@ fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<TerrainSample> {
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let rows_per_thread = size.div_ceil(threads);
 
-    let mut samples = vec![
-        TerrainSample { continentalness: 0.0, ruggedness: 0.0, height: 0.0 };
-        size * size
-    ];
+    let mut samples = vec![TerrainSample::default(); size * size];
     std::thread::scope(|scope| {
         for (chunk_index, rows) in samples.chunks_mut(rows_per_thread * size).enumerate() {
             scope.spawn(move || {
@@ -72,8 +71,7 @@ fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<TerrainSample> {
 }
 
 fn lerp_rgb(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
-    let t = t.clamp(0.0, 1.0);
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+    DVec3::from(a).lerp(DVec3::from(b), t.clamp(0.0, 1.0)).into()
 }
 
 // Height above (or below) sea level to a map colour.

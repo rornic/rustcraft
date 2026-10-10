@@ -9,6 +9,7 @@ use bevy::{
 };
 
 use super::region_store::RegionStore;
+use super::WATER_LEVEL;
 use super::smooth::{mesh_surface, Surface};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
@@ -35,7 +36,6 @@ const FACE_TANGENTS: [(IVec3, IVec3); 6] = [
 const AO_STRENGTH: f32 = 0.5;
 
 pub(super) const SOLID_FLOOR: i64 = 16;
-pub const WATER_LEVEL: i64 = 64;
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
 pub(super) const WATER_TOP: f32 = 0.4;
 
@@ -930,7 +930,7 @@ mod tests {
     }
 
     fn test_regions() -> Arc<RegionStore> {
-        Arc::new(RegionStore::new(256, Arc::new(NoiseGenerator::new(3))))
+        Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(3))))
     }
 
     #[test]
@@ -1156,7 +1156,7 @@ mod tests {
             }
         }
 
-        let regions = Arc::new(RegionStore::new(512, noise));
+        let regions = Arc::new(RegionStore::new(noise));
         let start = std::time::Instant::now();
         let data: HashMap<ChunkCoordinate, Arc<ChunkData>> = coords
             .iter()

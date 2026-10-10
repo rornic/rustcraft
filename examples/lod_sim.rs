@@ -6,36 +6,32 @@
 //   cargo run --release --example lod_sim -- [speed in blocks/s, default 80] [seconds moving, default 10]
 use std::time::{Duration, Instant};
 
+use bevy::math::I64Vec3;
 use bevy::prelude::*;
 use bevy::utils::HashMap;
-use rustcraft::chunks::chunk::ChunkCoordinate;
-use rustcraft::chunks::chunk_loader::{
-    gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, Chunk, ChunkLoader,
-};
-use rustcraft::chunks::fade::{apply_fades, FadeMaterials, FULLY_VISIBLE};
-use rustcraft::chunks::lod::{
-    load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_lod_selection, LodKey,
-    LodLayout, LodLoader, LodNode,
-};
+use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
+use rustcraft::chunks::chunk_loader::Chunk;
+use rustcraft::chunks::fade::FULLY_VISIBLE;
+use rustcraft::chunks::generate::WATER_LEVEL;
+use rustcraft::chunks::lod::{LodKey, LodLayout, LodNode};
 use rustcraft::chunks::material::{ChunkMaterial, WaterMaterial};
+use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
+use rustcraft::settings::{RendererSettings, Settings};
 
 #[derive(Component)]
 struct SimCamera;
 
-fn layout() -> LodLayout {
-    let file = std::fs::read_to_string("assets/settings.toml").expect("failed to read settings");
-    let settings: rustcraft::settings::Settings = toml::from_str(&file).expect("invalid settings");
-    let r = settings.renderer;
-    LodLayout::new(r.full_detail_distance, r.render_distance, r.lod_level_scale)
-}
+#[derive(Resource)]
+struct Renderer(RendererSettings);
 
 fn setup(
     mut commands: Commands,
+    renderer: Res<Renderer>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let layout = layout();
-    let world = rustcraft::world::World::new(layout.render_distance() as u32);
+    let renderer = &renderer.0;
+    let world = rustcraft::world::World::new(renderer.lod_layout().render_distance() as u32);
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);
@@ -58,21 +54,15 @@ fn setup(
         texture: None,
         fade: FULLY_VISIBLE,
     });
-    commands.insert_resource(FadeMaterials::new(
-        0.6,
-        chunk.clone(),
-        water.clone(),
+    insert_terrain_resources(
+        &mut commands,
+        renderer,
+        height,
+        chunk,
+        water,
         &mut chunk_materials,
         &mut water_materials,
-    ));
-    commands.insert_resource(LodLoader::new(
-        layout,
-        2,
-        height,
-        chunk.clone(),
-        water.clone(),
-    ));
-    commands.insert_resource(ChunkLoader::new(layout, chunk, water));
+    );
 }
 
 struct Report {
@@ -81,7 +71,7 @@ struct Report {
     lods: usize,
 }
 
-fn report(app: &mut App, pos: Vec3) -> Report {
+fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
     let world = app.world_mut();
     let lod_vis: HashMap<LodKey, bool> = world
         .query::<(&LodNode, &Visibility)>()
@@ -93,12 +83,9 @@ fn report(app: &mut App, pos: Vec3) -> Report {
         .iter(world)
         .map(|(c, v)| (c.coord, *v != Visibility::Hidden))
         .collect();
-    let regions = world
-        .resource::<rustcraft::world::World>()
-        .region_store
-        .clone();
-    let anchor = ChunkCoordinate((pos / 16.0).floor().as_i64vec3());
-    let layout = layout();
+    let game_world = world.resource::<rustcraft::world::World>();
+    let regions = game_world.region_store.clone();
+    let anchor = game_world.block_to_chunk_coordinate(pos.floor().as_i64vec3());
     let full = layout.full_detail_distance;
     let far = layout.render_distance().min(120.0);
     let mut holes = [0; 4];
@@ -111,12 +98,11 @@ fn report(app: &mut App, pos: Vec3) -> Report {
                 continue;
             }
             let (cx, cz) = (anchor.0.x + dx, anchor.0.z + dz);
-            let h = regions.get_height(cx * 16 + 8, cz * 16 + 8).max(64.0);
-            let c = ChunkCoordinate(bevy::math::I64Vec3::new(
-                cx,
-                (h as i64 - 1).div_euclid(16),
-                cz,
-            ));
+            let size = CHUNK_SIZE as i64;
+            let h = regions
+                .get_height(cx * size + size / 2, cz * size + size / 2)
+                .max(WATER_LEVEL as f64);
+            let c = ChunkCoordinate(I64Vec3::new(cx, (h as i64 - 1).div_euclid(size), cz));
             let drawn = chunk_vis.get(&c).copied().unwrap_or(false)
                 || (1..=layout.max_level).any(|l| {
                     lod_vis
@@ -149,48 +135,22 @@ fn report(app: &mut App, pos: Vec3) -> Report {
 }
 
 fn main() {
+    let renderer = Settings::read("assets/settings.toml")
+        .expect("failed to read settings")
+        .renderer;
+    let layout = renderer.lod_layout();
     let mut app = App::new();
     app.add_plugins((
-        MinimalPlugins.set(TaskPoolPlugin {
-            task_pool_options: TaskPoolOptions {
-                io: bevy::core::TaskPoolThreadAssignmentPolicy {
-                    min_threads: 1,
-                    max_threads: 1,
-                    percent: 0.0,
-                },
-                async_compute: bevy::core::TaskPoolThreadAssignmentPolicy {
-                    min_threads: 1,
-                    max_threads: usize::MAX,
-                    percent: 0.6,
-                },
-                ..default()
-            },
-        }),
+        MinimalPlugins.set(task_pool_plugin()),
         AssetPlugin::default(),
+        TerrainPlugin,
     ))
+    .insert_resource(Renderer(renderer))
     .init_asset::<Mesh>()
     .init_asset::<Image>()
     .init_asset::<ChunkMaterial>()
     .init_asset::<WaterMaterial>()
-    .add_systems(Startup, setup)
-    .add_systems(
-        Update,
-        (
-            (gather_chunks, generate_chunks, mark_chunks, load_chunks).before(unload_chunks),
-            (
-                update_lod_selection,
-                spawn_lods,
-                load_lods,
-                retire_lods,
-                refresh_lod_visibility,
-                apply_fades,
-            )
-                .chain()
-                .after(gather_chunks)
-                .before(unload_chunks),
-            unload_chunks,
-        ),
-    );
+    .add_systems(Startup, setup);
     app.update();
 
     let speed: f32 = std::env::args().nth(1).map_or(80.0, |s| s.parse().unwrap());
@@ -228,7 +188,7 @@ fn main() {
                 .query_filtered::<&GlobalTransform, With<SimCamera>>()
                 .single(world)
                 .translation();
-            let r = report(&mut app, pos);
+            let r = report(&mut app, layout, pos);
             let phase = match moving_from {
                 None => "loading",
                 Some(f) if t - f < move_secs => "moving",

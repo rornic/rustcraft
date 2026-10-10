@@ -7,7 +7,7 @@ use bevy::{
         component::Component,
         entity::Entity,
         query::{Added, Or, With},
-        system::{Commands, Local, Query, Res, ResMut, Resource},
+        system::{Commands, Local, Query, Res, ResMut, Resource, SystemParam},
     },
     hierarchy::{BuildChildren, ChildBuild},
     math::{I64Vec3, Vec3},
@@ -224,9 +224,7 @@ pub struct LodState<'a> {
     pub selected: &'a HashSet<LodKey>,
     pub node_exists: &'a dyn Fn(LodKey) -> bool,
     pub node_ready: &'a dyn Fn(LodKey) -> bool,
-    pub chunk_ready: &'a dyn Fn(ChunkCoordinate) -> bool,
-    /// Whether a chunk has a mesh drawn - unlike `chunk_ready`, not true of empty or unmeshed chunks.
-    pub chunk_drawn: &'a dyn Fn(ChunkCoordinate) -> bool,
+    pub chunk_state: &'a dyn Fn(ChunkCoordinate) -> ChunkState,
 }
 
 impl LodState<'_> {
@@ -265,7 +263,7 @@ impl LodState<'_> {
             return true;
         }
         if key.level == 1 {
-            return key.chunks().all(|chunk| (self.chunk_ready)(chunk));
+            return key.chunks().all(|chunk| (self.chunk_state)(chunk).ready());
         }
         key.children()
             .into_iter()
@@ -287,16 +285,18 @@ impl LodState<'_> {
         }
     }
 
-    fn covered_while_loading(&self, key: LodKey) -> bool {
-        self.has_existing_ancestor(key)
-            || if key.level == 1 {
-                key.chunks().any(|chunk| (self.chunk_drawn)(chunk))
-            } else {
-                key.children()
-                    .into_iter()
-                    .any(|child| (self.node_exists)(child))
-            }
+    // Whether finer nodes, or for a level-1 node its chunks, are drawn where it goes.
+    fn finer_drawn(&self, key: LodKey) -> bool {
+        if key.level == 1 {
+            key.chunks()
+                .any(|chunk| (self.chunk_state)(chunk) == ChunkState::Drawn)
+        } else {
+            key.children()
+                .into_iter()
+                .any(|child| (self.node_exists)(child))
+        }
     }
+
 }
 
 #[derive(Component)]
@@ -386,9 +386,38 @@ type PendingChunk = Or<(
     With<GenerateChunkMesh>,
 )>;
 
-// A level-1 node standing in for chunks that are still drawn and about to be unloaded.
-fn replaces_loaded_chunks(key: LodKey, chunk_drawn: &dyn Fn(ChunkCoordinate) -> bool) -> bool {
-    key.level == 1 && key.chunks().any(chunk_drawn)
+/// How far along a full-detail chunk is, as far as LODs are concerned.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ChunkState {
+    Missing,
+    Loading,
+    /// Loaded with nothing to draw.
+    Empty,
+    Drawn,
+}
+
+impl ChunkState {
+    fn ready(self) -> bool {
+        matches!(self, ChunkState::Empty | ChunkState::Drawn)
+    }
+}
+
+#[derive(SystemParam)]
+pub struct ChunkStates<'w, 's> {
+    loader: Res<'w, ChunkLoader>,
+    pending: Query<'w, 's, (), PendingChunk>,
+    drawn: Query<'w, 's, (), (With<Chunk>, With<Mesh3d>)>,
+}
+
+impl ChunkStates<'_, '_> {
+    fn get(&self, chunk: ChunkCoordinate) -> ChunkState {
+        match self.loader.chunk_entity(chunk) {
+            None => ChunkState::Missing,
+            Some(e) if self.drawn.contains(e) => ChunkState::Drawn,
+            Some(e) if self.pending.contains(e) => ChunkState::Loading,
+            Some(_) => ChunkState::Empty,
+        }
+    }
 }
 
 // Gaps with nothing drawn yet count as this fraction of their distance, so holes fill in
@@ -401,9 +430,11 @@ fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec
     let mut queued: Vec<(bool, f32, LodKey)> = unspawned
         .map(|key| {
             let distance = key.distance(state.anchor);
-            let gap = !state.covered_while_loading(key);
+            let finer_drawn = state.finer_drawn(key);
+            let gap = !finer_drawn && !state.has_existing_ancestor(key);
             (
-                replaces_loaded_chunks(key, state.chunk_drawn),
+                // a level-1 node standing in for chunks that are still drawn
+                key.level == 1 && finer_drawn,
                 if gap { distance * GAP_DISTANCE_WEIGHT } else { distance },
                 key,
             )
@@ -415,12 +446,10 @@ fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec
 
 pub fn update_lod_selection(
     mut lods: ResMut<LodLoader>,
-    chunk_loader: Res<ChunkLoader>,
+    chunks: ChunkStates,
     pending_lods: Query<(), With<GenerateLodMesh>>,
-    pending_chunks: Query<(), PendingChunk>,
-    drawn_chunks: Query<(), (With<Chunk>, With<Mesh3d>)>,
 ) {
-    let anchor = chunk_loader.anchor();
+    let anchor = chunks.loader.anchor();
     if lods.anchor == Some(anchor) {
         return;
     }
@@ -429,16 +458,6 @@ pub fn update_lod_selection(
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
     let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
-    let chunk_ready = |chunk: ChunkCoordinate| {
-        chunk_loader
-            .chunk_entity(chunk)
-            .is_some_and(|e| !pending_chunks.contains(e))
-    };
-    let chunk_drawn = |chunk: ChunkCoordinate| {
-        chunk_loader
-            .chunk_entity(chunk)
-            .is_some_and(|e| drawn_chunks.contains(e))
-    };
     let state = LodState {
         anchor,
         layout: lods.layout,
@@ -446,8 +465,7 @@ pub fn update_lod_selection(
         selected: &selected,
         node_exists: &node_exists,
         node_ready: &node_ready,
-        chunk_ready: &chunk_ready,
-        chunk_drawn: &chunk_drawn,
+        chunk_state: &|chunk| chunks.get(chunk),
     };
     let to_spawn = spawn_order(
         &state,
@@ -475,22 +493,10 @@ pub fn spawn_lods(
     mut lods: ResMut<LodLoader>,
     world: Res<World>,
     time: Res<Time>,
-    chunk_loader: Res<ChunkLoader>,
+    chunks: ChunkStates,
     pending: Query<(), With<GenerateLodMesh>>,
-    pending_chunks: Query<(), PendingChunk>,
-    drawn_chunks: Query<(), (With<Chunk>, With<Mesh3d>)>,
     mut since_resort: Local<f32>,
 ) {
-    let chunk_ready = |chunk: ChunkCoordinate| {
-        chunk_loader
-            .chunk_entity(chunk)
-            .is_some_and(|e| !pending_chunks.contains(e))
-    };
-    let chunk_drawn = |chunk: ChunkCoordinate| {
-        chunk_loader
-            .chunk_entity(chunk)
-            .is_some_and(|e| drawn_chunks.contains(e))
-    };
 
     *since_resort += time.delta_secs();
     if *since_resort >= LOD_RESORT_INTERVAL {
@@ -508,8 +514,7 @@ pub fn spawn_lods(
                 selected: &lods.selected,
                 node_exists: &node_exists,
                 node_ready: &node_ready,
-                chunk_ready: &chunk_ready,
-                chunk_drawn: &chunk_drawn,
+                chunk_state: &|chunk| chunks.get(chunk),
             };
             let resorted = spawn_order(&state, remaining.into_iter());
             lods.to_spawn = resorted;
@@ -601,9 +606,8 @@ pub fn retire_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
     time: Res<Time>,
-    chunk_loader: Res<ChunkLoader>,
+    chunks: ChunkStates,
     pending_lods: Query<(), With<GenerateLodMesh>>,
-    pending_chunks: Query<(), PendingChunk>,
     visibility: Query<&Visibility>,
 ) {
     let Some(anchor) = lods.anchor else {
@@ -615,11 +619,6 @@ pub fn retire_lods(
         let nodes = &lods.nodes;
         let node_exists = |key: LodKey| nodes.contains_key(&key);
         let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
-        let chunk_ready = |chunk: ChunkCoordinate| {
-            chunk_loader
-                .chunk_entity(chunk)
-                .is_some_and(|e| !pending_chunks.contains(e))
-        };
         let state = LodState {
             anchor,
             layout: lods.layout,
@@ -627,8 +626,7 @@ pub fn retire_lods(
             selected: &lods.selected,
             node_exists: &node_exists,
             node_ready: &node_ready,
-            chunk_ready: &chunk_ready,
-            chunk_drawn: &|_| false,
+            chunk_state: &|chunk| chunks.get(chunk),
         };
         for &key in &lods.retiring {
             if !lods.selected.contains(&key) && state.can_retire(key) {
@@ -682,8 +680,8 @@ pub fn refresh_lod_visibility(
         selected: &lods.selected,
         node_exists: &node_exists,
         node_ready: &node_ready,
-        chunk_ready: &|_| false,
-        chunk_drawn: &|_| false,
+        // the visibility rules don't look at chunks' loading state
+        chunk_state: &|_| ChunkState::Missing,
     };
     let mut set = |entity: Entity, visible: bool| {
         if let Ok((mut v, fade)) = visibility.get_mut(entity) {
@@ -744,7 +742,7 @@ mod tests {
         utils::{HashMap, HashSet},
     };
 
-    use super::{select_lods, LodBand, LodKey, LodLayout, LodState};
+    use super::{select_lods, ChunkState, LodBand, LodKey, LodLayout, LodState};
     use crate::chunks::chunk::ChunkCoordinate;
 
     const BAND: LodBand = LodBand {
@@ -912,6 +910,15 @@ mod tests {
         }
     }
 
+    // Whether something is drawn where `key` goes while it loads, so it isn't a gap.
+    fn covered_while_loading(state: &LodState, key: LodKey) -> bool {
+        state.finer_drawn(key) || state.has_existing_ancestor(key)
+    }
+
+    fn replaces_loaded_chunks(state: &LodState, key: LodKey) -> bool {
+        key.level == 1 && state.finer_drawn(key)
+    }
+
     fn with_state<R>(
         anchor: ChunkCoordinate,
         selected: &HashSet<LodKey>,
@@ -921,7 +928,7 @@ mod tests {
         check: impl FnOnce(&LodState) -> R,
     ) -> R {
         let node_ready = |key| ready.get(&key).copied().unwrap_or(false);
-        let chunk_ready = |_| chunks_ready;
+        let chunk_state = |_| if chunks_ready { ChunkState::Drawn } else { ChunkState::Missing };
         check(&LodState {
             anchor,
             layout: layout(3),
@@ -929,8 +936,7 @@ mod tests {
             selected,
             node_exists: existing,
             node_ready: &node_ready,
-            chunk_ready: &chunk_ready,
-            chunk_drawn: &chunk_ready,
+            chunk_state: &chunk_state,
         })
     }
 
@@ -1038,8 +1044,8 @@ mod tests {
         assert!(!is_ancestor(cover, gap));
         let exists = move |k| k == cover;
         with_state(anchor, &selected, &exists, &HashMap::new(), false, |s| {
-            assert!(s.covered_while_loading(covered));
-            assert!(!s.covered_while_loading(gap));
+            assert!(covered_while_loading(s, covered));
+            assert!(!covered_while_loading(s, gap));
             let mut queue = super::spawn_order(s, [covered, gap].into_iter());
             queue.reverse();
             queue
@@ -1089,11 +1095,10 @@ mod tests {
             selected: &selected,
             node_exists: &|_| false,
             node_ready: &|_| false,
-            chunk_ready: &|_| true,
-            chunk_drawn: &|_| false,
+            chunk_state: &|_| ChunkState::Empty,
         };
-        assert!(!state.covered_while_loading(node));
-        assert!(!super::replaces_loaded_chunks(node, state.chunk_drawn));
+        assert!(!covered_while_loading(&state, node));
+        assert!(!replaces_loaded_chunks(&state, node));
     }
 
     #[test]
@@ -1105,7 +1110,7 @@ mod tests {
         with_state(anchor, &selected, &exists, &ready, true, |s| {
             let mut queue = super::spawn_order(s, selected.iter().copied());
             let first = queue.pop().unwrap();
-            assert!(super::replaces_loaded_chunks(first, s.chunk_drawn));
+            assert!(replaces_loaded_chunks(s, first));
         });
     }
 

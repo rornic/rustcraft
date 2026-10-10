@@ -8,6 +8,7 @@ use bevy::{
 use crate::block::BlockType;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
+use crate::chunks::generate::WORLD_HEIGHT;
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree};
 
@@ -24,7 +25,7 @@ impl World {
     /// `render_distance` is how far, in chunks, terrain will be drawn.
     pub fn new(render_distance: u32) -> Self {
         let seed = rand::random();
-        let height = 512;
+        let height = WORLD_HEIGHT;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
         let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
         let chunks = ChunkOctree::default();
@@ -34,7 +35,7 @@ impl World {
             height,
             chunks,
             region_store: Arc::new(
-                RegionStore::new(height, noise_generator)
+                RegionStore::new(noise_generator)
                     .with_resident_cap(resident_cap_for(render_distance_blocks)),
             ),
             spawn: Vec3::new(spawn_x as f32, spawn_height as f32 + 20.0, spawn_z as f32),

@@ -1,14 +1,14 @@
-use bevy::math::I64Vec2;
+use bevy::math::{FloatExt, I64Vec2};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
-use super::generator::WATER_LEVEL;
+use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
 pub const WORLD_SIZE: i64 = 32_768;
 pub const WORLD_HALF_SIZE: i64 = WORLD_SIZE / 2;
 
-// A little headroom under the 512 block world height.
-const MAX_HEIGHT: f64 = 496.0;
+// A little headroom under the top of the world.
+const MAX_HEIGHT: f64 = WORLD_HEIGHT as f64 - 16.0;
 // Peaks above this are eased towards MAX_HEIGHT instead of being cut off flat.
 const PEAK_EASE_START: f64 = 400.0;
 
@@ -63,12 +63,10 @@ const CONTINENT_SPLINE: [(f64, f64); 10] = [
     (0.5, 36.0),
 ];
 
-// The large scale fields behind a column's height, kept so later passes (biomes,
-// rivers, a baked world map) can build on them.
-#[derive(Debug, Copy, Clone)]
+// A column's height, with how far inland it is (negative out to sea).
+#[derive(Debug, Default, Copy, Clone)]
 pub struct TerrainSample {
     pub continentalness: f64,
-    pub ruggedness: f64,
     pub height: f64,
 }
 
@@ -118,7 +116,7 @@ impl NoiseGenerator {
         let (wx, wz) = (x + warp_x, z + warp_z);
 
         let edge = edge_falloff(wx, wz);
-        let continentalness = lerp(self.continents.get([wx, wz]) - OCEAN_BIAS, -1.0, edge);
+        let continentalness = (self.continents.get([wx, wz]) - OCEAN_BIAS).lerp(-1.0, edge);
         // Ruggedness and hilliness only shape land and the shallows, so open ocean skips them.
         let ruggedness = if continentalness > OPEN_OCEAN {
             self.ruggedness.get([wx, wz])
@@ -145,7 +143,7 @@ impl NoiseGenerator {
         // Kept above zero, so hills rise out of flat valley floors instead of dipping into lakes.
         let hills = if continentalness > 0.0 {
             let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get([wx, wz]));
-            let hill_amplitude = lerp(0.15, 1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
+            let hill_amplitude = 0.15_f64.lerp(1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
             // Ranges carry their own relief, so hills fade out into them.
             (self.hills.get([x, z]) * 0.8 + 0.3).max(0.0) * hill_amplitude * (1.0 - mountain_mask)
         } else {
@@ -153,18 +151,14 @@ impl NoiseGenerator {
         };
 
         // Calm the detail near the shoreline, or it breaks the coast up into specks of land.
-        let shore_calm = lerp(0.2, 1.0, smoothstep(0.0, 0.1, continentalness.abs()));
-        let land_detail = lerp(3.0, 12.0, smoothstep(-0.3, 0.4, ruggedness));
+        let shore_calm = 0.2_f64.lerp(1.0, smoothstep(0.0, 0.1, continentalness.abs()));
+        let land_detail = 3.0_f64.lerp(12.0, smoothstep(-0.3, 0.4, ruggedness));
         let sea_floor_blend = smoothstep(OPEN_OCEAN, OPEN_OCEAN + 0.1, continentalness);
-        let detail_amplitude = lerp(SEA_FLOOR_DETAIL, land_detail, sea_floor_blend) * shore_calm;
+        let detail_amplitude = SEA_FLOOR_DETAIL.lerp(land_detail, sea_floor_blend) * shore_calm;
         let detail = self.detail.get([x, z]) * detail_amplitude;
 
         let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail).max(0.0);
-        TerrainSample {
-            continentalness,
-            ruggedness,
-            height,
-        }
+        TerrainSample { continentalness, height }
     }
 
     // Ridged multifractal in 0..1: sharp crests where the noise crosses zero, with each
@@ -221,10 +215,6 @@ fn edge_falloff(x: f64, z: f64) -> f64 {
     smoothstep(EDGE_FALLOFF_START, EDGE_FALLOFF_END, distance)
 }
 
-fn lerp(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
-}
-
 fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -242,7 +232,7 @@ fn spline(points: &[(f64, f64)], x: f64) -> f64 {
     let i = points.iter().position(|p| p.0 > x).unwrap();
     let (x0, y0) = points[i - 1];
     let (x1, y1) = points[i];
-    lerp(y0, y1, (x - x0) / (x1 - x0))
+    y0.lerp(y1, (x - x0) / (x1 - x0))
 }
 
 #[cfg(test)]
