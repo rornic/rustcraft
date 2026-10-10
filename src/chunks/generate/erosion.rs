@@ -1,5 +1,6 @@
 use bevy::math::{I64Vec2, Vec2};
 
+use super::generator::WATER_LEVEL;
 use super::noise::NoiseGenerator;
 
 pub struct ErosionParams {
@@ -15,12 +16,16 @@ pub struct ErosionParams {
     pub initial_water: f32,
     pub initial_speed: f32,
     pub erosion_radius: i32,
+    // Droplets stop once they reach the sea, where erosion would barely be seen.
+    pub sea_level: f32,
 }
 
 impl Default for ErosionParams {
     fn default() -> Self {
         Self {
-            droplet_count: 30_000,
+            // More than the spawn lattice offers a halo-padded region (~16k), so every
+            // lattice cell gets a droplet.
+            droplet_count: 20_000,
             max_lifetime: 30,
             inertia: 0.05,
             sediment_capacity_factor: 4.0,
@@ -32,6 +37,7 @@ impl Default for ErosionParams {
             initial_water: 1.0,
             initial_speed: 1.0,
             erosion_radius: 3,
+            sea_level: WATER_LEVEL as f32,
         }
     }
 }
@@ -127,7 +133,7 @@ impl HeightGrid {
 // a given world-space cell always proposes the same candidate point regardless of
 // which window later samples it (load-bearing once a future milestone tiles erosion
 // across overlapping region windows; not exercised by anything in this milestone).
-const SPAWN_CELL_SIZE: i64 = 2;
+const SPAWN_CELL_SIZE: i64 = 3;
 
 // FNV-1a over (seed, a, b) — fixed algorithm with guaranteed stability, unlike
 // DefaultHasher (algorithm unspecified) or StdRng (algorithm may change with rand).
@@ -257,6 +263,10 @@ fn simulate_droplet(grid: &mut HeightGrid, spawn: Vec2, params: &ErosionParams, 
     let mut water = params.initial_water;
     let mut sediment = 0.0f32;
 
+    if grid.bilinear_height_and_gradient(pos).0 < params.sea_level {
+        return;
+    }
+
     for _ in 0..params.max_lifetime {
         let (height, gradient) = grid.bilinear_height_and_gradient(pos);
 
@@ -297,7 +307,8 @@ fn simulate_droplet(grid: &mut HeightGrid, spawn: Vec2, params: &ErosionParams, 
         water *= 1.0 - params.evaporate_speed;
         pos = new_pos;
 
-        if water < f32::EPSILON {
+        // Whatever it still carries is dropped where it meets the sea.
+        if water < f32::EPSILON || new_height < params.sea_level {
             break;
         }
     }
@@ -377,6 +388,21 @@ mod tests {
             pos = new_pos;
         }
         assert!(pos.x > spawn.x, "droplet should have moved toward lower x (downhill)");
+    }
+
+    #[test]
+    fn test_droplets_only_erode_above_sea_level() {
+        let params = ErosionParams { sea_level: 20.0, ..ErosionParams::default() };
+        let brush = Brush::new(params.erosion_radius);
+
+        let mut underwater = ramp_grid(40, 40);
+        let before = underwater.data().to_vec();
+        simulate_droplet(&mut underwater, Vec2::new(30.0, 20.0), &params, &brush);
+        assert_eq!(before, underwater.data());
+
+        let mut on_land = ramp_grid(40, 40);
+        simulate_droplet(&mut on_land, Vec2::new(5.0, 20.0), &params, &brush);
+        assert_ne!(before, on_land.data());
     }
 
     #[test]

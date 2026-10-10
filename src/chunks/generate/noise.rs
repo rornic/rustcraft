@@ -43,6 +43,10 @@ const DETAIL_WAVELENGTH: f64 = 350.0;
 const EDGE_FALLOFF_START: f64 = 0.8;
 const EDGE_FALLOFF_END: f64 = 0.97;
 
+// Below this continentalness the sea floor only gets plain detail noise.
+const OPEN_OCEAN: f64 = -0.25;
+const SEA_FLOOR_DETAIL: f64 = 3.0;
+
 // Continentalness to height above sea level: deep ocean, continental shelf, coast, inland.
 const CONTINENT_SPLINE: [(f64, f64); 10] = [
     (-1.0, -46.0),
@@ -113,7 +117,12 @@ impl NoiseGenerator {
 
         let edge = edge_falloff(wx, wz);
         let continentalness = lerp(self.continents.get([wx, wz]) - OCEAN_BIAS, -1.0, edge);
-        let ruggedness = self.ruggedness.get([wx, wz]);
+        // Ruggedness and hilliness only shape land and the shallows, so open ocean skips them.
+        let ruggedness = if continentalness > OPEN_OCEAN {
+            self.ruggedness.get([wx, wz])
+        } else {
+            0.0
+        };
 
         let base = spline(&CONTINENT_SPLINE, continentalness);
 
@@ -132,9 +141,9 @@ impl NoiseGenerator {
         };
 
         // Kept above zero, so hills rise out of flat valley floors instead of dipping into lakes.
-        let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get([wx, wz]));
-        let hill_amplitude = lerp(0.15, 1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
-        let hills = if hill_amplitude > 0.0 {
+        let hills = if continentalness > 0.0 {
+            let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get([wx, wz]));
+            let hill_amplitude = lerp(0.15, 1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
             (self.hills.get([x, z]) * 0.8 + 0.3).max(0.0) * hill_amplitude
         } else {
             0.0
@@ -142,7 +151,9 @@ impl NoiseGenerator {
 
         // Calm the detail near the shoreline, or it breaks the coast up into specks of land.
         let shore_calm = lerp(0.2, 1.0, smoothstep(0.0, 0.1, continentalness.abs()));
-        let detail_amplitude = lerp(3.0, 12.0, smoothstep(-0.3, 0.4, ruggedness)) * shore_calm;
+        let land_detail = lerp(3.0, 12.0, smoothstep(-0.3, 0.4, ruggedness));
+        let sea_floor_blend = smoothstep(OPEN_OCEAN, OPEN_OCEAN + 0.1, continentalness);
+        let detail_amplitude = lerp(SEA_FLOOR_DETAIL, land_detail, sea_floor_blend) * shore_calm;
         let detail = self.detail.get([x, z]) * detail_amplitude;
 
         let height = (WATER_LEVEL as f64 + base + hills + mountains + detail).clamp(0.0, MAX_HEIGHT);
