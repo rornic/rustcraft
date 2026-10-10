@@ -394,23 +394,25 @@ fn replaces_loaded_chunks(key: LodKey, chunk_ready: &dyn Fn(ChunkCoordinate) -> 
     key.level == 1 && key.chunks().any(chunk_ready)
 }
 
-// Nodes to spawn, popped from the end: chunk swaps first, then gaps with nothing drawn yet, then nearest first.
+// Gaps with nothing drawn yet count as this fraction of their distance, so the loaded
+// edge (and the fog that follows it) keeps up, without holding up more detail near the player.
+const GAP_DISTANCE_WEIGHT: f32 = 0.5;
+
+// Nodes to spawn, popped from the end: chunk swaps first, then nearest first, with gaps
+// counted as nearer than they are.
 fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec<LodKey> {
-    let mut queued: Vec<(bool, bool, f32, LodKey)> = unspawned
+    let mut queued: Vec<(bool, f32, LodKey)> = unspawned
         .map(|key| {
+            let distance = key.distance(state.anchor);
+            let gap = !state.covered_while_loading(key);
             (
                 replaces_loaded_chunks(key, state.chunk_ready),
-                !state.covered_while_loading(key),
-                key.distance(state.anchor),
+                if gap { distance * GAP_DISTANCE_WEIGHT } else { distance },
                 key,
             )
         })
         .collect();
-    queued.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(a.1.cmp(&b.1))
-            .then(b.2.total_cmp(&a.2))
-    });
+    queued.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
     queued.into_iter().map(|(.., key)| key).collect()
 }
 
@@ -1104,28 +1106,64 @@ mod tests {
         );
     }
 
+    // A node that, once it exists, keeps `key` covered while `key` loads.
+    fn cover_for(key: LodKey) -> LodKey {
+        if key.level > 1 {
+            key.children()[0]
+        } else {
+            key.parent()
+        }
+    }
+
+    fn is_ancestor(ancestor: LodKey, mut key: LodKey) -> bool {
+        while key.level < ancestor.level {
+            key = key.parent();
+        }
+        key == ancestor
+    }
+
+    // Spawn order for a detail swap (`covered`, with its cover already drawn) and a `gap`.
+    fn spawn_order_of(anchor: ChunkCoordinate, covered: LodKey, gap: LodKey) -> Vec<LodKey> {
+        let selected: HashSet<_> = [covered, gap].into_iter().collect();
+        let cover = cover_for(covered);
+        assert!(!is_ancestor(cover, gap));
+        let exists = move |k| k == cover;
+        with_state(anchor, &selected, &exists, &HashMap::new(), false, |s| {
+            assert!(s.covered_while_loading(covered));
+            assert!(!s.covered_while_loading(gap));
+            let mut queue = super::spawn_order(s, [covered, gap].into_iter());
+            queue.reverse();
+            queue
+        })
+    }
+
+    fn by_distance(anchor: ChunkCoordinate) -> Vec<LodKey> {
+        let mut keys: Vec<_> = select_lods(anchor, layout(3), BAND).into_iter().collect();
+        keys.sort_by(|a, b| a.distance(anchor).total_cmp(&b.distance(anchor)));
+        keys
+    }
+
     #[test]
-    fn test_gaps_spawn_before_nearer_detail_swaps() {
-        let before = chunk(0, 4, 0);
-        let loaded = select_lods(before, layout(2), BAND);
-        let after = chunk(6, 4, 0);
-        let selected = select_lods(after, layout(2), BAND);
-        let exists = |k| loaded.contains(&k);
-        let ready: HashMap<_, _> = loaded.iter().map(|&k| (k, true)).collect();
-        with_state(after, &selected, &exists, &ready, false, |s| {
-            let mut queue =
-                super::spawn_order(s, selected.iter().filter(|k| !exists(**k)).copied());
-            let mut seen_covered = false;
-            while let Some(key) = queue.pop() {
-                let gap = !s.covered_while_loading(key);
-                assert!(
-                    !(gap && seen_covered),
-                    "gap {key:?} queued after a covered node"
-                );
-                seen_covered |= !gap;
-            }
-            assert!(seen_covered);
-        });
+    fn test_near_detail_swaps_spawn_before_far_gaps() {
+        let anchor = chunk(0, 4, 0);
+        let keys = by_distance(anchor);
+        let near = *keys.iter().find(|k| k.distance(anchor) > 0.0).unwrap();
+        let far = *keys.last().unwrap();
+        assert!(near.distance(anchor) < far.distance(anchor) * super::GAP_DISTANCE_WEIGHT);
+        assert_eq!(vec![near, far], spawn_order_of(anchor, near, far));
+    }
+
+    #[test]
+    fn test_gaps_spawn_before_detail_swaps_as_far_away() {
+        let anchor = chunk(0, 4, 0);
+        let keys = by_distance(anchor);
+        let farthest = *keys.last().unwrap();
+        let gap = *keys
+            .iter()
+            .rev()
+            .find(|&&k| k != farthest && !is_ancestor(cover_for(farthest), k))
+            .unwrap();
+        assert_eq!(vec![gap, farthest], spawn_order_of(anchor, farthest, gap));
     }
 
     #[test]
