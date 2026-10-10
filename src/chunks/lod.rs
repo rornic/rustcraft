@@ -83,11 +83,11 @@ impl LodLayout {
     }
 }
 
-const LOD_TASKS_PER_THREAD: usize = 4;
+// LOD meshes take well under a millisecond, so enough are kept in flight that the
+// once-per-frame refill isn't what limits how fast they load.
+const LOD_TASKS_PER_THREAD: usize = 32;
 // The spawn queue is re-sorted this often, since nodes drift between covered and gap as terrain loads.
 const LOD_RESORT_INTERVAL: f32 = 2.0;
-// LOD meshing waits while more full-detail chunk tasks than this are running, so nearby chunks aren't queued behind it.
-const LOD_PAUSE_CHUNK_WORK: usize = 32;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -225,6 +225,8 @@ pub struct LodState<'a> {
     pub node_exists: &'a dyn Fn(LodKey) -> bool,
     pub node_ready: &'a dyn Fn(LodKey) -> bool,
     pub chunk_ready: &'a dyn Fn(ChunkCoordinate) -> bool,
+    /// Whether a chunk has a mesh drawn - unlike `chunk_ready`, not true of empty or unmeshed chunks.
+    pub chunk_drawn: &'a dyn Fn(ChunkCoordinate) -> bool,
 }
 
 impl LodState<'_> {
@@ -288,7 +290,7 @@ impl LodState<'_> {
     fn covered_while_loading(&self, key: LodKey) -> bool {
         self.has_existing_ancestor(key)
             || if key.level == 1 {
-                key.chunks().any(|chunk| (self.chunk_ready)(chunk))
+                key.chunks().any(|chunk| (self.chunk_drawn)(chunk))
             } else {
                 key.children()
                     .into_iter()
@@ -300,6 +302,12 @@ impl LodState<'_> {
 #[derive(Component)]
 pub struct LodNode {
     key: LodKey,
+}
+
+impl LodNode {
+    pub fn key(&self) -> LodKey {
+        self.key
+    }
 }
 
 #[derive(Component)]
@@ -378,9 +386,9 @@ type PendingChunk = Or<(
     With<GenerateChunkMesh>,
 )>;
 
-// A level-1 node standing in for chunks that are still loaded and about to be unloaded.
-fn replaces_loaded_chunks(key: LodKey, chunk_ready: &dyn Fn(ChunkCoordinate) -> bool) -> bool {
-    key.level == 1 && key.chunks().any(chunk_ready)
+// A level-1 node standing in for chunks that are still drawn and about to be unloaded.
+fn replaces_loaded_chunks(key: LodKey, chunk_drawn: &dyn Fn(ChunkCoordinate) -> bool) -> bool {
+    key.level == 1 && key.chunks().any(chunk_drawn)
 }
 
 // Gaps with nothing drawn yet count as this fraction of their distance, so holes fill in
@@ -395,7 +403,7 @@ fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec
             let distance = key.distance(state.anchor);
             let gap = !state.covered_while_loading(key);
             (
-                replaces_loaded_chunks(key, state.chunk_ready),
+                replaces_loaded_chunks(key, state.chunk_drawn),
                 if gap { distance * GAP_DISTANCE_WEIGHT } else { distance },
                 key,
             )
@@ -410,6 +418,7 @@ pub fn update_lod_selection(
     chunk_loader: Res<ChunkLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
     pending_chunks: Query<(), PendingChunk>,
+    drawn_chunks: Query<(), (With<Chunk>, With<Mesh3d>)>,
 ) {
     let anchor = chunk_loader.anchor();
     if lods.anchor == Some(anchor) {
@@ -425,6 +434,11 @@ pub fn update_lod_selection(
             .chunk_entity(chunk)
             .is_some_and(|e| !pending_chunks.contains(e))
     };
+    let chunk_drawn = |chunk: ChunkCoordinate| {
+        chunk_loader
+            .chunk_entity(chunk)
+            .is_some_and(|e| drawn_chunks.contains(e))
+    };
     let state = LodState {
         anchor,
         layout: lods.layout,
@@ -433,6 +447,7 @@ pub fn update_lod_selection(
         node_exists: &node_exists,
         node_ready: &node_ready,
         chunk_ready: &chunk_ready,
+        chunk_drawn: &chunk_drawn,
     };
     let to_spawn = spawn_order(
         &state,
@@ -463,14 +478,18 @@ pub fn spawn_lods(
     chunk_loader: Res<ChunkLoader>,
     pending: Query<(), With<GenerateLodMesh>>,
     pending_chunks: Query<(), PendingChunk>,
-    chunk_work: Query<(), Or<(With<GenerateChunkData>, With<GenerateChunkMesh>)>>,
+    drawn_chunks: Query<(), (With<Chunk>, With<Mesh3d>)>,
     mut since_resort: Local<f32>,
 ) {
-    let paused = !chunk_loader.fully_queued() || chunk_work.iter().count() > LOD_PAUSE_CHUNK_WORK;
     let chunk_ready = |chunk: ChunkCoordinate| {
         chunk_loader
             .chunk_entity(chunk)
             .is_some_and(|e| !pending_chunks.contains(e))
+    };
+    let chunk_drawn = |chunk: ChunkCoordinate| {
+        chunk_loader
+            .chunk_entity(chunk)
+            .is_some_and(|e| drawn_chunks.contains(e))
     };
 
     *since_resort += time.delta_secs();
@@ -490,6 +509,7 @@ pub fn spawn_lods(
                 node_exists: &node_exists,
                 node_ready: &node_ready,
                 chunk_ready: &chunk_ready,
+                chunk_drawn: &chunk_drawn,
             };
             let resorted = spawn_order(&state, remaining.into_iter());
             lods.to_spawn = resorted;
@@ -506,10 +526,6 @@ pub fn spawn_lods(
         };
         if !lods.selected.contains(&key) || lods.nodes.contains_key(&key) {
             continue;
-        }
-        if paused && !replaces_loaded_chunks(key, &chunk_ready) {
-            lods.to_spawn.push(key);
-            break;
         }
 
         let regions = world.region_store.clone();
@@ -612,6 +628,7 @@ pub fn retire_lods(
             node_exists: &node_exists,
             node_ready: &node_ready,
             chunk_ready: &chunk_ready,
+            chunk_drawn: &|_| false,
         };
         for &key in &lods.retiring {
             if !lods.selected.contains(&key) && state.can_retire(key) {
@@ -666,6 +683,7 @@ pub fn refresh_lod_visibility(
         node_exists: &node_exists,
         node_ready: &node_ready,
         chunk_ready: &|_| false,
+        chunk_drawn: &|_| false,
     };
     let mut set = |entity: Entity, visible: bool| {
         if let Ok((mut v, fade)) = visibility.get_mut(entity) {
@@ -912,6 +930,7 @@ mod tests {
             node_exists: existing,
             node_ready: &node_ready,
             chunk_ready: &chunk_ready,
+            chunk_drawn: &chunk_ready,
         })
     }
 
@@ -1057,6 +1076,27 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_loaded_chunks_neither_cover_nor_get_replaced() {
+        let anchor = chunk(0, 4, 0);
+        let layout = layout(2);
+        let selected = select_lods(anchor, layout, BAND);
+        let node = *selected.iter().find(|k| k.level == 1).unwrap();
+        // every chunk loaded, but none of them has anything to draw
+        let state = LodState {
+            anchor,
+            layout,
+            band: BAND,
+            selected: &selected,
+            node_exists: &|_| false,
+            node_ready: &|_| false,
+            chunk_ready: &|_| true,
+            chunk_drawn: &|_| false,
+        };
+        assert!(!state.covered_while_loading(node));
+        assert!(!super::replaces_loaded_chunks(node, state.chunk_drawn));
+    }
+
+    #[test]
     fn test_nodes_replacing_loaded_chunks_spawn_first() {
         let anchor = chunk(6, 4, 0);
         let selected = select_lods(anchor, layout(2), BAND);
@@ -1065,7 +1105,7 @@ mod tests {
         with_state(anchor, &selected, &exists, &ready, true, |s| {
             let mut queue = super::spawn_order(s, selected.iter().copied());
             let first = queue.pop().unwrap();
-            assert!(super::replaces_loaded_chunks(first, s.chunk_ready));
+            assert!(super::replaces_loaded_chunks(first, s.chunk_drawn));
         });
     }
 
