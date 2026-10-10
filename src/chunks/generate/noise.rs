@@ -29,16 +29,11 @@ pub fn world_noise(seed: u32) -> impl NoiseFn<f64, 2> + Send + Sync {
         .set_bounds(0.2, 1.0)
         .set_falloff(0.1);
 
-    // not wrapped in the noise crate's Cache combinator, which isn't Sync - it can't be
-    // shared across generation threads.
     Clamp::new(ScalePoint::new(combined).set_scale(scale))
         .set_lower_bound(0.0)
         .set_upper_bound(10.0)
 }
 
-// Sampled directly with no cache: region erosion is the only caller, and a shared cache
-// measured slower - its locking between generation threads cost more than the overlap
-// between neighbouring regions' samples saved.
 pub struct NoiseGenerator {
     source: Box<dyn NoiseFn<f64, 2> + Send + Sync>,
 }

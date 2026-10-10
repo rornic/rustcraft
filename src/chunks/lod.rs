@@ -29,19 +29,56 @@ use super::{
 };
 use crate::world::World;
 
-/// Chunks within this many chunks of the camera are drawn at full detail.
-pub const LOD0_DISTANCE: f32 = 32.0;
-// A node splits into its 8 children when the camera is closer than this many of its
-// own widths, so each LOD reaches twice as far as the one before it.
-const SPLIT_FACTOR: f32 = LOD0_DISTANCE / 2.0;
+/// How the world is split into detail levels, set from the renderer settings.
+#[derive(Debug, Copy, Clone)]
+pub struct LodLayout {
+    /// Chunks within this many chunks of the camera are drawn at full detail.
+    pub full_detail_distance: f32,
+    pub max_level: u8,
+}
 
-// LOD tasks queued per generation thread. Kept small so full-detail chunk tasks, which
-// share the task pool, aren't left queued behind a long backlog of distant nodes.
+impl LodLayout {
+    /// Uses the fewest LOD levels that draw terrain out to `render_distance` chunks.
+    pub fn new(full_detail_distance: u32, render_distance: u32) -> Self {
+        let mut layout = Self {
+            full_detail_distance: full_detail_distance.max(1) as f32,
+            max_level: 0,
+        };
+        while layout.render_distance() < render_distance as f32 {
+            layout.max_level += 1;
+        }
+        layout
+    }
+
+    /// How far, in chunks, terrain is drawn.
+    pub fn render_distance(self) -> f32 {
+        self.full_detail_distance * (1u32 << self.max_level) as f32
+    }
+
+    /// Whether `key` is drawn as its 8 children: each LOD reaches twice as far as the last.
+    pub fn splits(self, key: LodKey, anchor: ChunkCoordinate) -> bool {
+        key.level > 0 && key.distance(anchor) < self.full_detail_distance / 2.0 * key.width() as f32
+    }
+
+    /// Whether a chunk is close enough to be drawn at full detail.
+    pub fn full_detail(self, chunk: ChunkCoordinate, anchor: ChunkCoordinate) -> bool {
+        self.splits(LodKey::containing(chunk, 1), anchor)
+    }
+
+    /// How far full-detail chunks reach: a level-1 node in range, plus its diagonal.
+    pub fn full_detail_reach(self) -> u32 {
+        (self.full_detail_distance + 2.0 * 3f32.sqrt()).ceil() as u32
+    }
+
+    /// Where fog starts, in blocks: the edge of the full-detail area.
+    pub fn fog_start(self) -> f32 {
+        self.full_detail_distance * CHUNK_SIZE as f32
+    }
+}
+
 const LOD_TASKS_PER_THREAD: usize = 4;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
-/// An octree node at `level`, covering `2^level` chunks per side. Level 0 is a single
-/// chunk; `coord` is in units of the node's own width.
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct LodKey {
     pub level: u8,
@@ -106,33 +143,8 @@ impl LodKey {
         let max = min + Vec3::splat(self.width() as f32);
         (min - point).max(point - max).max(Vec3::ZERO).length()
     }
-
-    pub fn splits(self, anchor: ChunkCoordinate) -> bool {
-        self.level > 0 && self.distance(anchor) < SPLIT_FACTOR * self.width() as f32
-    }
 }
 
-/// How far, in chunks, terrain is drawn with LOD levels up to `max_level`.
-pub fn lod_render_distance(max_level: u8) -> f32 {
-    LOD0_DISTANCE * (1u32 << max_level) as f32
-}
-
-/// The fewest LOD levels needed to draw terrain out to `render_distance` chunks.
-pub fn max_level_for(render_distance: u32) -> u8 {
-    let mut level = 0;
-    while lod_render_distance(level) < render_distance as f32 {
-        level += 1;
-    }
-    level
-}
-
-/// Whether a chunk is close enough to be drawn at full detail.
-pub fn lod0_wanted(chunk: ChunkCoordinate, anchor: ChunkCoordinate) -> bool {
-    LodKey::containing(chunk, 1).splits(anchor)
-}
-
-/// The chunk rows, as `min..max` chunk y, that LOD nodes are generated for. Terrain
-/// never reaches outside them, so nodes above or below would always be empty.
 #[derive(Debug, Copy, Clone)]
 pub struct LodBand {
     pub min_y: i64,
@@ -147,14 +159,15 @@ impl LodBand {
 }
 
 /// The LOD nodes to draw around `anchor`, leaving out the area drawn at full detail.
-pub fn select_lods(anchor: ChunkCoordinate, max_level: u8, band: LodBand) -> HashSet<LodKey> {
+pub fn select_lods(anchor: ChunkCoordinate, layout: LodLayout, band: LodBand) -> HashSet<LodKey> {
     let mut selected = HashSet::new();
+    let max_level = layout.max_level;
     if max_level == 0 {
         return selected;
     }
 
     let width = 1i64 << max_level;
-    let range = lod_render_distance(max_level);
+    let range = layout.render_distance();
     let reach = (range / width as f32).ceil() as i64 + 1;
     let centre = anchor.0.div_euclid(I64Vec3::splat(width));
     for x in -reach..=reach {
@@ -165,7 +178,7 @@ pub fn select_lods(anchor: ChunkCoordinate, max_level: u8, band: LodBand) -> Has
                     coord: I64Vec3::new(centre.x + x, y, centre.z + z),
                 };
                 if key.distance(anchor) < range {
-                    select_within(key, anchor, band, &mut selected);
+                    select_within(key, anchor, layout, band, &mut selected);
                 }
             }
         }
@@ -176,17 +189,18 @@ pub fn select_lods(anchor: ChunkCoordinate, max_level: u8, band: LodBand) -> Has
 fn select_within(
     key: LodKey,
     anchor: ChunkCoordinate,
+    layout: LodLayout,
     band: LodBand,
     selected: &mut HashSet<LodKey>,
 ) {
     if !band.intersects(key) {
         return;
     }
-    if !key.splits(anchor) {
+    if !layout.splits(key, anchor) {
         selected.insert(key);
     } else if key.level > 1 {
         for child in key.children() {
-            select_within(child, anchor, band, selected);
+            select_within(child, anchor, layout, band, selected);
         }
     }
 }
@@ -194,7 +208,7 @@ fn select_within(
 /// What the retirement and visibility rules need to know about the current state.
 pub struct LodState<'a> {
     pub anchor: ChunkCoordinate,
-    pub max_level: u8,
+    pub layout: LodLayout,
     pub band: LodBand,
     pub selected: &'a HashSet<LodKey>,
     pub node_exists: &'a dyn Fn(LodKey) -> bool,
@@ -204,7 +218,7 @@ pub struct LodState<'a> {
 
 impl LodState<'_> {
     fn selected_ancestor(&self, mut key: LodKey) -> Option<LodKey> {
-        while key.level < self.max_level {
+        while key.level < self.layout.max_level {
             key = key.parent();
             if self.selected.contains(&key) {
                 return Some(key);
@@ -214,7 +228,7 @@ impl LodState<'_> {
     }
 
     fn has_existing_ancestor(&self, mut key: LodKey) -> bool {
-        while key.level < self.max_level {
+        while key.level < self.layout.max_level {
             key = key.parent();
             if (self.node_exists)(key) {
                 return true;
@@ -223,8 +237,6 @@ impl LodState<'_> {
         false
     }
 
-    /// Whether a node that's no longer selected can go without leaving a hole: the
-    /// node now covering its area is ready, or every node and chunk inside it is.
     pub fn can_retire(&self, key: LodKey) -> bool {
         match self.selected_ancestor(key) {
             Some(ancestor) => (self.node_ready)(ancestor),
@@ -236,7 +248,7 @@ impl LodState<'_> {
         if self.selected.contains(&key) {
             return (self.node_ready)(key);
         }
-        if !key.splits(self.anchor) {
+        if !self.layout.splits(key, self.anchor) {
             return true;
         }
         if key.level == 1 {
@@ -247,17 +259,13 @@ impl LodState<'_> {
             .all(|child| !self.band.intersects(child) || self.covered(child))
     }
 
-    /// Selected nodes stay hidden while a coarser node they're replacing is still up,
-    /// so the swap happens all at once. Nodes on their way out stay visible.
     pub fn node_visible(&self, key: LodKey) -> bool {
         !self.selected.contains(&key) || !self.has_existing_ancestor(key)
     }
 
-    /// Full-detail chunks follow the same rule as nodes. A chunk that's no longer
-    /// wanted stays loaded as neighbour data, hidden once the node covering it is ready.
     pub fn chunk_visible(&self, chunk: ChunkCoordinate) -> bool {
         let key = LodKey::containing(chunk, 0);
-        if lod0_wanted(chunk, self.anchor) {
+        if self.layout.full_detail(chunk, self.anchor) {
             !self.has_existing_ancestor(key)
         } else {
             !self
@@ -266,17 +274,12 @@ impl LodState<'_> {
         }
     }
 
-    /// How far out, in chunks, terrain is drawn without gaps: the distance to the
-    /// nearest selected node that isn't ready and has nothing drawn in its place yet, or
-    /// the full render distance once there are none. A node still covered by the
-    /// coarser or finer terrain it's replacing doesn't count, so moving around doesn't
-    /// pull this in - only areas that haven't loaded at all do.
     pub fn loaded_distance(&self) -> f32 {
         self.selected
             .iter()
             .filter(|&&key| !(self.node_ready)(key) && !self.covered_while_loading(key))
             .map(|key| key.distance(self.anchor))
-            .fold(lod_render_distance(self.max_level), f32::min)
+            .fold(self.layout.render_distance(), f32::min)
     }
 
     fn covered_while_loading(&self, key: LodKey) -> bool {
@@ -303,7 +306,9 @@ pub struct GenerateLodMesh {
 
 #[derive(Resource)]
 pub struct LodLoader {
-    max_level: u8,
+    layout: LodLayout,
+    // LOD levels from here out are drawn as a smooth surface instead of blocks
+    smooth_level: u8,
     band: LodBand,
     anchor: Option<ChunkCoordinate>,
     selected: HashSet<LodKey>,
@@ -320,13 +325,15 @@ pub struct LodLoader {
 
 impl LodLoader {
     pub fn new(
-        max_level: u8,
+        layout: LodLayout,
+        smooth_level: u8,
         world_height: u64,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
     ) -> Self {
         Self {
-            max_level,
+            layout,
+            smooth_level,
             band: LodBand {
                 min_y: 0,
                 max_y: (world_height as i64 + CHUNK_SIZE as i64 - 1) / CHUNK_SIZE as i64,
@@ -356,7 +363,7 @@ pub fn update_lod_selection(mut lods: ResMut<LodLoader>, chunk_loader: Res<Chunk
         return;
     }
 
-    let selected = select_lods(anchor, lods.max_level, lods.band);
+    let selected = select_lods(anchor, lods.layout, lods.band);
     let mut to_spawn: Vec<LodKey> = selected
         .iter()
         .filter(|&key| !lods.nodes.contains_key(key))
@@ -396,11 +403,13 @@ pub fn spawn_lods(
         }
 
         let regions = world.region_store.clone();
+        let smooth_level = lods.smooth_level;
         let entity = commands
             .spawn((
                 LodNode { key },
                 GenerateLodMesh {
-                    task: task_pool.spawn(async move { generate_lod_mesh(regions, key) }),
+                    task: task_pool
+                        .spawn(async move { generate_lod_mesh(regions, key, smooth_level) }),
                 },
                 lod_transform(key),
                 Visibility::Hidden,
@@ -411,8 +420,6 @@ pub fn spawn_lods(
     }
 }
 
-// Mesh cells are centred on whole coordinates, like full-detail blocks, so the node is
-// shifted to line its cells up with the blocks they cover.
 fn lod_transform(key: LodKey) -> Transform {
     let cell = key.cell_size() as f32;
     Transform::from_translation(key.min_block().as_vec3() + Vec3::splat(0.5 * cell - 0.5))
@@ -489,7 +496,7 @@ pub fn retire_lods(
         };
         let state = LodState {
             anchor,
-            max_level: lods.max_level,
+            layout: lods.layout,
             band: lods.band,
             selected: &lods.selected,
             node_exists: &node_exists,
@@ -509,8 +516,6 @@ pub fn retire_lods(
     let lods = &mut *lods;
     lods.retiring
         .retain(|key| !retired.contains(key) && !lods.selected.contains(key));
-    // Leaving `nodes` straight away lets whatever replaces a node start fading in this
-    // frame, while the node itself fades out.
     for key in retired {
         if let Some(entity) = lods.nodes.remove(&key) {
             let visible = visibility
@@ -545,7 +550,7 @@ pub fn refresh_lod_visibility(
     let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
     let state = LodState {
         anchor,
-        max_level: lods.max_level,
+        layout: lods.layout,
         band: lods.band,
         selected: &lods.selected,
         node_exists: &node_exists,
@@ -604,23 +609,11 @@ pub fn refresh_lod_visibility(
     lods.dirty_areas.clear();
 }
 
-/// Where fog starts, in blocks: the edge of the full-detail area, so nearby terrain is
-/// never hazed - including at spawn, before anything further out has loaded.
-pub const FOG_START: f32 = LOD0_DISTANCE * CHUNK_SIZE as f32;
-// The shortest distance fog thickens over, so it never becomes a hard wall right at the
-// full-detail edge while the first LODs are still loading.
 const FOG_MIN_DEPTH: f32 = 128.0;
 const FOG_UPDATE_INTERVAL: f32 = 0.25;
-// How quickly fog eases towards its target, in seconds: in quickly when an unloaded gap
-// appears closer, out gently as terrain loads.
 const FOG_PULL_IN_SECONDS: f32 = 0.3;
 const FOG_EASE_OUT_SECONDS: f32 = 2.0;
 
-/// Fades fog in linearly from the edge of the full-detail area to fully opaque where
-/// terrain has loaded to, so distant terrain always fades into the horizon instead of
-/// ending at a hard edge, however far render distance reaches or however much of it
-/// has loaded. Runs before the underwater effects, which replace the fog while the
-/// camera is in water.
 #[allow(clippy::too_many_arguments)]
 pub fn update_horizon_fog(
     lods: Res<LodLoader>,
@@ -650,7 +643,7 @@ pub fn update_horizon_fog(
         };
         let state = LodState {
             anchor,
-            max_level: lods.max_level,
+            layout: lods.layout,
             band: lods.band,
             selected: &lods.selected,
             node_exists: &node_exists,
@@ -658,7 +651,7 @@ pub fn update_horizon_fog(
             chunk_ready: &chunk_ready,
         };
         let loaded = state.loaded_distance() * CHUNK_SIZE as f32;
-        *target = Some(loaded.max(FOG_START + FOG_MIN_DEPTH));
+        *target = Some(loaded.max(lods.layout.fog_start() + FOG_MIN_DEPTH));
     }
 
     let target = target.unwrap();
@@ -673,7 +666,7 @@ pub fn update_horizon_fog(
 
     if let Ok(mut fog) = fog.get_single_mut() {
         fog.falloff = FogFalloff::Linear {
-            start: FOG_START,
+            start: lods.layout.fog_start(),
             end: eased,
         };
     }
@@ -686,15 +679,20 @@ mod tests {
         utils::{HashMap, HashSet},
     };
 
-    use super::{
-        lod0_wanted, lod_render_distance, max_level_for, select_lods, LodBand, LodKey, LodState,
-    };
+    use super::{select_lods, LodBand, LodKey, LodLayout, LodState};
     use crate::chunks::chunk::ChunkCoordinate;
 
     const BAND: LodBand = LodBand {
         min_y: 0,
         max_y: 16,
     };
+
+    fn layout(max_level: u8) -> LodLayout {
+        LodLayout {
+            full_detail_distance: 32.0,
+            max_level,
+        }
+    }
 
     fn chunk(x: i64, y: i64, z: i64) -> ChunkCoordinate {
         ChunkCoordinate(I64Vec3::new(x, y, z))
@@ -747,26 +745,35 @@ mod tests {
     }
 
     #[test]
-    fn test_max_level_for() {
-        assert_eq!(0, max_level_for(32));
-        assert_eq!(1, max_level_for(33));
-        assert_eq!(2, max_level_for(128));
-        assert_eq!(128.0, lod_render_distance(2));
+    fn test_layout_uses_fewest_levels_reaching_render_distance() {
+        assert_eq!(0, LodLayout::new(32, 32).max_level);
+        assert_eq!(1, LodLayout::new(32, 33).max_level);
+        assert_eq!(2, LodLayout::new(32, 128).max_level);
+        assert_eq!(3, LodLayout::new(16, 128).max_level);
+        assert_eq!(128.0, layout(2).render_distance());
     }
 
     #[test]
-    fn test_lod0_wanted_reaches_lod0_distance() {
+    fn test_full_detail_reaches_full_detail_distance() {
         let anchor = chunk(0, 5, 0);
-        assert!(lod0_wanted(chunk(0, 5, 0), anchor));
-        assert!(lod0_wanted(chunk(31, 5, 0), anchor));
-        assert!(!lod0_wanted(chunk(36, 5, 0), anchor));
+        assert!(layout(2).full_detail(chunk(0, 5, 0), anchor));
+        assert!(layout(2).full_detail(chunk(31, 5, 0), anchor));
+        assert!(!layout(2).full_detail(chunk(36, 5, 0), anchor));
     }
 
-    // Every chunk in the band within range is drawn exactly once: at full detail, or
-    // by exactly one selected node.
+    #[test]
+    fn test_full_detail_distance_comes_from_layout() {
+        let anchor = chunk(0, 5, 0);
+        let near = LodLayout::new(16, 128);
+        assert!(near.full_detail(chunk(15, 5, 0), anchor));
+        assert!(!near.full_detail(chunk(20, 5, 0), anchor));
+        assert_eq!(16.0 * 16.0, near.fog_start());
+        assert_eq!(20, near.full_detail_reach());
+    }
+
     fn assert_exact_cover(anchor: ChunkCoordinate, max_level: u8) {
-        let selected = select_lods(anchor, max_level, BAND);
-        let range = lod_render_distance(max_level) as i64;
+        let selected = select_lods(anchor, layout(max_level), BAND);
+        let range = layout(max_level).render_distance() as i64;
         for x in -range..range {
             for z in -range..range {
                 for y in BAND.min_y..BAND.max_y {
@@ -774,9 +781,11 @@ mod tests {
                     let covering = (1..=max_level)
                         .filter(|&level| selected.contains(&LodKey::containing(c, level)))
                         .count()
-                        + lod0_wanted(c, anchor) as usize;
+                        + layout(max_level).full_detail(c, anchor) as usize;
                     assert!(covering <= 1, "chunk {:?} drawn {covering} times", c.0);
-                    if LodKey::containing(c, 0).distance(anchor) < lod_render_distance(max_level) {
+                    if LodKey::containing(c, 0).distance(anchor)
+                        < layout(max_level).render_distance()
+                    {
                         assert_eq!(1, covering, "chunk {:?} not drawn", c.0);
                     }
                 }
@@ -794,7 +803,7 @@ mod tests {
     #[test]
     fn test_selection_neighbours_differ_by_at_most_one_level() {
         let anchor = chunk(3, 4, -2);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         let level_at = |c: ChunkCoordinate| -> u8 {
             (1..=3)
                 .find(|&level| selected.contains(&LodKey::containing(c, level)))
@@ -811,8 +820,6 @@ mod tests {
         }
     }
 
-    // Runs `check` against a state where `existing` nodes exist, nodes in `ready` are
-    // ready and every chunk's readiness is `chunks_ready`.
     fn with_state<R>(
         anchor: ChunkCoordinate,
         selected: &HashSet<LodKey>,
@@ -825,7 +832,7 @@ mod tests {
         let chunk_ready = |_| chunks_ready;
         check(&LodState {
             anchor,
-            max_level: 3,
+            layout: layout(3),
             band: BAND,
             selected,
             node_exists: existing,
@@ -838,7 +845,7 @@ mod tests {
     fn test_merged_node_retires_once_parent_ready() {
         // far enough that the level-3 node is drawn whole
         let far = chunk(200, 4, 0);
-        let selected = select_lods(far, 3, BAND);
+        let selected = select_lods(far, layout(3), BAND);
         let child = LodKey {
             level: 1,
             coord: I64Vec3::new(0, 2, 0),
@@ -856,7 +863,7 @@ mod tests {
     #[test]
     fn test_split_node_retires_once_children_ready() {
         let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         // close enough to split, far enough that part of it is drawn by level-1 nodes
         let split = LodKey {
             level: 3,
@@ -899,7 +906,7 @@ mod tests {
     #[test]
     fn test_out_of_range_node_retires_immediately() {
         let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         let far = LodKey {
             level: 3,
             coord: I64Vec3::new(100, 0, 0),
@@ -918,11 +925,11 @@ mod tests {
     #[test]
     fn test_loaded_distance_is_full_range_once_everything_is_ready() {
         let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         let none = |_| false;
         let all_ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
         assert_eq!(
-            lod_render_distance(3),
+            layout(3).render_distance(),
             with_state(anchor, &selected, &none, &all_ready, true, |s| s
                 .loaded_distance())
         );
@@ -931,7 +938,7 @@ mod tests {
     #[test]
     fn test_loaded_distance_stops_at_nearest_unloaded_gap() {
         let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         let gap = *selected.iter().find(|k| k.level == 3).unwrap();
         let none = |_| false;
         let mut ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
@@ -946,7 +953,7 @@ mod tests {
     #[test]
     fn test_loaded_distance_ignores_nodes_still_covered_by_what_they_replace() {
         let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         let node = *selected.iter().find(|k| k.level == 2).unwrap();
         let mut ready: HashMap<_, _> = selected.iter().map(|&k| (k, true)).collect();
         ready.insert(node, false);
@@ -955,7 +962,7 @@ mod tests {
         let parent = node.parent();
         let parent_exists = move |k| k == parent;
         assert_eq!(
-            lod_render_distance(3),
+            layout(3).render_distance(),
             with_state(anchor, &selected, &parent_exists, &ready, true, |s| s
                 .loaded_distance())
         );
@@ -963,7 +970,7 @@ mod tests {
         let children = node.children();
         let children_exist = move |k| children.contains(&k);
         assert_eq!(
-            lod_render_distance(3),
+            layout(3).render_distance(),
             with_state(anchor, &selected, &children_exist, &ready, true, |s| s
                 .loaded_distance())
         );
@@ -972,7 +979,7 @@ mod tests {
     #[test]
     fn test_selected_node_hidden_while_coarser_node_remains() {
         let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         let node = *selected.iter().find(|k| k.level == 2).unwrap();
         let parent = node.parent();
 
@@ -1003,9 +1010,9 @@ mod tests {
     #[test]
     fn test_unwanted_chunk_hidden_once_covering_node_ready() {
         let anchor = chunk(0, 4, 0);
-        let selected = select_lods(anchor, 3, BAND);
+        let selected = select_lods(anchor, layout(3), BAND);
         let c = chunk(48, 4, 0);
-        assert!(!lod0_wanted(c, anchor));
+        assert!(!layout(3).full_detail(c, anchor));
         let cover = (1..=3)
             .map(|level| LodKey::containing(c, level))
             .find(|k| selected.contains(k))

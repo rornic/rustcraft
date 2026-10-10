@@ -14,16 +14,12 @@ use bevy::{
 
 use super::material::{ChunkMaterial, WaterMaterial};
 
-pub const FADE_SECONDS: f32 = 0.6;
 // One step per level of the shaders' 4x4 dither pattern.
 const FADE_STEPS: usize = 16;
 
 /// The dither window that draws every pixel.
 pub const FULLY_VISIBLE: Vec4 = Vec4::new(0.0, 1.0, 0.0, 0.0);
 
-// Fading in draws a growing share of the dither pattern from the bottom, fading out
-// the complementary share from the top, so an incoming and outgoing mesh at the same
-// step never draw the same pixel.
 fn fade_window(step: usize, out: bool) -> Vec4 {
     let shown = (step + 1) as f32 / FADE_STEPS as f32;
     if out {
@@ -33,10 +29,9 @@ fn fade_window(step: usize, out: bool) -> Vec4 {
     }
 }
 
-/// A copy of the terrain and water materials for every step of a fade in and out, so
-/// fading only swaps material handles and meshes keep sharing materials.
 #[derive(Resource)]
 pub struct FadeMaterials {
+    seconds: f32,
     chunk: Handle<ChunkMaterial>,
     water: Handle<WaterMaterial>,
     // indexed [fading out as usize][step]
@@ -46,6 +41,7 @@ pub struct FadeMaterials {
 
 impl FadeMaterials {
     pub fn new(
+        seconds: f32,
         chunk: Handle<ChunkMaterial>,
         water: Handle<WaterMaterial>,
         chunk_materials: &mut Assets<ChunkMaterial>,
@@ -74,6 +70,7 @@ impl FadeMaterials {
                 .collect()
         });
         Self {
+            seconds,
             chunk,
             water,
             chunk_steps,
@@ -112,8 +109,6 @@ pub fn set_shown(
     });
 }
 
-/// Fades `entity` out and then despawns it, or despawns it straight away if it isn't
-/// being drawn.
 pub fn fade_out_and_despawn(commands: &mut Commands, entity: Entity, visible: bool, now: f32) {
     if visible {
         commands.entity(entity).insert(Fade {
@@ -137,7 +132,7 @@ pub fn apply_fades(
     let now = time.elapsed_secs();
 
     for (entity, fade, mut visibility, children) in fading.iter_mut() {
-        let progress = (now - fade.start) / FADE_SECONDS;
+        let progress = (now - fade.start) / materials.seconds.max(f32::EPSILON);
         let (chunk, water) = if progress >= 1.0 {
             if fade.out && fade.despawn {
                 commands.entity(entity).despawn_recursive();
@@ -191,7 +186,11 @@ mod tests {
         for step in 0..FADE_STEPS {
             let (fade_in, fade_out) = (fade_window(step, false), fade_window(step, true));
             for t in thresholds() {
-                assert_ne!(draws(fade_in, t), draws(fade_out, t), "step {step} threshold {t}");
+                assert_ne!(
+                    draws(fade_in, t),
+                    draws(fade_out, t),
+                    "step {step} threshold {t}"
+                );
             }
         }
     }

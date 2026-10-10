@@ -12,21 +12,11 @@ use crate::util::primitives::Vertex;
 const CELLS: i32 = CHUNK_SIZE as i32;
 // Corners sampled per side: every cell corner plus one extra ring for normals.
 const CORNERS: i32 = CELLS + 3;
-// Cells sampled per side for colour: every cell plus a ring around the node, so
-// colours blend across node edges.
 const COLOUR_CELLS: i32 = CELLS + 2;
-// How far below a node's outer edge its skirt hangs, in cells. Covers the gap where a
-// neighbour at another LOD puts the surface at a slightly different height.
 const SKIRT_CELLS: f32 = 1.0;
-// How much darker a surface gets as it steepens. Up close a slope is a staircase of
-// lit tops and darker, ambient-occluded sides; this stands in for those sides.
 const SLOPE_SHADE: f32 = 0.7;
-// Smooth terrain is coloured entirely by its vertex colours. A negative u tells the
-// terrain shader to skip the block texture.
 const UNTEXTURED_UV: [f32; 2] = [-1.0, 0.0];
 
-// Each block's average texture colour in linear RGB, measured from blocks.png. From
-// this far away a block reads as its overall colour rather than its texture.
 fn block_colour(block: BlockType) -> Vec3 {
     match block {
         BlockType::Stone => Vec3::new(0.118, 0.118, 0.118),
@@ -43,14 +33,10 @@ fn water_surface_y() -> f32 {
     (WATER_LEVEL - 1) as f32 + WATER_TOP
 }
 
-// Blocks are centred on whole coordinates, so a column `height` blocks tall has its
-// top face half a block below `height`.
 fn surface_y(height: f32) -> f32 {
     height.max(SOLID_FLOOR as f32) - 0.5
 }
 
-/// The terrain surface across one LOD node's footprint: its height at every cell
-/// corner, and the block on top of every cell.
 pub(super) struct Surface {
     corners: Vec<f32>,
     blocks: Vec<BlockType>,
@@ -106,8 +92,6 @@ impl Surface {
         self.blocks[((i + 1) * COLOUR_CELLS + j + 1) as usize]
     }
 
-    // The average colour of the four cells meeting at a corner, so colours blend
-    // across the surface instead of changing in hard-edged squares.
     fn corner_colour(&self, i: i32, j: i32) -> Vec3 {
         (block_colour(self.block(i - 1, j - 1))
             + block_colour(self.block(i, j - 1))
@@ -117,8 +101,6 @@ impl Surface {
     }
 }
 
-// The world heights a node spans. Nodes stacked on top of each other split the surface
-// between them by which one each cell's centre falls in.
 struct NodeRange {
     min: f32,
     max: f32,
@@ -138,8 +120,6 @@ impl NodeRange {
     }
 }
 
-/// Meshes the part of `surface` that falls inside `key`'s node as a smooth heightfield,
-/// in the node's cell coordinates like a blocky LOD mesh.
 pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
     let cell = key.cell_size() as f32;
     let base = key.min_block().as_vec3();
@@ -182,8 +162,6 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
                     cells.map(|(a, b)| colour(a, b)),
                 );
 
-                // A skirt down each outer edge of the node. Where a node stacked above
-                // or below takes over the surface the two meet exactly, so no skirt.
                 for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
                     if in_footprint(i + di, j + dj) {
                         continue;
@@ -218,8 +196,6 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
                 .fold(f32::INFINITY, f32::min);
             if range.contains(water_y) && lowest < water_y {
                 let depth = (water_y - surface.cell_centre(i, j)).max(0.0);
-                // R/G/B/A: shore, depth / CHUNK_SIZE, is-top, shore distance - see the
-                // full-detail water mesh
                 let colour = [0.0, depth / CHUNK_SIZE as f32, 1.0, 1.0];
                 let cells = [(i, j + 1), (i, j), (i + 1, j + 1), (i + 1, j)];
                 push_quad(
@@ -241,10 +217,6 @@ pub(super) fn mesh_surface(surface: &Surface, key: LodKey) -> ChunkMeshes {
     }
 }
 
-// Pushes a quad laid out like the cube's faces: triangles (0, 1, 2) and (2, 1, 3).
-// Terrain is drawn with front faces culled, so a face points away from the side its
-// corners wind anticlockwise on - the corners are swapped if needed to face `outward`.
-// `uv` is the uv and atlas tile every corner samples.
 fn push_quad(
     buffers: &mut MeshBuffers,
     mut corners: [Vec3; 4],
@@ -396,8 +368,6 @@ mod tests {
         // node(0) draws the 8 columns of low ground, node(1) the cliff top above it
         let low = mesh_surface(&cliff(), node(0)).opaque;
         let owned = 8 * CELLS;
-        // skirts only on the node's outer edges: the 16 cells along x = 0, and 8 cells
-        // along each of the two z edges - none along the cliff
         let skirts = CELLS + 2 * 8;
         assert_eq!((owned + skirts) as usize * 4, low.count_vertices());
     }

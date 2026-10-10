@@ -10,10 +10,6 @@
 @group(2) @binding(1) var material_color_texture: texture_2d<f32>;
 @group(2) @binding(2) var material_color_sampler: sampler;
 
-// Which part of a 4x4 ordered-dither pattern this material draws: a pixel is kept
-// when its threshold falls in [x, y). (0, 1) draws everything; a LOD swap fades the
-// incoming mesh in over (0, p) and the outgoing one out over (p, 1), so the two
-// dissolve into each other without ever drawing the same pixel.
 @group(2) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 fn dither_threshold(frag_coord: vec2<f32>) -> f32 {

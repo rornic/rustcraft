@@ -11,8 +11,6 @@ use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 // concern. Retuned once real access patterns are observed.
 const RESIDENT_REGION_CAP: usize = 64;
 
-/// A cache size that keeps every region within `radius_blocks` of the camera resident,
-/// so generating distant LOD nodes doesn't evict and re-erode regions still in view.
 pub fn resident_cap_for(radius_blocks: i64) -> usize {
     let across = ((2 * radius_blocks + REGION_SIZE - 1) / REGION_SIZE) as usize + 2;
     (across * across).max(RESIDENT_REGION_CAP)
@@ -106,10 +104,6 @@ impl RegionStore {
         .clone()
     }
 
-    /// A reader for many height lookups in a row, such as one chunk's worth. Going
-    /// through the shared region cache takes its lock, so the reader holds on to the
-    /// few regions it's using and only goes back to the cache when it moves into
-    /// another one.
     pub fn sampler(&self) -> HeightSampler<'_> {
         HeightSampler {
             store: self,
@@ -204,7 +198,9 @@ mod tests {
         for (x, z) in [(-1, -1), (0, -1), (-1, 0), (0, 0), (255, 300), (-1, -1)] {
             let coord = RegionCoord::from_world(x, z);
             let origin = coord.origin();
-            let expected = store.get_region(coord).height_at(x - origin.x, z - origin.y) as f64;
+            let expected = store
+                .get_region(coord)
+                .height_at(x - origin.x, z - origin.y) as f64;
             assert_eq!(expected, sampler.height(x, z));
         }
         assert!(sampler.recent.len() <= SAMPLER_REGIONS);

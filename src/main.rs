@@ -13,8 +13,8 @@ use rustcraft::chunks::{
     },
     fade::{apply_fades, FadeMaterials, FULLY_VISIBLE},
     lod::{
-        load_lods, lod_render_distance, max_level_for, refresh_lod_visibility, retire_lods,
-        spawn_lods, update_horizon_fog, update_lod_selection, LodLoader, FOG_START,
+        load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_horizon_fog,
+        update_lod_selection, LodLayout, LodLoader,
     },
     material::{ChunkMaterial, WaterMaterial},
 };
@@ -33,9 +33,13 @@ fn setup_scene(
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
-    let max_lod_level = max_level_for(settings.renderer.render_distance);
-    let render_distance = lod_render_distance(max_lod_level) as u32;
-    info!("drawing terrain {render_distance} chunks out with {max_lod_level} LOD levels");
+    let renderer = settings.renderer;
+    let layout = LodLayout::new(renderer.full_detail_distance, renderer.render_distance);
+    let render_distance = layout.render_distance() as u32;
+    info!(
+        "drawing terrain {render_distance} chunks out with {} LOD levels",
+        layout.max_level
+    );
 
     let game_world = rustcraft::world::World::new(render_distance);
     let world_height = game_world.height;
@@ -53,9 +57,6 @@ fn setup_scene(
         })
         .id();
 
-    // Fog fades in from the edge of the full-detail area, so distant terrain fades into
-    // the sky like a horizon. `update_horizon_fog` moves where it's fully opaque to
-    // however far terrain has loaded; this is where it starts.
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
@@ -76,8 +77,8 @@ fn setup_scene(
             DistanceFog {
                 color: Color::srgb_u8(120, 224, 232),
                 falloff: FogFalloff::Linear {
-                    start: FOG_START,
-                    end: fog_distance.max(FOG_START + 1.0),
+                    start: layout.fog_start(),
+                    end: fog_distance.max(layout.fog_start() + 1.0),
                 },
                 ..default()
             },
@@ -106,18 +107,24 @@ fn setup_scene(
         fade: FULLY_VISIBLE,
     });
     commands.insert_resource(FadeMaterials::new(
+        renderer.lod_fade_seconds,
         chunk_material_handle.clone(),
         water_material_handle.clone(),
         &mut chunk_materials,
         &mut water_materials,
     ));
     commands.insert_resource(LodLoader::new(
-        max_lod_level,
+        layout,
+        renderer.smooth_lod_level,
         world_height,
         chunk_material_handle.clone(),
         water_material_handle.clone(),
     ));
-    commands.insert_resource(ChunkLoader::new(chunk_material_handle, water_material_handle));
+    commands.insert_resource(ChunkLoader::new(
+        layout,
+        chunk_material_handle,
+        water_material_handle,
+    ));
     commands.spawn(settings);
 }
 
@@ -128,9 +135,6 @@ fn main() {
                 .set(ImagePlugin::default_nearest())
                 .set(TaskPoolPlugin {
                     task_pool_options: TaskPoolOptions {
-                        // Bevy gives async compute 25% of cores (at most 4) by default,
-                        // but all terrain generation and meshing runs there, so it gets
-                        // 60% instead. Asset IO gets one thread and systems the rest.
                         io: TaskPoolThreadAssignmentPolicy {
                             min_threads: 1,
                             max_threads: 1,

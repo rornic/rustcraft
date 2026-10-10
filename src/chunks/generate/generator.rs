@@ -34,17 +34,11 @@ const FACE_TANGENTS: [(IVec3, IVec3); 6] = [
 ];
 const AO_STRENGTH: f32 = 0.5;
 
-// Every block below this height is solid whatever the heightmap says, and every
-// non-solid block below `WATER_LEVEL` is water.
 pub(super) const SOLID_FLOOR: i64 = 16;
 pub(super) const WATER_LEVEL: i64 = 32;
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
 pub(super) const WATER_TOP: f32 = 0.4;
-// LOD levels from here out are drawn as a smooth surface instead of blocks.
-const SMOOTH_LOD_LEVEL: u8 = 2;
 
-// The block meshing reads from: a cube of cells starting at the origin, plus whatever
-// lies just outside it for face culling, AO and shoreline sampling.
 trait BlockSource {
     fn block(&self, coord: IVec3) -> BlockType;
     fn non_air(&self) -> Vec<(IVec3, BlockType)>;
@@ -68,12 +62,8 @@ impl BlockSource for ChunkNeighbourhood<'_> {
     }
 }
 
-// How many cells above a padding column's solid cell are searched for open space
-// when deciding whether to expose it as a skirt.
 const SKIRT_CELLS: i32 = 2;
 
-// One LOD node's cells sampled straight from the heightmap, with a one-cell border on
-// every side so the node can be meshed without its neighbours' data.
 struct LodBlocks {
     size: i32,
     cells: Vec<BlockType>,
@@ -120,10 +110,6 @@ impl LodBlocks {
 }
 
 impl BlockSource for LodBlocks {
-    // A neighbouring node at a different LOD samples the surface at other points, so
-    // the two can disagree on height at their shared edge. Solid border cells near the
-    // surface read as the open block above them, so the node draws a short wall (a
-    // skirt) down its edge that covers the gap.
     fn block(&self, coord: IVec3) -> BlockType {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         let block = self.raw(coord);
@@ -160,8 +146,6 @@ fn is_solid(block: BlockType) -> bool {
     block.occlusion_weight() == 1.0
 }
 
-// The block at `world_y` in a column whose surface is at `column_height`. Shared by
-// full-detail chunks and LOD cells so both put terrain and water in the same places.
 pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
     if world_y < column_height.max(SOLID_FLOOR) {
         if world_y >= 90 && combined_gradient <= 2.0 {
@@ -428,10 +412,12 @@ pub fn generate_chunk_mesh(
     mesh_blocks(&source, 1)
 }
 
-// Meshes one LOD node, or returns None if it has nothing to draw. Mesh coordinates
-// are in cells, so the node's transform scales them up by `key.cell_size()`.
-pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
-    let meshes = if key.level >= SMOOTH_LOD_LEVEL {
+pub fn generate_lod_mesh(
+    regions: Arc<RegionStore>,
+    key: LodKey,
+    smooth_level: u8,
+) -> Option<ChunkMeshes> {
+    let meshes = if key.level >= smooth_level {
         mesh_surface(&Surface::sample(&regions, key), key)
     } else {
         mesh_blocks(&LodBlocks::sample(&regions, key), key.cell_size())
@@ -458,8 +444,7 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
     ];
 
     // Water's surface sits below a full block's height (see `cube_with_top`), so its
-    // top/side geometry is shorter than every other block's. The drop is divided by
-    // the cell size so the surface sits at the same height in blocks at every LOD.
+    // top/side geometry is shorter than every other block's.
     let water_cube_vertices =
         crate::util::primitives::cube_with_top(0.5 - (0.5 - WATER_TOP) / cell_size as f32);
     let water_face_vertices = [
