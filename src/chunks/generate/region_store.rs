@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
-use super::erosion::ErosionParams;
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 
@@ -18,13 +17,12 @@ pub fn resident_cap_for(radius_blocks: i64) -> usize {
 
 // Coalescing slot: many concurrent chunk-gen tasks may be the first to ask for the
 // same not-yet-computed region. Exactly one of them runs `compute_region`; the rest
-// await the same `OnceLock`, rather than each kicking off their own (expensive)
-// duplicate erosion pass.
+// await the same `OnceLock`, rather than each sampling the same noise again.
 type RegionSlot = Arc<OnceLock<Arc<Region>>>;
 
 // True LRU (eviction by *access* recency, not insertion order) - unlike the FIFO
 // point cache in `noise.rs`, evicting a region here means the next chunk near it
-// pays a full re-erosion, so recency matters. `cap` is small (64) so an O(n) scan to
+// pays to sample it again, so recency matters. `cap` is small (64) so an O(n) scan to
 // find the least-recently-used entry on eviction is cheap; a real LRU data
 // structure would be overkill at this size.
 struct RegionLru {
@@ -63,23 +61,19 @@ impl RegionLru {
 }
 
 pub struct RegionStore {
-    seed: u32,
     world_height: u64,
-    erosion_params: ErosionParams,
     noise: Arc<NoiseGenerator>,
     // Guards *which slots exist*, not each slot's contents - the OnceLock inside a
     // slot handles "many readers, exactly one writer" for that region's actual
     // compute, so this lock is only ever held briefly (get-or-insert + LRU touch),
-    // never across the expensive erosion call itself.
+    // never across the region's noise sampling itself.
     lru: RwLock<RegionLru>,
 }
 
 impl RegionStore {
-    pub fn new(seed: u32, world_height: u64, noise: Arc<NoiseGenerator>, erosion_params: ErosionParams) -> Self {
+    pub fn new(world_height: u64, noise: Arc<NoiseGenerator>) -> Self {
         Self {
-            seed,
             world_height,
-            erosion_params,
             noise,
             lru: RwLock::new(RegionLru::new(RESIDENT_REGION_CAP)),
         }
@@ -99,7 +93,7 @@ impl RegionStore {
     pub fn get_region(&self, coord: RegionCoord) -> Arc<Region> {
         let slot = self.lru.write().unwrap().get_or_insert(coord);
         slot.get_or_init(|| {
-            Arc::new(compute_region(&self.noise, self.seed, coord, self.world_height, &self.erosion_params))
+            Arc::new(compute_region(&self.noise, coord, self.world_height))
         })
         .clone()
     }
@@ -122,7 +116,7 @@ impl RegionStore {
         region.discharge_at(world_x - origin.x, world_z - origin.y) as f64
     }
 
-    // Central-difference gradient over the eroded heightmap - same shape as
+    // Central-difference gradient over the heightmap - same shape as
     // `generate_chunk`'s previous inline gradient computation, but reading
     // `get_height` (already in absolute block-height units) instead of raw noise.
     pub fn get_gradient(&self, world_x: i64, world_z: i64) -> (f64, f64) {
@@ -147,7 +141,7 @@ impl HeightSampler<'_> {
             .height_at(world_x - origin.x, world_z - origin.y) as f64
     }
 
-    // Central-difference gradient over the eroded heightmap, in block-height units.
+    // Central-difference gradient over the heightmap, in block-height units.
     pub fn gradient(&mut self, world_x: i64, world_z: i64) -> (f64, f64) {
         let gradient_x = self.height(world_x + 1, world_z) - self.height(world_x - 1, world_z);
         let gradient_z = self.height(world_x, world_z + 1) - self.height(world_x, world_z - 1);
@@ -187,12 +181,7 @@ mod tests {
 
     #[test]
     fn test_sampler_matches_region_heights_across_region_corners() {
-        let store = RegionStore::new(
-            1,
-            256,
-            Arc::new(NoiseGenerator::new(1)),
-            ErosionParams { droplet_count: 50, ..ErosionParams::default() },
-        );
+        let store = RegionStore::new(256, Arc::new(NoiseGenerator::new(1)));
         let mut sampler = store.sampler();
         // a block either side of the corner where regions (-1..0, -1..0) meet
         for (x, z) in [(-1, -1), (0, -1), (-1, 0), (0, 0), (255, 300), (-1, -1)] {
@@ -208,12 +197,7 @@ mod tests {
 
     #[test]
     fn test_get_region_caches_repeated_lookups() {
-        let store = RegionStore::new(
-            1,
-            256,
-            Arc::new(NoiseGenerator::new(1)),
-            ErosionParams { droplet_count: 50, ..ErosionParams::default() },
-        );
+        let store = RegionStore::new(256, Arc::new(NoiseGenerator::new(1)));
         let coord = RegionCoord(I64Vec2::new(0, 0));
 
         let first = store.get_region(coord);
@@ -223,16 +207,10 @@ mod tests {
 
     #[test]
     fn test_concurrent_get_region_computes_once() {
-        // Uses a tiny droplet count so this test stays fast even though it's
-        // exercising real `compute_region` work, not a mock - the property under
+        // Exercises real `compute_region` work, not a mock - the property under
         // test (every caller observes the same computed Region under contention)
         // only means anything against the real coalescing path.
-        let store = Arc::new(RegionStore::new(
-            1,
-            256,
-            Arc::new(NoiseGenerator::new(1)),
-            ErosionParams { droplet_count: 50, ..ErosionParams::default() },
-        ));
+        let store = Arc::new(RegionStore::new(256, Arc::new(NoiseGenerator::new(1))));
         let coord = RegionCoord(I64Vec2::new(5, 5));
         let thread_count = 8;
         let barrier = Arc::new(Barrier::new(thread_count));

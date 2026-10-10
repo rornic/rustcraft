@@ -7,7 +7,7 @@ use super::generator::WATER_LEVEL;
 pub const WORLD_SIZE: i64 = 32_768;
 pub const WORLD_HALF_SIZE: i64 = WORLD_SIZE / 2;
 
-// Leaves headroom under the 512 block world height for erosion deposits.
+// A little headroom under the 512 block world height.
 const MAX_HEIGHT: f64 = 496.0;
 
 // Each field gets its own block of seeds, since a fractal seeds its octaves seed, seed+1, ...

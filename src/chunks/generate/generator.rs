@@ -807,7 +807,6 @@ mod tests {
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
     use crate::chunks::generate::region_store::RegionStore;
-    use crate::chunks::generate::erosion::ErosionParams;
     use crate::chunks::lod::LodKey;
 
     fn no_neighbors() -> [Option<Arc<ChunkData>>; 26] {
@@ -931,15 +930,7 @@ mod tests {
     }
 
     fn test_regions() -> Arc<RegionStore> {
-        Arc::new(RegionStore::new(
-            3,
-            256,
-            Arc::new(NoiseGenerator::new(3)),
-            ErosionParams {
-                droplet_count: 50,
-                ..ErosionParams::default()
-            },
-        ))
+        Arc::new(RegionStore::new(256, Arc::new(NoiseGenerator::new(3))))
     }
 
     #[test]
@@ -1165,7 +1156,7 @@ mod tests {
             }
         }
 
-        let regions = Arc::new(RegionStore::new(42, 256, noise, ErosionParams::default()));
+        let regions = Arc::new(RegionStore::new(512, noise));
         let start = std::time::Instant::now();
         let data: HashMap<ChunkCoordinate, Arc<ChunkData>> = coords
             .iter()

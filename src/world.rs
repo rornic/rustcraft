@@ -6,7 +6,6 @@ use bevy::{
 };
 
 use crate::block::BlockType;
-use crate::chunks::generate::erosion::ErosionParams;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 
@@ -35,7 +34,7 @@ impl World {
             height,
             chunks,
             region_store: Arc::new(
-                RegionStore::new(seed, height, noise_generator, ErosionParams::default())
+                RegionStore::new(height, noise_generator)
                     .with_resident_cap(resident_cap_for(render_distance_blocks)),
             ),
             spawn: Vec3::new(spawn_x as f32, spawn_height as f32 + 20.0, spawn_z as f32),

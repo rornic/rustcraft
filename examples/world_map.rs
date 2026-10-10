@@ -1,4 +1,4 @@
-// Renders the world's large scale shape (before erosion) to a shaded PNG, so terrain
+// Renders the world's terrain heights to a shaded PNG, so terrain
 // changes can be judged across the whole world in seconds instead of by flying around.
 // Run with:
 //   cargo run --release --example world_map -- --seed 42
