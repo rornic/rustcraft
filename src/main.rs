@@ -52,9 +52,10 @@ fn setup_scene(
         })
         .id();
 
-    // Both Exponential and ExponentialSquared crept in well before the edge of
-    // render distance, hazing most of the view. Linear keeps fog at exactly zero
-    // until `start`, then ramps to fully opaque by `end` (the unload boundary).
+    // Linear fog from a quarter of the way out to the edge of render distance, so
+    // distant terrain fades gradually into the sky like a horizon and is fully
+    // fogged by the time it ends. At the default distances it starts about where
+    // full-detail terrain gives way to LODs.
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
@@ -75,7 +76,7 @@ fn setup_scene(
             DistanceFog {
                 color: Color::srgb_u8(120, 224, 232),
                 falloff: FogFalloff::Linear {
-                    start: fog_distance - 128.0,
+                    start: fog_distance * 0.25,
                     end: fog_distance,
                 },
                 ..default()
