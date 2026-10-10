@@ -6,9 +6,9 @@ use bevy::{
 };
 
 use crate::block::BlockType;
-use crate::chunks::generate::erosion::ErosionParams;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
+use crate::chunks::generate::WORLD_HEIGHT;
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree};
 
@@ -18,14 +18,16 @@ pub struct World {
     pub height: u64,
     chunks: ChunkOctree,
     pub region_store: Arc<RegionStore>,
+    spawn: Vec3,
 }
 
 impl World {
     /// `render_distance` is how far, in chunks, terrain will be drawn.
     pub fn new(render_distance: u32) -> Self {
         let seed = rand::random();
-        let height = 256;
+        let height = WORLD_HEIGHT;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
+        let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
         let chunks = ChunkOctree::default();
         let render_distance_blocks = render_distance as i64 * chunks.chunk_size as i64;
         Self {
@@ -33,14 +35,19 @@ impl World {
             height,
             chunks,
             region_store: Arc::new(
-                RegionStore::new(seed, height, noise_generator, ErosionParams::default())
+                RegionStore::new(noise_generator)
                     .with_resident_cap(resident_cap_for(render_distance_blocks)),
             ),
+            spawn: Vec3::new(spawn_x as f32, spawn_height as f32 + 20.0, spawn_z as f32),
         }
     }
 
     pub fn seed(&self) -> u32 {
         self.seed
+    }
+
+    pub fn spawn(&self) -> Vec3 {
+        self.spawn
     }
 
     pub fn insert_chunk(

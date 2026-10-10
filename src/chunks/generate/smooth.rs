@@ -1,9 +1,8 @@
 use bevy::math::Vec3;
 
-use super::generator::{
-    terrain_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_LEVEL, WATER_TOP,
-};
+use super::generator::{terrain_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_TOP};
 use super::region_store::RegionStore;
+use super::WATER_LEVEL;
 use crate::block::BlockType;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;
@@ -320,8 +319,9 @@ mod tests {
 
     #[test]
     fn test_flat_surface_drawn_by_the_node_it_falls_in() {
-        let surface = flat(50.0);
-        let inside = mesh_surface(&surface, node(0));
+        // above sea level, so the node draws no water
+        let surface = flat(80.0);
+        let inside = mesh_surface(&surface, node(1));
         // a quad per cell, plus a skirt quad per cell edge around the border
         assert_eq!(
             (CELLS * CELLS + 4 * CELLS) as usize * 4,
@@ -329,7 +329,7 @@ mod tests {
         );
         assert!(inside.water.is_none());
 
-        let above = mesh_surface(&surface, node(1));
+        let above = mesh_surface(&surface, node(2));
         assert_eq!(0, above.opaque.count_vertices());
     }
 

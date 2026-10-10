@@ -28,7 +28,7 @@ use crate::{player::PlayerLook, world::World};
 
 #[derive(Component)]
 pub struct Chunk {
-    pub(crate) coord: ChunkCoordinate,
+    pub coord: ChunkCoordinate,
 }
 
 #[derive(Component)]
@@ -117,11 +117,6 @@ impl ChunkLoader {
                 render_distance,
             ),
         }
-    }
-
-    /// Whether every chunk in range has been queued for generation.
-    pub fn fully_queued(&self) -> bool {
-        self.spawn_queue.is_exhausted()
     }
 
     pub fn anchor(&self) -> ChunkCoordinate {
@@ -536,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_full_detail_chunks_are_within_full_detail_reach() {
-        let layout = LodLayout::new(32, 128);
+        let layout = LodLayout::new(32, 128, 2);
         let reach = layout.full_detail_reach();
         let anchor = ChunkCoordinate(I64Vec3::new(3, -2, 5));
         let r = reach as i64 + 4;
