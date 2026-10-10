@@ -8,7 +8,7 @@ use bevy::{
 use crate::block::BlockType;
 use crate::chunks::generate::erosion::ErosionParams;
 use crate::chunks::generate::noise::NoiseGenerator;
-use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree};
 
@@ -21,15 +21,21 @@ pub struct World {
 }
 
 impl World {
-    pub fn new() -> Self {
+    /// `render_distance` is how far, in chunks, terrain will be drawn.
+    pub fn new(render_distance: u32) -> Self {
         let seed = rand::random();
         let height = 256;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
+        let chunks = ChunkOctree::default();
+        let render_distance_blocks = render_distance as i64 * chunks.chunk_size as i64;
         Self {
             seed,
             height,
-            chunks: ChunkOctree::default(),
-            region_store: Arc::new(RegionStore::new(seed, height, noise_generator, ErosionParams::default())),
+            chunks,
+            region_store: Arc::new(
+                RegionStore::new(seed, height, noise_generator, ErosionParams::default())
+                    .with_resident_cap(resident_cap_for(render_distance_blocks)),
+            ),
         }
     }
 
@@ -80,13 +86,15 @@ impl World {
     }
 
     pub fn block_to_chunk_coordinate(&self, block_coord: I64Vec3) -> ChunkCoordinate {
-        (block_coord / self.chunks.chunk_size as i64).into()
+        block_coord
+            .div_euclid(I64Vec3::splat(self.chunks.chunk_size as i64))
+            .into()
     }
 
     pub fn get_block_at(&mut self, world_block_coord: I64Vec3) -> BlockType {
         let chunk_size = self.chunks.chunk_size as i64;
-        // div_euclid/rem_euclid, not block_to_chunk_coordinate's `/` - that truncates toward
-        // zero, which puts negative coordinates in the wrong chunk and yields a negative (then
+        // div_euclid/rem_euclid, not `/` and `%` - those truncate toward zero, which puts
+        // negative coordinates in the wrong chunk and yields a negative (then
         // wrapping-to-huge-u16) local coordinate.
         let chunk_coord = ChunkCoordinate(I64Vec3::new(
             world_block_coord.x.div_euclid(chunk_size),
@@ -113,9 +121,19 @@ impl Debug for World {
 
 #[cfg(test)]
 mod tests {
+    use bevy::math::I64Vec3;
+
+    use super::World;
+    use crate::chunks::chunk::ChunkCoordinate;
 
     #[test]
-    fn test_block_to_chunk_coordinate() {}
+    fn test_block_to_chunk_coordinate() {
+        let world = World::new(16);
+        let chunk = |x, y, z| world.block_to_chunk_coordinate(I64Vec3::new(x, y, z));
+        assert_eq!(ChunkCoordinate(I64Vec3::new(0, 1, 2)), chunk(5, 16, 47));
+        // negative blocks belong to the chunk below, not chunk 0
+        assert_eq!(ChunkCoordinate(I64Vec3::new(-1, -1, -2)), chunk(-5, -16, -17));
+    }
 
     #[test]
     fn test_is_chunk_generated() {}

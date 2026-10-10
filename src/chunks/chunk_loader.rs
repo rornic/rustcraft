@@ -21,13 +21,14 @@ use bevy::{
 use super::{
     chunk::{ChunkCoordinate, ChunkData},
     generate::generator::{generate_chunk, generate_chunk_mesh, ChunkMeshes},
+    lod::LodLayout,
     material::{ChunkMaterial, WaterMaterial},
 };
 use crate::{player::PlayerLook, world::World};
 
 #[derive(Component)]
 pub struct Chunk {
-    coord: ChunkCoordinate,
+    pub(crate) coord: ChunkCoordinate,
 }
 
 #[derive(Component)]
@@ -46,6 +47,7 @@ pub struct GenerateChunkMesh {
 
 #[derive(Resource)]
 pub struct ChunkLoader {
+    layout: LodLayout,
     render_distance: u32,
     chunk_to_entity: HashMap<ChunkCoordinate, Entity>,
     spawn_queue: ChunkSpawnQueue,
@@ -94,11 +96,13 @@ fn scale_budget(baseline: usize, render_distance: u32) -> usize {
 
 impl ChunkLoader {
     pub fn new(
-        render_distance: u32,
+        layout: LodLayout,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
     ) -> Self {
+        let render_distance = layout.full_detail_reach();
         Self {
+            layout,
             render_distance,
             chunk_to_entity: HashMap::new(),
             // generate a shell of chunk data beyond render_distance so the chunks
@@ -113,6 +117,14 @@ impl ChunkLoader {
                 render_distance,
             ),
         }
+    }
+
+    pub fn anchor(&self) -> ChunkCoordinate {
+        self.spawn_queue.anchor
+    }
+
+    pub fn chunk_entity(&self, coord: ChunkCoordinate) -> Option<Entity> {
+        self.chunk_to_entity.get(&coord).copied()
     }
 }
 
@@ -219,10 +231,9 @@ pub fn mark_chunks(
     >,
 ) {
     chunks_query.iter_mut().for_each(|(entity, chunk)| {
-        // chunks beyond render_distance are generated only to supply neighbour data
-        // for the true boundary's meshing - they're never meshed themselves
-        if chunk_distance(chunk.coord, chunk_loader.spawn_queue.anchor)
-            > chunk_loader.render_distance as f32
+        if !chunk_loader
+            .layout
+            .full_detail(chunk.coord, chunk_loader.spawn_queue.anchor)
         {
             return;
         }
@@ -505,9 +516,28 @@ mod tests {
     };
 
     use super::{
-        build_offsets, offset_distance, scale_budget, shell_area_scale, sort_by_viewport_bias,
-        ChunkCoordinate, ChunkSpawnQueue, HashMap, BASELINE_RENDER_DISTANCE,
+        build_offsets, chunk_distance, offset_distance, scale_budget, shell_area_scale,
+        sort_by_viewport_bias, ChunkCoordinate, ChunkSpawnQueue, HashMap, LodLayout,
+        BASELINE_RENDER_DISTANCE,
     };
+
+    #[test]
+    fn test_full_detail_chunks_are_within_full_detail_reach() {
+        let layout = LodLayout::new(32, 128);
+        let reach = layout.full_detail_reach();
+        let anchor = ChunkCoordinate(I64Vec3::new(3, -2, 5));
+        let r = reach as i64 + 4;
+        for x in -r..=r {
+            for y in -r..=r {
+                for z in -r..=r {
+                    let c = ChunkCoordinate(anchor.0 + I64Vec3::new(x, y, z));
+                    if layout.full_detail(c, anchor) {
+                        assert!(chunk_distance(c, anchor) <= reach as f32);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_build_offsets_count_and_bounds() {

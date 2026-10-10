@@ -2,6 +2,7 @@ use std::error::Error;
 
 use rustcraft::settings::Settings;
 
+use bevy::core::TaskPoolThreadAssignmentPolicy;
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
@@ -9,6 +10,11 @@ use bevy::render::view::ColorGrading;
 use rustcraft::chunks::{
     chunk_loader::{
         gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
+    },
+    fade::{apply_fades, FadeMaterials, FULLY_VISIBLE},
+    lod::{
+        load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_horizon_fog,
+        update_lod_selection, LodLayout, LodLoader,
     },
     material::{ChunkMaterial, WaterMaterial},
 };
@@ -26,7 +32,17 @@ fn setup_scene(
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
-    let game_world = rustcraft::world::World::new();
+    let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
+    let renderer = settings.renderer;
+    let layout = LodLayout::new(renderer.full_detail_distance, renderer.render_distance);
+    let render_distance = layout.render_distance() as u32;
+    info!(
+        "drawing terrain {render_distance} chunks out with {} LOD levels",
+        layout.max_level
+    );
+
+    let game_world = rustcraft::world::World::new(render_distance);
+    let world_height = game_world.height;
     info!("world seed is {}", game_world.seed());
     let spawn = Vec3::new(0.0, 20.0, 0.0);
     commands.insert_resource(game_world);
@@ -41,15 +57,15 @@ fn setup_scene(
         })
         .id();
 
-    let render_distance = 64;
-    // Both Exponential and ExponentialSquared crept in well before the edge of
-    // render distance, hazing most of the view. Linear keeps fog at exactly zero
-    // until `start`, then ramps to fully opaque by `end` (the unload boundary).
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
             Transform::from_xyz(0.0, 2.0, 0.0),
             Camera3d { ..default() },
+            Projection::Perspective(PerspectiveProjection {
+                far: fog_distance + 256.0,
+                ..default()
+            }),
             // Depth of field needs HDR enabled on the camera.
             Camera { hdr: true, ..default() },
             // Camera3d requires Tonemapping, defaulting to TonyMcMapface - it
@@ -61,8 +77,8 @@ fn setup_scene(
             DistanceFog {
                 color: Color::srgb_u8(120, 224, 232),
                 falloff: FogFalloff::Linear {
-                    start: fog_distance - 128.0,
-                    end: fog_distance,
+                    start: layout.fog_start(),
+                    end: fog_distance.max(layout.fog_start() + 1.0),
                 },
                 ..default()
             },
@@ -83,16 +99,32 @@ fn setup_scene(
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        fade: FULLY_VISIBLE,
     });
     let water_material_handle = water_materials.add(WaterMaterial {
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        fade: FULLY_VISIBLE,
     });
-    let chunk_loader =
-        ChunkLoader::new(render_distance as u32, chunk_material_handle, water_material_handle);
-    commands.insert_resource(chunk_loader);
-
-    let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
+    commands.insert_resource(FadeMaterials::new(
+        renderer.lod_fade_seconds,
+        chunk_material_handle.clone(),
+        water_material_handle.clone(),
+        &mut chunk_materials,
+        &mut water_materials,
+    ));
+    commands.insert_resource(LodLoader::new(
+        layout,
+        renderer.smooth_lod_level,
+        world_height,
+        chunk_material_handle.clone(),
+        water_material_handle.clone(),
+    ));
+    commands.insert_resource(ChunkLoader::new(
+        layout,
+        chunk_material_handle,
+        water_material_handle,
+    ));
     commands.spawn(settings);
 }
 
@@ -101,6 +133,21 @@ fn main() {
         .add_plugins((
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
+                .set(TaskPoolPlugin {
+                    task_pool_options: TaskPoolOptions {
+                        io: TaskPoolThreadAssignmentPolicy {
+                            min_threads: 1,
+                            max_threads: 1,
+                            percent: 0.0,
+                        },
+                        async_compute: TaskPoolThreadAssignmentPolicy {
+                            min_threads: 1,
+                            max_threads: usize::MAX,
+                            percent: 0.6,
+                        },
+                        ..default()
+                    },
+                })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         present_mode: bevy::window::PresentMode::AutoNoVsync,
@@ -117,7 +164,21 @@ fn main() {
             Update,
             (
                 (gather_chunks, generate_chunks, mark_chunks, load_chunks).before(unload_chunks),
+                (
+                    update_lod_selection,
+                    spawn_lods,
+                    load_lods,
+                    retire_lods,
+                    refresh_lod_visibility,
+                    apply_fades,
+                )
+                    .chain()
+                    .after(gather_chunks)
+                    .before(unload_chunks),
                 unload_chunks,
+                update_horizon_fog
+                    .after(refresh_lod_visibility)
+                    .before(update_underwater_effects),
                 (player_move, player_look, update_underwater_effects).chain(),
             ),
         )

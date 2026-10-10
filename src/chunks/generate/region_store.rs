@@ -3,13 +3,18 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use super::erosion::ErosionParams;
 use super::noise::NoiseGenerator;
-use super::region::{compute_region, Region, RegionCoord};
+use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 
 // 64 resident regions x ~256KB/region (heights+discharge, 256x256 f32 x2) =~ 32MB
 // worst case - generous headroom over the chunk-load front's working set at render
 // distance 64 (1024 blocks =~ 4x4 regions visible at once) without being a memory
 // concern. Retuned once real access patterns are observed.
 const RESIDENT_REGION_CAP: usize = 64;
+
+pub fn resident_cap_for(radius_blocks: i64) -> usize {
+    let across = ((2 * radius_blocks + REGION_SIZE - 1) / REGION_SIZE) as usize + 2;
+    (across * across).max(RESIDENT_REGION_CAP)
+}
 
 // Coalescing slot: many concurrent chunk-gen tasks may be the first to ask for the
 // same not-yet-computed region. Exactly one of them runs `compute_region`; the rest
@@ -80,6 +85,13 @@ impl RegionStore {
         }
     }
 
+    pub fn with_resident_cap(self, cap: usize) -> Self {
+        Self {
+            lru: RwLock::new(RegionLru::new(cap)),
+            ..self
+        }
+    }
+
     // Blocks the calling thread until this region is ready (computing it, or
     // waiting on another in-flight compute for the same coordinate) - safe to call
     // only from inside an async-task-pool task, never a Bevy system body on the main
@@ -92,11 +104,15 @@ impl RegionStore {
         .clone()
     }
 
+    pub fn sampler(&self) -> HeightSampler<'_> {
+        HeightSampler {
+            store: self,
+            recent: Vec::with_capacity(SAMPLER_REGIONS),
+        }
+    }
+
     pub fn get_height(&self, world_x: i64, world_z: i64) -> f64 {
-        let coord = RegionCoord::from_world(world_x, world_z);
-        let region = self.get_region(coord);
-        let origin = coord.origin();
-        region.height_at(world_x - origin.x, world_z - origin.y) as f64
+        self.sampler().height(world_x, world_z)
     }
 
     pub fn get_discharge(&self, world_x: i64, world_z: i64) -> f64 {
@@ -110,9 +126,48 @@ impl RegionStore {
     // `generate_chunk`'s previous inline gradient computation, but reading
     // `get_height` (already in absolute block-height units) instead of raw noise.
     pub fn get_gradient(&self, world_x: i64, world_z: i64) -> (f64, f64) {
-        let gradient_x = self.get_height(world_x + 1, world_z) - self.get_height(world_x - 1, world_z);
-        let gradient_z = self.get_height(world_x, world_z + 1) - self.get_height(world_x, world_z - 1);
+        self.sampler().gradient(world_x, world_z)
+    }
+}
+
+// Enough for a lookup area that touches a corner where four regions meet.
+const SAMPLER_REGIONS: usize = 4;
+
+pub struct HeightSampler<'a> {
+    store: &'a RegionStore,
+    // most recently used last
+    recent: Vec<(RegionCoord, Arc<Region>)>,
+}
+
+impl HeightSampler<'_> {
+    pub fn height(&mut self, world_x: i64, world_z: i64) -> f64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .height_at(world_x - origin.x, world_z - origin.y) as f64
+    }
+
+    // Central-difference gradient over the eroded heightmap, in block-height units.
+    pub fn gradient(&mut self, world_x: i64, world_z: i64) -> (f64, f64) {
+        let gradient_x = self.height(world_x + 1, world_z) - self.height(world_x - 1, world_z);
+        let gradient_z = self.height(world_x, world_z + 1) - self.height(world_x, world_z - 1);
         (gradient_x, gradient_z)
+    }
+
+    fn region(&mut self, coord: RegionCoord) -> &Region {
+        match self.recent.iter().position(|(c, _)| *c == coord) {
+            Some(i) => {
+                let entry = self.recent.remove(i);
+                self.recent.push(entry);
+            }
+            None => {
+                if self.recent.len() == SAMPLER_REGIONS {
+                    self.recent.remove(0);
+                }
+                self.recent.push((coord, self.store.get_region(coord)));
+            }
+        }
+        &self.recent.last().unwrap().1
     }
 }
 
@@ -122,6 +177,34 @@ mod tests {
 
     use super::*;
     use bevy::math::I64Vec2;
+
+    #[test]
+    fn test_resident_cap_covers_render_area() {
+        assert_eq!(RESIDENT_REGION_CAP, resident_cap_for(256));
+        // 2048 blocks either side spans 16 regions, plus one at each edge
+        assert_eq!(18 * 18, resident_cap_for(2048));
+    }
+
+    #[test]
+    fn test_sampler_matches_region_heights_across_region_corners() {
+        let store = RegionStore::new(
+            1,
+            256,
+            Arc::new(NoiseGenerator::new(1)),
+            ErosionParams { droplet_count: 50, ..ErosionParams::default() },
+        );
+        let mut sampler = store.sampler();
+        // a block either side of the corner where regions (-1..0, -1..0) meet
+        for (x, z) in [(-1, -1), (0, -1), (-1, 0), (0, 0), (255, 300), (-1, -1)] {
+            let coord = RegionCoord::from_world(x, z);
+            let origin = coord.origin();
+            let expected = store
+                .get_region(coord)
+                .height_at(x - origin.x, z - origin.y) as f64;
+            assert_eq!(expected, sampler.height(x, z));
+        }
+        assert!(sampler.recent.len() <= SAMPLER_REGIONS);
+    }
 
     #[test]
     fn test_get_region_caches_repeated_lookups() {

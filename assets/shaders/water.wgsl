@@ -10,6 +10,14 @@
 @group(2) @binding(1) var material_color_texture: texture_2d<f32>;
 @group(2) @binding(2) var material_color_sampler: sampler;
 
+@group(2) @binding(3) var<uniform> material_fade: vec4<f32>;
+
+fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
+    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let p = vec2<u32>(frag_coord) % 4u;
+    return (bayer[p.y * 4u + p.x] + 0.5) / 16.0;
+}
+
 const TROPICAL_TINT: vec3<f32> = vec3<f32>(0.0, 0.85, 0.9);
 const TROPICAL_PUSH: f32 = 0.4;
 const DEEP_TINT: vec3<f32> = vec3<f32>(0.03, 0.18, 0.3);
@@ -117,9 +125,6 @@ fn fragment(
     let view_to_world = world_position - view_position;
 
     let dist = length(view_to_world);
-    if dist > 2000.0 {
-      discard;
-    }
 
     let normal = normalize(in.world_normal);
     let brightness = dot(normal, normalize(vec3(-0.2, 0.7, 0.2)));
@@ -180,6 +185,12 @@ fn fragment(
     // applied automatically the way it would be for StandardMaterial - apply it
     // explicitly so distant water fades into the sky instead of popping in/out.
     let fogged = apply_fog(view_bindings::fog, vec4<f32>(color.rgb, alpha), world_position, view_position);
+
+    // after the texture samples above, which need uniform control flow
+    let threshold = dither_threshold(in.position.xy);
+    if threshold < material_fade.x || threshold >= material_fade.y {
+        discard;
+    }
 
     var output: FragmentOutput;
     output.color = fogged;

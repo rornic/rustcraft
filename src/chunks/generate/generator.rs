@@ -9,8 +9,10 @@ use bevy::{
 };
 
 use super::region_store::RegionStore;
+use super::smooth::{mesh_surface, Surface};
 use crate::block::{BlockType, BLOCK_COUNT};
-use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
+use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
+use crate::chunks::lod::LodKey;
 use crate::util::primitives::Vertex;
 
 // Face order matches `face_vertices`/`sides` below: [front, right, left, back, top, bottom].
@@ -31,6 +33,138 @@ const FACE_TANGENTS: [(IVec3, IVec3); 6] = [
     (IVec3::new(1, 0, 0), IVec3::new(0, 0, 1)), // bottom
 ];
 const AO_STRENGTH: f32 = 0.5;
+
+pub(super) const SOLID_FLOOR: i64 = 16;
+pub(super) const WATER_LEVEL: i64 = 32;
+// Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
+pub(super) const WATER_TOP: f32 = 0.4;
+
+trait BlockSource {
+    fn block(&self, coord: IVec3) -> BlockType;
+    fn non_air(&self) -> Vec<(IVec3, BlockType)>;
+}
+
+struct ChunkNeighbourhood<'a> {
+    chunk: &'a ChunkData,
+    neighbors: &'a [Option<Arc<ChunkData>>],
+}
+
+impl BlockSource for ChunkNeighbourhood<'_> {
+    fn block(&self, coord: IVec3) -> BlockType {
+        resolve_block(self.chunk, self.neighbors, coord)
+    }
+
+    fn non_air(&self) -> Vec<(IVec3, BlockType)> {
+        self.chunk
+            .iter_non_air()
+            .map(|(c, block)| (c.as_ivec3(), block))
+            .collect()
+    }
+}
+
+const SKIRT_CELLS: i32 = 2;
+
+struct LodBlocks {
+    size: i32,
+    cells: Vec<BlockType>,
+}
+
+impl LodBlocks {
+    fn sample(regions: &RegionStore, key: LodKey) -> Self {
+        let size = CHUNK_SIZE as i32;
+        let padded = (size + 2) as usize;
+        let cell = key.cell_size();
+        let base = key.min_block();
+        let mut cells = vec![BlockType::Air; padded * padded * padded];
+        let mut heights = regions.sampler();
+
+        for cx in -1..=size {
+            for cz in -1..=size {
+                let world_x = base.x + cx as i64 * cell + cell / 2;
+                let world_z = base.z + cz as i64 * cell + cell / 2;
+                let column_height = heights.height(world_x, world_z).round() as i64;
+                let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
+                let combined_gradient = gradient_x.abs() + gradient_z.abs();
+
+                for cy in -1..=size {
+                    let world_y = base.y + cy as i64 * cell + cell / 2;
+                    cells[Self::index(size, IVec3::new(cx, cy, cz))] =
+                        terrain_block(world_y, column_height, combined_gradient);
+                }
+            }
+        }
+
+        Self { size, cells }
+    }
+
+    fn index(size: i32, coord: IVec3) -> usize {
+        let padded = (size + 2) as usize;
+        let c = (coord + IVec3::ONE).as_uvec3();
+        (c.x as usize * padded + c.z as usize) * padded + c.y as usize
+    }
+
+    fn raw(&self, coord: IVec3) -> BlockType {
+        let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
+        self.cells[Self::index(self.size, coord)]
+    }
+}
+
+impl BlockSource for LodBlocks {
+    fn block(&self, coord: IVec3) -> BlockType {
+        let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
+        let block = self.raw(coord);
+        let outside = |c: i32| c < 0 || c >= self.size;
+        if (outside(coord.x) || outside(coord.z)) && is_solid(block) {
+            for dy in 1..=SKIRT_CELLS {
+                let above = self.raw(coord + IVec3::new(0, dy, 0));
+                if !is_solid(above) {
+                    return above;
+                }
+            }
+        }
+        block
+    }
+
+    fn non_air(&self) -> Vec<(IVec3, BlockType)> {
+        let mut result = Vec::new();
+        for x in 0..self.size {
+            for z in 0..self.size {
+                for y in 0..self.size {
+                    let coord = IVec3::new(x, y, z);
+                    let block = self.raw(coord);
+                    if block != BlockType::Air {
+                        result.push((coord, block));
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
+fn is_solid(block: BlockType) -> bool {
+    block.occlusion_weight() == 1.0
+}
+
+pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
+    if world_y < column_height.max(SOLID_FLOOR) {
+        if world_y >= 90 && combined_gradient <= 2.0 {
+            BlockType::Snow
+        } else if world_y >= 70 && combined_gradient >= 2.0
+            || (world_y >= 36 && combined_gradient >= 3.5)
+        {
+            BlockType::Stone
+        } else if world_y >= 36 {
+            BlockType::Grass
+        } else {
+            BlockType::Sand
+        }
+    } else if world_y < WATER_LEVEL {
+        BlockType::Water
+    } else {
+        BlockType::Air
+    }
+}
 
 // `neighbor_chunks` holds all 26 chunks in the 3x3x3 neighborhood (see `ChunkCoordinate::neighbors_26`),
 // since AO sampling near a chunk corner can need a diagonal-adjacent chunk, not just a face-adjacent one.
@@ -74,8 +208,7 @@ fn tangent_offsets(face_index: usize, vertex_local_pos: [f32; 3]) -> (IVec3, IVe
 }
 
 fn vertex_ao(
-    chunk: &ChunkData,
-    adjacent_chunks: &[Option<Arc<ChunkData>>],
+    source: &impl BlockSource,
     block_coord: IVec3,
     face_index: usize,
     vertex_local_pos: [f32; 3],
@@ -83,13 +216,9 @@ fn vertex_ao(
     let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
     let normal_off = FACE_NORMAL_OFFSET[face_index];
 
-    let side_a = resolve_block(chunk, adjacent_chunks, block_coord + normal_off + offset_a);
-    let side_b = resolve_block(chunk, adjacent_chunks, block_coord + normal_off + offset_b);
-    let corner = resolve_block(
-        chunk,
-        adjacent_chunks,
-        block_coord + normal_off + offset_a + offset_b,
-    );
+    let side_a = source.block(block_coord + normal_off + offset_a);
+    let side_b = source.block(block_coord + normal_off + offset_b);
+    let corner = source.block(block_coord + normal_off + offset_a + offset_b);
 
     let sum = side_a.occlusion_weight() + side_b.occlusion_weight() + corner.occlusion_weight();
     1.0 - (sum / 3.0).clamp(0.0, 1.0) * AO_STRENGTH
@@ -99,17 +228,16 @@ fn vertex_ao(
 // land - used to bake a shoreline mask into the water mesh so the shader can lap
 // foam there.
 fn vertex_shore_factor(
-    chunk: &ChunkData,
-    adjacent_chunks: &[Option<Arc<ChunkData>>],
+    source: &impl BlockSource,
     block_coord: IVec3,
     face_index: usize,
     vertex_local_pos: [f32; 3],
 ) -> f32 {
     let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
 
-    let side_a = resolve_block(chunk, adjacent_chunks, block_coord + offset_a);
-    let side_b = resolve_block(chunk, adjacent_chunks, block_coord + offset_b);
-    let corner = resolve_block(chunk, adjacent_chunks, block_coord + offset_a + offset_b);
+    let side_a = source.block(block_coord + offset_a);
+    let side_b = source.block(block_coord + offset_b);
+    let corner = source.block(block_coord + offset_a + offset_b);
 
     let land_count = [side_a, side_b, corner]
         .iter()
@@ -127,8 +255,7 @@ const SHORE_DISTANCE_RADIUS: i32 = 3;
 // same distance there. That's what keeps it safe to drive the foam's travelling
 // phase: unlike per-block data, it can't disagree at a shared edge.
 fn vertex_shore_distance(
-    chunk: &ChunkData,
-    adjacent_chunks: &[Option<Arc<ChunkData>>],
+    source: &impl BlockSource,
     block_coord: IVec3,
     face_index: usize,
     vertex_local_pos: [f32; 3],
@@ -144,7 +271,7 @@ fn vertex_shore_distance(
                 continue;
             }
             let probe = anchor + IVec3::new(dx, 0, dz);
-            if resolve_block(chunk, adjacent_chunks, probe).occlusion_weight() == 1.0 {
+            if source.block(probe).occlusion_weight() == 1.0 {
                 min_dist_sq = dist_sq;
             }
         }
@@ -162,6 +289,7 @@ pub fn generate_chunk(
     chunk_pos: ChunkCoordinate,
 ) -> ChunkData {
     let mut chunk_data = ChunkData::default();
+    let mut heights = regions.sampler();
 
     for x in 0..chunk_data.size {
         for z in 0..chunk_data.size {
@@ -171,37 +299,14 @@ pub fn generate_chunk(
                 chunk_pos.0.z * chunk_data.size as i64 + z as i64,
             );
 
-            let column_height = regions.get_height(world_x, world_z).round() as u64;
-            let chunk_height = if world_y > 0 {
-                let positive_y = world_y as u64;
-                (column_height - positive_y.min(column_height)).min(chunk_data.size as u64)
-            } else {
-                chunk_data.size as u64
-            };
-
-            let (gradient_x, gradient_z) = regions.get_gradient(world_x, world_z);
+            let column_height = heights.height(world_x, world_z).round() as i64;
+            let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
             let combined_gradient = gradient_x.abs() + gradient_z.abs();
 
-            for y in 0..chunk_height {
-                let world_y = world_y + y as i64;
-
-                let block = if world_y >= 90 && combined_gradient <= 2.0 {
-                    BlockType::Snow
-                } else if world_y >= 70 && combined_gradient >= 2.0
-                    || (world_y >= 36 && combined_gradient >= 3.5)
-                {
-                    BlockType::Stone
-                } else if world_y >= 36 {
-                    BlockType::Grass
-                } else {
-                    BlockType::Sand
-                };
-                chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), block);
-            }
-
-            if world_y <= 16 {
-                for y in chunk_height..chunk_data.size as u64 {
-                    chunk_data.set_block_at(U16Vec3::new(x, y as u16, z), BlockType::Water);
+            for y in 0..chunk_data.size {
+                let block = terrain_block(world_y + y as i64, column_height, combined_gradient);
+                if block != BlockType::Air {
+                    chunk_data.set_block_at(U16Vec3::new(x, y, z), block);
                 }
             }
         }
@@ -214,14 +319,14 @@ pub fn generate_chunk(
 // opaque blocks, a second for water, so they can become separate `Mesh`es with
 // separate materials (water needs alpha blending, opaque blocks don't).
 #[derive(Default)]
-struct MeshBuffers {
+pub(super) struct MeshBuffers {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     colors: Vec<[f32; 4]>,
 }
 
 impl MeshBuffers {
-    fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
+    pub(super) fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
         let uv_scale = 1.0 / (BLOCK_COUNT - 1) as f32;
 
         let triangle_start: u32 = self.vertices.len() as u32;
@@ -243,7 +348,11 @@ impl MeshBuffers {
         ]);
     }
 
-    fn build_mesh(self) -> Mesh {
+    pub(super) fn is_empty(&self) -> bool {
+        self.vertices.is_empty()
+    }
+
+    pub(super) fn build_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
             bevy::render::mesh::PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
@@ -279,12 +388,11 @@ pub struct ChunkMeshes {
 // without `World` access - see the plan's note on why depth doesn't cross chunk
 // boundaries). Used to scale wave amplitude: open water ripples, a shallow puddle
 // at a chunk's edge stays calm.
-fn water_depth(chunk: &ChunkData, block_coord: IVec3) -> u32 {
+fn water_depth(source: &impl BlockSource, block_coord: IVec3) -> u32 {
     let mut depth = 0u32;
     let mut y = block_coord.y;
     while y >= 0 {
-        let pos = U16Vec3::new(block_coord.x as u16, y as u16, block_coord.z as u16);
-        if chunk.get_block_at(pos) != BlockType::Water {
+        if source.block(IVec3::new(block_coord.x, y, block_coord.z)) != BlockType::Water {
             break;
         }
         depth += 1;
@@ -297,6 +405,31 @@ pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
 ) -> ChunkMeshes {
+    let source = ChunkNeighbourhood {
+        chunk: &chunk,
+        neighbors: &adjacent_chunks,
+    };
+    mesh_blocks(&source, 1)
+}
+
+pub fn generate_lod_mesh(
+    regions: Arc<RegionStore>,
+    key: LodKey,
+    smooth_level: u8,
+) -> Option<ChunkMeshes> {
+    let meshes = if key.level >= smooth_level {
+        mesh_surface(&Surface::sample(&regions, key), key)
+    } else {
+        mesh_blocks(&LodBlocks::sample(&regions, key), key.cell_size())
+    };
+    if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
+        return None;
+    }
+    Some(meshes)
+}
+
+// `cell_size` is how many blocks wide each cell of `source` is.
+fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
 
@@ -312,7 +445,8 @@ pub fn generate_chunk_mesh(
 
     // Water's surface sits below a full block's height (see `cube_with_top`), so its
     // top/side geometry is shorter than every other block's.
-    let water_cube_vertices = crate::util::primitives::cube_with_top(0.4);
+    let water_cube_vertices =
+        crate::util::primitives::cube_with_top(0.5 - (0.5 - WATER_TOP) / cell_size as f32);
     let water_face_vertices = [
         &water_cube_vertices[0..4],
         &water_cube_vertices[4..8],
@@ -322,18 +456,16 @@ pub fn generate_chunk_mesh(
         &water_cube_vertices[20..24],
     ];
 
-    for (coord, block) in chunk.iter_non_air() {
-        let (x, y, z) = (coord.x, coord.y, coord.z);
-        let world_position = Vec3::new(x as f32, y as f32, z as f32);
-        let block_coord = IVec3::new(x as i32, y as i32, z as i32);
+    for (block_coord, block) in source.non_air() {
+        let world_position = block_coord.as_vec3();
 
         // Order matches `face_vertices`/`sides` below and `FACE_NORMAL_OFFSET`.
-        let front = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[0]);
-        let right = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[1]);
-        let left = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[2]);
-        let back = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[3]);
-        let top = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[4]);
-        let bottom = resolve_block(&chunk, &adjacent_chunks, block_coord + FACE_NORMAL_OFFSET[5]);
+        let front = source.block(block_coord + FACE_NORMAL_OFFSET[0]);
+        let right = source.block(block_coord + FACE_NORMAL_OFFSET[1]);
+        let left = source.block(block_coord + FACE_NORMAL_OFFSET[2]);
+        let back = source.block(block_coord + FACE_NORMAL_OFFSET[3]);
+        let top = source.block(block_coord + FACE_NORMAL_OFFSET[4]);
+        let bottom = source.block(block_coord + FACE_NORMAL_OFFSET[5]);
 
         let is_water = block == BlockType::Water;
         let geometry = if is_water { &water_face_vertices } else { &face_vertices };
@@ -364,7 +496,7 @@ pub fn generate_chunk_mesh(
             // only ever affects per-pixel color/alpha (G), which can't crack.
             let is_top = is_water && i == 4;
             let depth_factor = if is_top {
-                water_depth(&chunk, block_coord) as f32 / chunk.size as f32
+                (water_depth(source, block_coord) as i64 * cell_size) as f32 / CHUNK_SIZE as f32
             } else {
                 0.0
             };
@@ -374,15 +506,15 @@ pub fn generate_chunk_mesh(
                     if is_water {
                         let (shore, shore_distance) = if is_top {
                             (
-                                vertex_shore_factor(&chunk, &adjacent_chunks, block_coord, i, v.position),
-                                vertex_shore_distance(&chunk, &adjacent_chunks, block_coord, i, v.position),
+                                vertex_shore_factor(source, block_coord, i, v.position),
+                                vertex_shore_distance(source, block_coord, i, v.position),
                             )
                         } else {
                             (0.0, 1.0)
                         };
                         [shore, depth_factor, if is_top { 1.0 } else { 0.0 }, shore_distance]
                     } else {
-                        let ao = vertex_ao(&chunk, &adjacent_chunks, block_coord, i, v.position);
+                        let ao = vertex_ao(source, block_coord, i, v.position);
                         [ao, ao, ao, 1.0]
                     }
                 })
@@ -412,11 +544,15 @@ mod tests {
 
     use crate::block::BlockType;
 
-    use super::{generate_chunk, generate_chunk_mesh, resolve_block, vertex_ao, AO_STRENGTH};
+    use super::{
+        generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao, BlockSource,
+        ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
+    };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
     use crate::chunks::generate::region_store::RegionStore;
     use crate::chunks::generate::erosion::ErosionParams;
+    use crate::chunks::lod::LodKey;
 
     fn no_neighbors() -> [Option<Arc<ChunkData>>; 26] {
         std::array::from_fn(|_| None)
@@ -473,7 +609,12 @@ mod tests {
     #[test]
     fn test_vertex_ao_no_occluders_is_unlit() {
         let chunk = ChunkData::default();
-        let ao = vertex_ao(&chunk, &no_neighbors(), IVec3::new(4, 4, 4), 4, [0.5, 0.5, -0.5]);
+        let neighbors = no_neighbors();
+        let source = ChunkNeighbourhood {
+            chunk: &chunk,
+            neighbors: &neighbors,
+        };
+        let ao = vertex_ao(&source, IVec3::new(4, 4, 4), 4, [0.5, 0.5, -0.5]);
         assert_eq!(1.0, ao);
     }
 
@@ -485,8 +626,104 @@ mod tests {
         chunk.set_block_at(U16Vec3::new(4, 5, 5), BlockType::Stone);
         chunk.set_block_at(U16Vec3::new(5, 5, 5), BlockType::Stone);
 
-        let ao = vertex_ao(&chunk, &no_neighbors(), IVec3::new(4, 4, 4), 4, [0.5, 0.5, 0.5]);
+        let neighbors = no_neighbors();
+        let source = ChunkNeighbourhood {
+            chunk: &chunk,
+            neighbors: &neighbors,
+        };
+        let ao = vertex_ao(&source, IVec3::new(4, 4, 4), 4, [0.5, 0.5, 0.5]);
         assert_eq!(1.0 - AO_STRENGTH, ao);
+    }
+
+    #[test]
+    fn test_terrain_block_floor_and_water() {
+        // below the solid floor even a zero-height column is solid
+        assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0));
+        assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0));
+        assert_eq!(BlockType::Air, terrain_block(40, 0, 0.0));
+        assert_eq!(BlockType::Grass, terrain_block(40, 50, 0.0));
+    }
+
+    fn test_regions() -> Arc<RegionStore> {
+        Arc::new(RegionStore::new(
+            3,
+            256,
+            Arc::new(NoiseGenerator::new(3)),
+            ErosionParams {
+                droplet_count: 50,
+                ..ErosionParams::default()
+            },
+        ))
+    }
+
+    #[test]
+    fn test_lod_level_zero_matches_full_detail_chunk() {
+        let regions = test_regions();
+        for coord in [
+            I64Vec3::new(1, 1, 2),
+            I64Vec3::new(-2, 0, 3),
+            I64Vec3::new(0, 2, -1),
+        ] {
+            let chunk = generate_chunk(regions.clone(), ChunkCoordinate(coord));
+            let lod = LodBlocks::sample(&regions, LodKey { level: 0, coord });
+            for x in 0..16 {
+                for y in 0..16 {
+                    for z in 0..16 {
+                        assert_eq!(
+                            chunk.get_block_at(U16Vec3::new(x, y, z)),
+                            lod.raw(IVec3::new(x as i32, y as i32, z as i32)),
+                            "chunk {coord} block ({x},{y},{z})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn flat_lod(surface_y: i32) -> LodBlocks {
+        let size = 16;
+        let padded = (size + 2) as usize;
+        let mut cells = vec![BlockType::Air; padded * padded * padded];
+        for x in -1..=size {
+            for z in -1..=size {
+                for y in -1..surface_y {
+                    cells[LodBlocks::index(size, IVec3::new(x, y, z))] = BlockType::Stone;
+                }
+            }
+        }
+        LodBlocks { size, cells }
+    }
+
+    #[test]
+    fn test_lod_border_exposes_surface_cells_as_skirt() {
+        let lod = flat_lod(8);
+        // the border's top two solid cells read as open, so the edge draws a wall
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 7, 4)));
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 6, 16)));
+        // deeper border cells and every interior cell read as they are
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 5, 4)));
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
+        // below the node isn't a horizontal border, so no skirt
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
+    }
+
+    #[test]
+    fn test_lod_block_clamps_far_probes_to_border() {
+        let lod = flat_lod(8);
+        assert_eq!(
+            lod.block(IVec3::new(-1, 3, 4)),
+            lod.block(IVec3::new(-3, 3, 4))
+        );
+    }
+
+    #[test]
+    fn test_lod_non_air_only_covers_interior() {
+        let lod = flat_lod(8);
+        let cells = lod.non_air();
+        assert_eq!(16 * 16 * 8, cells.len());
+        assert!(cells
+            .iter()
+            .all(|(c, _)| c.min_element() >= 0 && c.max_element() < 16));
     }
 
     // Not run as part of normal `cargo test` - this is a before/after timing comparison
