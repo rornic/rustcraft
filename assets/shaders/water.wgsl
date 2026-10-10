@@ -21,6 +21,10 @@ fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
 const TROPICAL_TINT: vec3<f32> = vec3<f32>(0.0, 0.85, 0.9);
 const TROPICAL_PUSH: f32 = 0.4;
 const DEEP_TINT: vec3<f32> = vec3<f32>(0.03, 0.18, 0.3);
+// Open ocean colour, shaded towards from tropical between these depths in blocks.
+const DEEP_OCEAN_COLOR: vec3<f32> = vec3<f32>(0.004, 0.03, 0.16);
+const DEEP_OCEAN_START: f32 = 3.0;
+const DEEP_OCEAN_END: f32 = 14.0;
 // Beer-Lambert-style extinction: how many blocks of water it takes for the seafloor
 // to fade to invisible, rather than a flat translucency that stays see-through no
 // matter how deep the water gets.
@@ -148,6 +152,10 @@ fn fragment(
     let deep_color = mix(color.rgb, DEEP_TINT, 0.6);
     color = vec4<f32>(mix(shallow_color, deep_color, extinction), color.a);
     alpha = mix(0.3, 0.97, extinction);
+
+    let ocean = smoothstep(DEEP_OCEAN_START, DEEP_OCEAN_END, raw_depth);
+    let ocean_lit = DEEP_OCEAN_COLOR * mix(0.7, 1.0, brightness);
+    color = vec4<f32>(mix(color.rgb, ocean_lit, ocean), color.a);
 
     // Foam's noise sampling (up to 6 hash lookups per pixel between the 3 octaves
     // and the frame crossfade) is the most expensive part of this shader, for

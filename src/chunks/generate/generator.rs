@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use bevy::{
     math::{IVec3, U16Vec3, Vec3},
@@ -42,6 +42,11 @@ pub(super) const WATER_TOP: f32 = 0.4;
 trait BlockSource {
     fn block(&self, coord: IVec3) -> BlockType;
     fn non_air(&self) -> Vec<(IVec3, BlockType)>;
+
+    /// The terrain itself, without the skirts `block` adds around a LOD node's edges.
+    fn terrain(&self, coord: IVec3) -> BlockType {
+        self.block(coord)
+    }
 }
 
 struct ChunkNeighbourhood<'a> {
@@ -110,6 +115,10 @@ impl LodBlocks {
 }
 
 impl BlockSource for LodBlocks {
+    fn terrain(&self, coord: IVec3) -> BlockType {
+        self.raw(coord)
+    }
+
     fn block(&self, coord: IVec3) -> BlockType {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         let block = self.raw(coord);
@@ -392,13 +401,28 @@ fn water_depth(source: &impl BlockSource, block_coord: IVec3) -> u32 {
     let mut depth = 0u32;
     let mut y = block_coord.y;
     while y >= 0 {
-        if source.block(IVec3::new(block_coord.x, y, block_coord.z)) != BlockType::Water {
+        if source.terrain(IVec3::new(block_coord.x, y, block_coord.z)) != BlockType::Water {
             break;
         }
         depth += 1;
         y -= 1;
     }
     depth
+}
+
+// Water depth at a top-face corner, averaged over the four columns sharing it (land counts as 0).
+fn vertex_water_depth(
+    depth_of: &mut impl FnMut(IVec3) -> u32,
+    block_coord: IVec3,
+    face_index: usize,
+    vertex_local_pos: [f32; 3],
+) -> f32 {
+    let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
+    let total: u32 = [IVec3::ZERO, offset_a, offset_b, offset_a + offset_b]
+        .into_iter()
+        .map(|offset| depth_of(block_coord + offset))
+        .sum();
+    total as f32 / 4.0
 }
 
 pub fn generate_chunk_mesh(
@@ -456,6 +480,11 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
         &water_cube_vertices[20..24],
     ];
 
+    // columns' water depths, shared between the corners that sample them
+    let mut depths = HashMap::new();
+    let mut depth_of =
+        |coord: IVec3| *depths.entry(coord).or_insert_with(|| water_depth(source, coord));
+
     for (block_coord, block) in source.non_air() {
         let world_position = block_coord.as_vec3();
 
@@ -495,15 +524,17 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
             // their shared edge by different amounts and visibly tear apart - depth
             // only ever affects per-pixel color/alpha (G), which can't crack.
             let is_top = is_water && i == 4;
-            let depth_factor = if is_top {
-                (water_depth(source, block_coord) as i64 * cell_size) as f32 / CHUNK_SIZE as f32
-            } else {
-                0.0
-            };
             let colors: Vec<[f32; 4]> = geometry[i]
                 .iter()
                 .map(|v| {
                     if is_water {
+                        let depth_factor = if is_top {
+                            vertex_water_depth(&mut depth_of, block_coord, i, v.position)
+                                * cell_size as f32
+                                / CHUNK_SIZE as f32
+                        } else {
+                            0.0
+                        };
                         let (shore, shore_distance) = if is_top {
                             (
                                 vertex_shore_factor(source, block_coord, i, v.position),
@@ -545,8 +576,8 @@ mod tests {
     use crate::block::BlockType;
 
     use super::{
-        generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao, BlockSource,
-        ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
+        generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
+        vertex_water_depth, water_depth, BlockSource, ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
@@ -636,6 +667,36 @@ mod tests {
     }
 
     #[test]
+    fn test_neighbouring_water_columns_agree_on_shared_corner_depth() {
+        let mut chunk = ChunkData::default();
+        // two columns with their surface at y = 5: one 5 deep, its +x neighbour 2 deep
+        chunk.set_block_at(U16Vec3::new(4, 0, 4), BlockType::Stone);
+        for y in 1..=5 {
+            chunk.set_block_at(U16Vec3::new(4, y, 4), BlockType::Water);
+        }
+        for y in 0..=3 {
+            chunk.set_block_at(U16Vec3::new(5, y, 4), BlockType::Stone);
+        }
+        for y in 4..=5 {
+            chunk.set_block_at(U16Vec3::new(5, y, 4), BlockType::Water);
+        }
+        let neighbors = no_neighbors();
+        let source = ChunkNeighbourhood {
+            chunk: &chunk,
+            neighbors: &neighbors,
+        };
+        let mut depth_of = |coord: IVec3| water_depth(&source, coord);
+
+        // the corner between them, on the +z side: seen from each column's top face
+        let deep = vertex_water_depth(&mut depth_of, IVec3::new(4, 5, 4), 4, [0.5, 0.5, 0.5]);
+        let shallow =
+            vertex_water_depth(&mut depth_of, IVec3::new(5, 5, 4), 4, [-0.5, 0.5, 0.5]);
+        assert_eq!(deep, shallow);
+        // averaged with the two dry columns on the +z side
+        assert_eq!((5.0 + 2.0) / 4.0, deep);
+    }
+
+    #[test]
     fn test_terrain_block_floor_and_water() {
         // below the solid floor even a zero-height column is solid
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0));
@@ -705,6 +766,23 @@ mod tests {
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
         // below the node isn't a horizontal border, so no skirt
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
+    }
+
+    #[test]
+    fn test_water_depth_on_lod_border_ignores_skirts() {
+        // ground up to y = 3 everywhere, water from 4 to 7
+        let mut lod = flat_lod(4);
+        for x in -1..=16 {
+            for z in -1..=16 {
+                for y in 4..8 {
+                    lod.cells[LodBlocks::index(16, IVec3::new(x, y, z))] = BlockType::Water;
+                }
+            }
+        }
+        // the border's top solid cells read as water for the skirt, but don't add depth
+        assert_eq!(BlockType::Water, lod.block(IVec3::new(-1, 3, 4)));
+        assert_eq!(4, water_depth(&lod, IVec3::new(4, 7, 4)));
+        assert_eq!(4, water_depth(&lod, IVec3::new(-1, 7, 4)));
     }
 
     #[test]

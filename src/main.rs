@@ -19,6 +19,7 @@ use rustcraft::chunks::{
     material::{ChunkMaterial, WaterMaterial},
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
+use rustcraft::sky::{gradient_skybox, HORIZON_COLOR};
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -31,6 +32,7 @@ fn setup_scene(
     asset_server: Res<AssetServer>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
@@ -62,6 +64,7 @@ fn setup_scene(
         .spawn((
             Transform::from_xyz(0.0, 2.0, 0.0),
             Camera3d { ..default() },
+            gradient_skybox(&mut images),
             Projection::Perspective(PerspectiveProjection {
                 far: fog_distance + 256.0,
                 ..default()
@@ -75,7 +78,7 @@ fn setup_scene(
             Tonemapping::None,
             Msaa::Off,
             DistanceFog {
-                color: Color::srgb_u8(120, 224, 232),
+                color: HORIZON_COLOR,
                 falloff: FogFalloff::Linear {
                     start: layout.fog_start(),
                     end: fog_distance.max(layout.fog_start() + 1.0),
@@ -115,6 +118,7 @@ fn setup_scene(
     ));
     commands.insert_resource(LodLoader::new(
         layout,
+        renderer.fog_start_fraction,
         renderer.smooth_lod_level,
         world_height,
         chunk_material_handle.clone(),
@@ -158,7 +162,7 @@ fn main() {
             MaterialPlugin::<ChunkMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
         ))
-        .insert_resource(ClearColor(Color::srgb_u8(120, 224, 232)))
+        .insert_resource(ClearColor(HORIZON_COLOR))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
