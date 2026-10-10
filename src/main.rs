@@ -36,7 +36,11 @@ fn setup_scene(
 ) {
     let settings = read_settings("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
-    let layout = LodLayout::new(renderer.full_detail_distance, renderer.render_distance);
+    let layout = LodLayout::new(
+        renderer.full_detail_distance,
+        renderer.render_distance,
+        renderer.lod_level_scale,
+    );
     let render_distance = layout.render_distance() as u32;
     info!(
         "drawing terrain {render_distance} chunks out with {} LOD levels",

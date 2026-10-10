@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_full_detail_chunks_are_within_full_detail_reach() {
-        let layout = LodLayout::new(32, 128);
+        let layout = LodLayout::new(32, 128, 2);
         let reach = layout.full_detail_reach();
         let anchor = ChunkCoordinate(I64Vec3::new(3, -2, 5));
         let r = reach as i64 + 4;

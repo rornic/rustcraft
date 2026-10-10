@@ -1,6 +1,7 @@
 [renderer]
 render_distance = 128
-full_detail_distance = 32
+full_detail_distance = 16
+lod_level_scale = 4
 smooth_lod_level = 2
 lod_fade_seconds = 0.6
 fog_start_fraction = 0.5

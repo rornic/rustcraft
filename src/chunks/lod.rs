@@ -34,17 +34,24 @@ use crate::world::World;
 pub struct LodLayout {
     /// Chunks within this many chunks of the camera are drawn at full detail.
     pub full_detail_distance: f32,
+    /// Each LOD level reaches this many times as far as the one before.
+    pub level_scale: f32,
     pub max_level: u8,
+    render_distance: f32,
 }
 
 impl LodLayout {
     /// Uses the fewest LOD levels that draw terrain out to `render_distance` chunks.
-    pub fn new(full_detail_distance: u32, render_distance: u32) -> Self {
+    pub fn new(full_detail_distance: u32, render_distance: u32, level_scale: u32) -> Self {
+        let full_detail_distance = full_detail_distance.max(1) as f32;
         let mut layout = Self {
-            full_detail_distance: full_detail_distance.max(1) as f32,
+            full_detail_distance,
+            // below 2, a level's nodes would be wider than the ring it draws
+            level_scale: level_scale.max(2) as f32,
             max_level: 0,
+            render_distance: (render_distance as f32).max(full_detail_distance),
         };
-        while layout.render_distance() < render_distance as f32 {
+        while layout.reach(layout.max_level) < layout.render_distance {
             layout.max_level += 1;
         }
         layout
@@ -52,12 +59,17 @@ impl LodLayout {
 
     /// How far, in chunks, terrain is drawn.
     pub fn render_distance(self) -> f32 {
-        self.full_detail_distance * (1u32 << self.max_level) as f32
+        self.render_distance
     }
 
-    /// Whether `key` is drawn as its 8 children: each LOD reaches twice as far as the last.
+    /// How far, in chunks, `level` draws out to - level 0 being full detail.
+    pub fn reach(self, level: u8) -> f32 {
+        self.full_detail_distance * self.level_scale.powi(level as i32)
+    }
+
+    /// Whether `key` is drawn as its 8 children: it's within reach of the next level down.
     pub fn splits(self, key: LodKey, anchor: ChunkCoordinate) -> bool {
-        key.level > 0 && key.distance(anchor) < self.full_detail_distance / 2.0 * key.width() as f32
+        key.level > 0 && key.distance(anchor) < self.reach(key.level - 1)
     }
 
     /// Whether a chunk is close enough to be drawn at full detail.
@@ -817,11 +829,9 @@ mod tests {
         max_y: 16,
     };
 
+    // Each level reaching twice as far as the last, out to the edge of `max_level`.
     fn layout(max_level: u8) -> LodLayout {
-        LodLayout {
-            full_detail_distance: 32.0,
-            max_level,
-        }
+        LodLayout::new(32, 32 << max_level, 2)
     }
 
     fn chunk(x: i64, y: i64, z: i64) -> ChunkCoordinate {
@@ -876,11 +886,32 @@ mod tests {
 
     #[test]
     fn test_layout_uses_fewest_levels_reaching_render_distance() {
-        assert_eq!(0, LodLayout::new(32, 32).max_level);
-        assert_eq!(1, LodLayout::new(32, 33).max_level);
-        assert_eq!(2, LodLayout::new(32, 128).max_level);
-        assert_eq!(3, LodLayout::new(16, 128).max_level);
+        assert_eq!(0, LodLayout::new(32, 32, 2).max_level);
+        assert_eq!(1, LodLayout::new(32, 33, 2).max_level);
+        assert_eq!(2, LodLayout::new(32, 128, 2).max_level);
+        assert_eq!(3, LodLayout::new(16, 128, 2).max_level);
+        assert_eq!(2, LodLayout::new(16, 128, 4).max_level);
+        assert_eq!(3, LodLayout::new(16, 257, 4).max_level);
         assert_eq!(128.0, layout(2).render_distance());
+    }
+
+    #[test]
+    fn test_render_distance_is_not_rounded_up_to_a_level() {
+        let layout = LodLayout::new(16, 100, 4);
+        assert_eq!(100.0, layout.render_distance());
+        assert_eq!(256.0, layout.reach(layout.max_level));
+    }
+
+    #[test]
+    fn test_each_level_reaches_level_scale_times_further() {
+        let layout = LodLayout::new(16, 1024, 4);
+        assert_eq!([16.0, 64.0, 256.0, 1024.0], [0, 1, 2, 3].map(|l| layout.reach(l)));
+        let anchor = chunk(0, 4, 0);
+        let selected = select_lods(anchor, layout, BAND);
+        // a level-1 node 50 chunks out is drawn whole, a level-2 node that close is split
+        let level_one = LodKey::containing(chunk(50, 4, 0), 1);
+        assert!(selected.contains(&level_one));
+        assert!(!selected.contains(&level_one.parent()));
     }
 
     #[test]
@@ -894,7 +925,7 @@ mod tests {
     #[test]
     fn test_full_detail_distance_comes_from_layout() {
         let anchor = chunk(0, 5, 0);
-        let near = LodLayout::new(16, 128);
+        let near = LodLayout::new(16, 128, 2);
         assert!(near.full_detail(chunk(15, 5, 0), anchor));
         assert!(!near.full_detail(chunk(20, 5, 0), anchor));
         assert_eq!(16.0 * 16.0, near.fog_start());
@@ -902,8 +933,15 @@ mod tests {
     }
 
     fn assert_exact_cover(anchor: ChunkCoordinate, max_level: u8) {
-        let selected = select_lods(anchor, layout(max_level), BAND);
-        let range = layout(max_level).render_distance() as i64;
+        assert_exact_cover_with(anchor, layout(max_level));
+        // further out per level, and a render distance short of the last level's reach
+        assert_exact_cover_with(anchor, LodLayout::new(8, 100, 4));
+    }
+
+    fn assert_exact_cover_with(anchor: ChunkCoordinate, layout: LodLayout) {
+        let max_level = layout.max_level;
+        let selected = select_lods(anchor, layout, BAND);
+        let range = layout.render_distance() as i64;
         for x in -range..range {
             for z in -range..range {
                 for y in BAND.min_y..BAND.max_y {
@@ -911,10 +949,10 @@ mod tests {
                     let covering = (1..=max_level)
                         .filter(|&level| selected.contains(&LodKey::containing(c, level)))
                         .count()
-                        + layout(max_level).full_detail(c, anchor) as usize;
+                        + layout.full_detail(c, anchor) as usize;
                     assert!(covering <= 1, "chunk {:?} drawn {covering} times", c.0);
                     if LodKey::containing(c, 0).distance(anchor)
-                        < layout(max_level).render_distance()
+                        < layout.render_distance()
                     {
                         assert_eq!(1, covering, "chunk {:?} not drawn", c.0);
                     }
@@ -932,19 +970,21 @@ mod tests {
 
     #[test]
     fn test_selection_neighbours_differ_by_at_most_one_level() {
-        let anchor = chunk(3, 4, -2);
-        let selected = select_lods(anchor, layout(3), BAND);
-        let level_at = |c: ChunkCoordinate| -> u8 {
-            (1..=3)
-                .find(|&level| selected.contains(&LodKey::containing(c, level)))
-                .unwrap_or(0)
-        };
-        for x in -100..100 {
-            for z in -100..100 {
-                let c = chunk(anchor.0.x + x, 4, anchor.0.z + z);
-                let n = chunk(c.0.x + 1, 4, c.0.z);
-                if LodKey::containing(n, 0).distance(anchor) < 110.0 {
-                    assert!(level_at(c).abs_diff(level_at(n)) <= 1);
+        for layout in [layout(3), LodLayout::new(8, 128, 4)] {
+            let anchor = chunk(3, 4, -2);
+            let selected = select_lods(anchor, layout, BAND);
+            let level_at = |c: ChunkCoordinate| -> u8 {
+                (1..=layout.max_level)
+                    .find(|&level| selected.contains(&LodKey::containing(c, level)))
+                    .unwrap_or(0)
+            };
+            for x in -100..100 {
+                for z in -100..100 {
+                    let c = chunk(anchor.0.x + x, 4, anchor.0.z + z);
+                    let n = chunk(c.0.x + 1, 4, c.0.z);
+                    if LodKey::containing(n, 0).distance(anchor) < 110.0 {
+                        assert!(level_at(c).abs_diff(level_at(n)) <= 1);
+                    }
                 }
             }
         }
