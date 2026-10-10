@@ -14,6 +14,8 @@ use bevy::{
 
 /// The sky at the horizon, also used for fog so distant terrain fades into it.
 pub const HORIZON_COLOR: Color = Color::srgb(165.0 / 255.0, 200.0 / 255.0, 235.0 / 255.0);
+/// How opaque fog gets at its far end.
+pub const FOG_MAX_OPACITY: f32 = 0.8;
 /// The sky straight overhead.
 pub const ZENITH_COLOR: Color = Color::srgb(60.0 / 255.0, 110.0 / 255.0, 200.0 / 255.0);
 

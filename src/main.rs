@@ -19,7 +19,7 @@ use rustcraft::chunks::{
     material::{ChunkMaterial, WaterMaterial},
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
-use rustcraft::sky::{gradient_skybox, HORIZON_COLOR};
+use rustcraft::sky::{gradient_skybox, FOG_MAX_OPACITY, HORIZON_COLOR};
 
 fn read_settings(file: &str) -> Result<Settings, Box<dyn Error>> {
     let settings_str = std::fs::read_to_string(file)?;
@@ -78,7 +78,7 @@ fn setup_scene(
             Tonemapping::None,
             Msaa::Off,
             DistanceFog {
-                color: HORIZON_COLOR,
+                color: HORIZON_COLOR.with_alpha(FOG_MAX_OPACITY),
                 falloff: FogFalloff::Linear {
                     start: layout.fog_start(),
                     end: fog_distance.max(layout.fog_start() + 1.0),
