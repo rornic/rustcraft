@@ -21,13 +21,14 @@ use bevy::{
 use super::{
     chunk::{ChunkCoordinate, ChunkData},
     generate::generator::{generate_chunk, generate_chunk_mesh, ChunkMeshes},
+    lod::lod0_wanted,
     material::{ChunkMaterial, WaterMaterial},
 };
 use crate::{player::PlayerLook, world::World};
 
 #[derive(Component)]
 pub struct Chunk {
-    coord: ChunkCoordinate,
+    pub(crate) coord: ChunkCoordinate,
 }
 
 #[derive(Component)]
@@ -79,6 +80,9 @@ const BASELINE_IN_FLIGHT_GENERATING: usize = 1024;
 // corner-diagonal chunks), so the neighbour-data shell must reach far enough to cover a
 // (1,1,1) chunk-grid offset, i.e. Euclidean distance sqrt(3) =~ 1.73 - round up to 2.
 const NEIGHBOR_DATA_PADDING: u32 = 2;
+// Full-detail chunks are those whose level-1 LOD node is within LOD0_DISTANCE (16) of
+// the camera, so they reach out to 16 plus that node's diagonal (2 * sqrt(3)).
+const FULL_DETAIL_DISTANCE: u32 = 20;
 
 // Ratio of this render distance's shell surface area to the baseline's, using the same
 // effective radius (render_distance + padding) the spawn queue itself scans.
@@ -93,11 +97,8 @@ fn scale_budget(baseline: usize, render_distance: u32) -> usize {
 }
 
 impl ChunkLoader {
-    pub fn new(
-        render_distance: u32,
-        material: Handle<ChunkMaterial>,
-        water_material: Handle<WaterMaterial>,
-    ) -> Self {
+    pub fn new(material: Handle<ChunkMaterial>, water_material: Handle<WaterMaterial>) -> Self {
+        let render_distance = FULL_DETAIL_DISTANCE;
         Self {
             render_distance,
             chunk_to_entity: HashMap::new(),
@@ -113,6 +114,16 @@ impl ChunkLoader {
                 render_distance,
             ),
         }
+    }
+
+    /// The chunk the camera was in when chunks were last gathered. Everything that
+    /// decides what to draw where uses this, so it all agrees.
+    pub fn anchor(&self) -> ChunkCoordinate {
+        self.spawn_queue.anchor
+    }
+
+    pub fn chunk_entity(&self, coord: ChunkCoordinate) -> Option<Entity> {
+        self.chunk_to_entity.get(&coord).copied()
     }
 }
 
@@ -219,11 +230,9 @@ pub fn mark_chunks(
     >,
 ) {
     chunks_query.iter_mut().for_each(|(entity, chunk)| {
-        // chunks beyond render_distance are generated only to supply neighbour data
-        // for the true boundary's meshing - they're never meshed themselves
-        if chunk_distance(chunk.coord, chunk_loader.spawn_queue.anchor)
-            > chunk_loader.render_distance as f32
-        {
+        // chunks drawn by a LOD node instead are generated only to supply neighbour
+        // data for the full-detail boundary's meshing - they're never meshed themselves
+        if !lod0_wanted(chunk.coord, chunk_loader.spawn_queue.anchor) {
             return;
         }
 
@@ -505,9 +514,26 @@ mod tests {
     };
 
     use super::{
-        build_offsets, offset_distance, scale_budget, shell_area_scale, sort_by_viewport_bias,
-        ChunkCoordinate, ChunkSpawnQueue, HashMap, BASELINE_RENDER_DISTANCE,
+        build_offsets, chunk_distance, lod0_wanted, offset_distance, scale_budget,
+        shell_area_scale, sort_by_viewport_bias, ChunkCoordinate, ChunkSpawnQueue, HashMap,
+        BASELINE_RENDER_DISTANCE, FULL_DETAIL_DISTANCE,
     };
+
+    #[test]
+    fn test_full_detail_chunks_are_within_full_detail_distance() {
+        let anchor = ChunkCoordinate(I64Vec3::new(3, -2, 5));
+        let r = FULL_DETAIL_DISTANCE as i64 + 4;
+        for x in -r..=r {
+            for y in -r..=r {
+                for z in -r..=r {
+                    let c = ChunkCoordinate(anchor.0 + I64Vec3::new(x, y, z));
+                    if lod0_wanted(c, anchor) {
+                        assert!(chunk_distance(c, anchor) <= FULL_DETAIL_DISTANCE as f32);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_build_offsets_count_and_bounds() {

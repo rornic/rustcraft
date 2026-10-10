@@ -15,12 +15,6 @@ fn fragment(
 
     let world_position = in.world_position.xyz;
     let view_position = view_bindings::view.world_position.xyz;
-    let view_to_world = world_position - view_position;
-
-    let dist = length(view_to_world);
-    if dist > 2000.0 {
-      discard;
-    }
 
     let brightness = dot(normalize(in.world_normal), normalize(vec3(-0.2, 0.7, 0.2)));
 

@@ -3,13 +3,20 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use super::erosion::ErosionParams;
 use super::noise::NoiseGenerator;
-use super::region::{compute_region, Region, RegionCoord};
+use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 
 // 64 resident regions x ~256KB/region (heights+discharge, 256x256 f32 x2) =~ 32MB
 // worst case - generous headroom over the chunk-load front's working set at render
 // distance 64 (1024 blocks =~ 4x4 regions visible at once) without being a memory
 // concern. Retuned once real access patterns are observed.
 const RESIDENT_REGION_CAP: usize = 64;
+
+/// A cache size that keeps every region within `radius_blocks` of the camera resident,
+/// so generating distant LOD nodes doesn't evict and re-erode regions still in view.
+pub fn resident_cap_for(radius_blocks: i64) -> usize {
+    let across = ((2 * radius_blocks + REGION_SIZE - 1) / REGION_SIZE) as usize + 2;
+    (across * across).max(RESIDENT_REGION_CAP)
+}
 
 // Coalescing slot: many concurrent chunk-gen tasks may be the first to ask for the
 // same not-yet-computed region. Exactly one of them runs `compute_region`; the rest
@@ -80,6 +87,13 @@ impl RegionStore {
         }
     }
 
+    pub fn with_resident_cap(self, cap: usize) -> Self {
+        Self {
+            lru: RwLock::new(RegionLru::new(cap)),
+            ..self
+        }
+    }
+
     // Blocks the calling thread until this region is ready (computing it, or
     // waiting on another in-flight compute for the same coordinate) - safe to call
     // only from inside an async-task-pool task, never a Bevy system body on the main
@@ -122,6 +136,13 @@ mod tests {
 
     use super::*;
     use bevy::math::I64Vec2;
+
+    #[test]
+    fn test_resident_cap_covers_render_area() {
+        assert_eq!(RESIDENT_REGION_CAP, resident_cap_for(256));
+        // 2048 blocks either side spans 16 regions, plus one at each edge
+        assert_eq!(18 * 18, resident_cap_for(2048));
+    }
 
     #[test]
     fn test_get_region_caches_repeated_lookups() {

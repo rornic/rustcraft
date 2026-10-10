@@ -117,9 +117,6 @@ fn fragment(
     let view_to_world = world_position - view_position;
 
     let dist = length(view_to_world);
-    if dist > 2000.0 {
-      discard;
-    }
 
     let normal = normalize(in.world_normal);
     let brightness = dot(normal, normalize(vec3(-0.2, 0.7, 0.2)));
