@@ -12,8 +12,7 @@ use bevy::{
     },
 };
 
-/// The sky at the horizon. Fog and the background use it too, so distant terrain
-/// fades into the bottom of the sky.
+/// The sky at the horizon, also used for fog so distant terrain fades into it.
 pub const HORIZON_COLOR: Color = Color::srgb(165.0 / 255.0, 200.0 / 255.0, 235.0 / 255.0);
 /// The sky straight overhead.
 pub const ZENITH_COLOR: Color = Color::srgb(60.0 / 255.0, 110.0 / 255.0, 200.0 / 255.0);
@@ -52,8 +51,7 @@ pub fn gradient_skybox(images: &mut Assets<Image>) -> Skybox {
 
     Skybox {
         image: images.add(image),
-        // the skybox is scaled by the camera's exposure, which the terrain shaders don't
-        // use, so this cancels it out to show the colours as given
+        // cancels out camera exposure, which the terrain shaders don't use
         brightness: 1.0 / Exposure::default().exposure(),
         rotation: Quat::IDENTITY,
     }
@@ -65,8 +63,7 @@ fn sky_colour(direction: Vec3) -> LinearRgba {
     LinearRgba::from(HORIZON_COLOR).mix(&LinearRgba::from(ZENITH_COLOR), height)
 }
 
-// The direction through the centre of texel (`x`, `y`) of a cubemap face, in the
-// standard face order +X, -X, +Y, -Y, +Z, -Z.
+// The direction through texel (`x`, `y`) of a cubemap face, in the order +X, -X, +Y, -Y, +Z, -Z.
 fn face_direction(face: u32, x: u32, y: u32, size: u32) -> Vec3 {
     let s = 2.0 * (x as f32 + 0.5) / size as f32 - 1.0;
     let t = 2.0 * (y as f32 + 0.5) / size as f32 - 1.0;

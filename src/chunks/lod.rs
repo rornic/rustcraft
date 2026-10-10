@@ -367,8 +367,7 @@ type PendingChunk = Or<(
     With<GenerateChunkMesh>,
 )>;
 
-// Nodes to spawn, popped from the end: gaps with nothing drawn in their place first, so
-// the loaded edge keeps up when moving fast, then everything else, nearest first.
+// Nodes to spawn, popped from the end: gaps with nothing drawn yet first, then nearest first.
 fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec<LodKey> {
     let mut queued: Vec<(bool, f32, LodKey)> = unspawned
         .map(|key| {
