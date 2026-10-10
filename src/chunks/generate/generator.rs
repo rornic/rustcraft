@@ -357,6 +357,61 @@ impl MeshBuffers {
         ]);
     }
 
+    // `uvs` count tiles across the quad, and the colour alpha carries the atlas cell, see `world.wgsl`.
+    fn push_tiled_quad(&mut self, positions: [[f32; 3]; 4], normal: [f32; 3], uvs: [[f32; 2]; 4], colors: [[f32; 4]; 4]) {
+        let triangle_start: u32 = self.vertices.len() as u32;
+        for j in 0..4 {
+            self.vertices.push(Vertex {
+                position: positions[j],
+                normal,
+                uv: uvs[j],
+            });
+            self.colors.push(colors[j]);
+        }
+        self.indices.extend([
+            triangle_start,
+            triangle_start + 1,
+            triangle_start + 2,
+            triangle_start + 2,
+            triangle_start + 1,
+            triangle_start + 3,
+        ]);
+    }
+
+    // Vertices at every block step round the border, so neighbours share exact edge points and leave no cracks.
+    fn push_fan_quad(&mut self, quad: FanQuad) {
+        let (w, h) = quad.size;
+        let mut ring = Vec::with_capacity(2 * (w + h));
+        ring.extend((0..w).map(|i| (i, 0)));
+        ring.extend((0..h).map(|j| (w, j)));
+        ring.extend((1..=w).rev().map(|i| (i, h)));
+        ring.extend((1..=h).rev().map(|j| (0, j)));
+
+        let mut push = |i: f32, j: f32, uv: [f32; 2]| {
+            self.vertices.push(Vertex {
+                position: (quad.corner + quad.ta * i + quad.tb * j).into(),
+                normal: quad.normal,
+                uv,
+            });
+            self.colors.push(quad.color);
+            self.vertices.len() as u32 - 1
+        };
+        let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
+        let centre = push(w as f32 / 2.0, h as f32 / 2.0, [0, 1].map(|k| (uv_min[k] + uv_max[k]) / 2.0));
+        let first = centre + 1;
+        for &(i, j) in &ring {
+            push(i as f32, j as f32, (quad.uv_at)(i, j));
+        }
+        for k in 0..ring.len() as u32 {
+            let (from, to) = (first + k, first + (k + 1) % ring.len() as u32);
+            if quad.reversed {
+                self.indices.extend([centre, to, from]);
+            } else {
+                self.indices.extend([centre, from, to]);
+            }
+        }
+    }
+
     pub(super) fn is_empty(&self) -> bool {
         self.vertices.is_empty()
     }
@@ -385,6 +440,17 @@ impl MeshBuffers {
         );
         mesh
     }
+}
+
+struct FanQuad<'a> {
+    corner: Vec3,
+    ta: Vec3,
+    tb: Vec3,
+    size: (usize, usize),
+    normal: [f32; 3],
+    color: [f32; 4],
+    uv_at: &'a dyn Fn(usize, usize) -> [f32; 2],
+    reversed: bool,
 }
 
 pub struct ChunkMeshes {
@@ -452,6 +518,170 @@ pub fn generate_lod_mesh(
     Some(meshes)
 }
 
+fn grid_index(size: i32, coord: IVec3) -> usize {
+    ((coord.x * size + coord.y) * size + coord.z) as usize
+}
+
+fn axis_of(v: IVec3) -> usize {
+    if v.x != 0 {
+        0
+    } else if v.y != 0 {
+        1
+    } else {
+        2
+    }
+}
+
+// Which tangent (0 or 1) UV component `k` runs along on this face, so a merged quad can repeat it.
+fn uv_tangent(face: &[Vertex], k: usize, a_axis: usize) -> usize {
+    let high = |v: &Vertex| v.position[a_axis] > 0.0;
+    let follows_a = face.iter().all(|v| (high(v) == high(&face[0])) == (v.uv[k] == face[0].uv[k]));
+    if follows_a {
+        0
+    } else {
+        1
+    }
+}
+
+// Reads blocks inside the chunk from a dense grid, which is much cheaper than `source`, and the rest from `source`.
+struct GridView<'a, S: BlockSource> {
+    size: i32,
+    blocks: &'a [BlockType],
+    source: &'a S,
+}
+
+impl<S: BlockSource> BlockSource for GridView<'_, S> {
+    fn block(&self, coord: IVec3) -> BlockType {
+        if coord.min_element() >= 0 && coord.max_element() < self.size {
+            self.blocks[grid_index(self.size, coord)]
+        } else {
+            self.source.block(coord)
+        }
+    }
+
+    fn non_air(&self) -> Vec<(IVec3, BlockType)> {
+        self.source.non_air()
+    }
+}
+
+#[derive(Copy, Clone)]
+struct FaceCell {
+    block: BlockType,
+    ao: [f32; 4],
+}
+
+impl FaceCell {
+    fn flat(&self) -> bool {
+        self.ao.iter().all(|&ao| ao == self.ao[0])
+    }
+
+    // Only flat-shaded faces merge: stretching a gradient over several blocks would change the shading.
+    fn merges_with(&self, other: &FaceCell) -> bool {
+        self.block == other.block && self.flat() && other.flat() && self.ao[0] == other.ao[0]
+    }
+}
+
+// Merges runs of identical, flat-shaded opaque faces into single quads, one face direction slice at a time.
+fn mesh_opaque_greedy(
+    source: &GridView<impl BlockSource>,
+    face_vertices: &[&[Vertex]; 6],
+    buffers: &mut MeshBuffers,
+) {
+    let size = CHUNK_SIZE as i32;
+    let n = size as usize;
+    let mut mask: Vec<Option<FaceCell>> = vec![None; n * n];
+
+    for (i, template) in face_vertices.iter().enumerate() {
+        let normal = FACE_NORMAL_OFFSET[i];
+        let (ta, tb) = FACE_TANGENTS[i];
+        let (a_axis, b_axis) = (axis_of(ta), axis_of(tb));
+        let uv_axes = [0, 1].map(|k| if uv_tangent(template, k, a_axis) == 0 { a_axis } else { b_axis });
+        let uv_ascending = [0, 1].map(|k| {
+            template
+                .iter()
+                .find(|v| v.position[uv_axes[k]] > 0.0)
+                .is_some_and(|v| v.uv[k] > 0.5)
+        });
+        let normal_axis = axis_of(normal);
+        let normal_unit = normal.abs();
+        let (p0, p1, p2) = (Vec3::from(template[0].position), Vec3::from(template[1].position), Vec3::from(template[2].position));
+        let ccw_in_ab = (p1 - p0).cross(p2 - p0).dot(ta.as_vec3().cross(tb.as_vec3())) > 0.0;
+
+        for slice in 0..size {
+            for b in 0..size {
+                for a in 0..size {
+                    let coord = normal_unit * slice + ta * a + tb * b;
+                    let block = source.block(coord);
+                    let visible = !matches!(block, BlockType::Air | BlockType::Water)
+                        && matches!(source.block(coord + normal), BlockType::Air | BlockType::Water);
+                    mask[(b * size + a) as usize] = visible.then(|| FaceCell {
+                        block,
+                        ao: std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position)),
+                    });
+                }
+            }
+
+            for b0 in 0..n {
+                for a0 in 0..n {
+                    let Some(cell) = mask[b0 * n + a0] else {
+                        continue;
+                    };
+
+                    let (mut w, mut h) = (1, 1);
+                    if cell.flat() {
+                        while a0 + w < n && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_with(&o)) {
+                            w += 1;
+                        }
+                        while b0 + h < n
+                            && (a0..a0 + w).all(|a| mask[(b0 + h) * n + a].is_some_and(|o| cell.merges_with(&o)))
+                        {
+                            h += 1;
+                        }
+                    }
+                    for b in b0..b0 + h {
+                        for a in a0..a0 + w {
+                            mask[b * n + a] = None;
+                        }
+                    }
+
+                    let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
+                    let atlas_cell = (cell.block as usize - 1) as f32;
+                    if w == 1 && h == 1 {
+                        let positions = std::array::from_fn(|j| (Vec3::from(template[j].position) + origin).into());
+                        let uvs = std::array::from_fn(|j| template[j].uv);
+                        let colors = std::array::from_fn(|j| [cell.ao[j], cell.ao[j], cell.ao[j], atlas_cell]);
+                        buffers.push_tiled_quad(positions, template[0].normal, uvs, colors);
+                        continue;
+                    }
+
+                    let mut corner = origin;
+                    corner[a_axis] -= 0.5;
+                    corner[b_axis] -= 0.5;
+                    corner[normal_axis] += template[0].position[normal_axis];
+                    let extent = [w as f32, h as f32];
+                    let uv_at = |i: usize, j: usize| {
+                        let along = [i as f32, j as f32];
+                        [0, 1].map(|k| {
+                            let t = (uv_axes[k] == b_axis) as usize;
+                            if uv_ascending[k] { along[t] } else { extent[t] - along[t] }
+                        })
+                    };
+                    buffers.push_fan_quad(FanQuad {
+                        corner,
+                        ta: ta.as_vec3(),
+                        tb: tb.as_vec3(),
+                        size: (w, h),
+                        normal: template[0].normal,
+                        color: [cell.ao[0], cell.ao[0], cell.ao[0], atlas_cell],
+                        uv_at: &uv_at,
+                        reversed: !ccw_in_ab,
+                    });
+                }
+            }
+        }
+    }
+}
+
 // `cell_size` is how many blocks wide each cell of `source` is.
 fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
@@ -485,37 +715,31 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
     let mut depth_of =
         |coord: IVec3| *depths.entry(coord).or_insert_with(|| water_depth(source, coord));
 
-    for (block_coord, block) in source.non_air() {
+    let size = CHUNK_SIZE as i32;
+    let mut blocks = vec![BlockType::Air; (size * size * size) as usize];
+    let non_air = source.non_air();
+    for &(coord, block) in &non_air {
+        blocks[grid_index(size, coord)] = block;
+    }
+
+    for (block_coord, block) in non_air {
+        if block != BlockType::Water {
+            continue;
+        }
+
         let world_position = block_coord.as_vec3();
 
-        // Order matches `face_vertices`/`sides` below and `FACE_NORMAL_OFFSET`.
-        let front = source.block(block_coord + FACE_NORMAL_OFFSET[0]);
-        let right = source.block(block_coord + FACE_NORMAL_OFFSET[1]);
-        let left = source.block(block_coord + FACE_NORMAL_OFFSET[2]);
-        let back = source.block(block_coord + FACE_NORMAL_OFFSET[3]);
-        let top = source.block(block_coord + FACE_NORMAL_OFFSET[4]);
-        let bottom = source.block(block_coord + FACE_NORMAL_OFFSET[5]);
-
-        let is_water = block == BlockType::Water;
-        let geometry = if is_water { &water_face_vertices } else { &face_vertices };
-        let buffers = if is_water { &mut water } else { &mut opaque };
-        let uv_offset = (block as usize - 1) as f32;
-
-        let sides = [front, right, left, back, top, bottom];
+        // Order matches `water_face_vertices` and `FACE_NORMAL_OFFSET`.
+        let sides = FACE_NORMAL_OFFSET.map(|offset| source.block(block_coord + offset));
         for (i, side) in sides.iter().enumerate() {
-            let draw = match side {
-                BlockType::Water => !is_water,
-                BlockType::Air => true,
-                _ => false,
-            };
-            if !draw {
+            if *side != BlockType::Air {
                 continue;
             }
 
             // Water's color channels carry baked shoreline/depth/top-face/distance
             // data (R/G/B/A, see `vertex_shore_factor`/`water_depth`/
-            // `vertex_shore_distance`) instead of grayscale AO - and only the top face
-            // (i == 4) gets it, since foam/waves are surface-only.
+            // `vertex_shore_distance`), and only the top face (i == 4) gets it, since
+            // foam/waves are surface-only.
             //
             // B (is_top) is deliberately *not* depth-scaled: wave displacement in the
             // shader is gated by this flag alone, with a uniform amplitude for every
@@ -523,36 +747,33 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
             // neighbouring water columns with slightly different depths would animate
             // their shared edge by different amounts and visibly tear apart - depth
             // only ever affects per-pixel color/alpha (G), which can't crack.
-            let is_top = is_water && i == 4;
-            let colors: Vec<[f32; 4]> = geometry[i]
+            let is_top = i == 4;
+            let colors: Vec<[f32; 4]> = water_face_vertices[i]
                 .iter()
                 .map(|v| {
-                    if is_water {
-                        let depth_factor = if is_top {
-                            vertex_water_depth(&mut depth_of, block_coord, i, v.position)
-                                * cell_size as f32
-                                / CHUNK_SIZE as f32
-                        } else {
-                            0.0
-                        };
-                        let (shore, shore_distance) = if is_top {
-                            (
-                                vertex_shore_factor(source, block_coord, i, v.position),
-                                vertex_shore_distance(source, block_coord, i, v.position),
-                            )
-                        } else {
-                            (0.0, 1.0)
-                        };
-                        [shore, depth_factor, if is_top { 1.0 } else { 0.0 }, shore_distance]
+                    let depth_factor = if is_top {
+                        vertex_water_depth(&mut depth_of, block_coord, i, v.position)
+                            * cell_size as f32
+                            / CHUNK_SIZE as f32
                     } else {
-                        let ao = vertex_ao(source, block_coord, i, v.position);
-                        [ao, ao, ao, 1.0]
-                    }
+                        0.0
+                    };
+                    let (shore, shore_distance) = if is_top {
+                        (
+                            vertex_shore_factor(source, block_coord, i, v.position),
+                            vertex_shore_distance(source, block_coord, i, v.position),
+                        )
+                    } else {
+                        (0.0, 1.0)
+                    };
+                    [shore, depth_factor, if is_top { 1.0 } else { 0.0 }, shore_distance]
                 })
                 .collect();
-            buffers.push_face(geometry[i], world_position, uv_offset, &colors);
+            water.push_face(water_face_vertices[i], world_position, (BlockType::Water as usize - 1) as f32, &colors);
         }
     }
+
+    mesh_opaque_greedy(&GridView { size, blocks: &blocks, source }, &face_vertices, &mut opaque);
 
     let water_mesh = if water.vertices.is_empty() {
         None
@@ -571,6 +792,8 @@ mod tests {
     use std::sync::Arc;
 
     use bevy::math::{I64Vec3, IVec3, U16Vec3};
+    use bevy::math::Vec3;
+    use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
     use bevy::utils::HashMap;
 
     use crate::block::BlockType;
@@ -755,6 +978,114 @@ mod tests {
         LodBlocks { size, cells }
     }
 
+    fn mesh_vertices(chunk: ChunkData) -> usize {
+        generate_chunk_mesh(Arc::new(chunk), vec![None; 26]).opaque.count_vertices()
+    }
+
+    #[test]
+    fn test_single_block_has_six_quads() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+        assert_eq!(24, mesh_vertices(chunk));
+    }
+
+    #[test]
+    fn test_flat_floor_merges_into_one_quad_per_face() {
+        let mut chunk = ChunkData::default();
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set_block_at(U16Vec3::new(x, 0, z), BlockType::Stone);
+            }
+        }
+        // each quad is a centre point plus a vertex per block step round its border:
+        // top and bottom are 16x16, the four sides 16x1
+        assert_eq!(2 * (1 + 64) + 4 * (1 + 34), mesh_vertices(chunk));
+    }
+
+    #[test]
+    fn test_different_block_types_do_not_merge() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+        chunk.set_block_at(U16Vec3::new(5, 4, 4), BlockType::Grass);
+        // 5 faces each, the shared one hidden
+        assert_eq!(10 * 4, mesh_vertices(chunk));
+    }
+
+    fn floor_chunk() -> ChunkData {
+        let mut chunk = ChunkData::default();
+        for x in 0..16 {
+            for z in 0..16 {
+                chunk.set_block_at(U16Vec3::new(x, 0, z), BlockType::Stone);
+            }
+        }
+        chunk
+    }
+
+    #[test]
+    fn test_merged_quads_tile_their_uvs_and_carry_the_atlas_cell() {
+        let mesh = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0) else {
+            panic!("missing uvs");
+        };
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            panic!("missing colors");
+        };
+        let tiles = uvs.iter().flatten().fold(0.0f32, |m, &c| m.max(c));
+        assert_eq!(16.0, tiles);
+        assert!(colors.iter().all(|c| c[3] == (BlockType::Stone as usize - 1) as f32));
+    }
+
+    fn top_face_triangles(mesh: &Mesh) -> Vec<f32> {
+        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            panic!("missing positions");
+        };
+        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            panic!("missing normals");
+        };
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!("missing indices");
+        };
+        indices
+            .chunks(3)
+            .filter(|t| t.iter().all(|&i| normals[i as usize] == [0.0, 1.0, 0.0]))
+            .map(|t| {
+                let p = |k: usize| Vec3::from(positions[t[k] as usize]);
+                (p(1) - p(0)).cross(p(2) - p(0)).y
+            })
+            .filter(|area| *area != 0.0)
+            .collect()
+    }
+
+    #[test]
+    fn test_merged_quads_keep_the_winding_of_single_faces() {
+        let mut single = ChunkData::default();
+        single.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+        let single = generate_chunk_mesh(Arc::new(single), vec![None; 26]).opaque;
+        let merged = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let expected = top_face_triangles(&single)[0].signum();
+        assert!(top_face_triangles(&merged).iter().all(|area| area.signum() == expected));
+    }
+
+    #[test]
+    fn test_merged_quad_borders_share_vertices_with_unit_faces() {
+        let mesh = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            panic!("missing positions");
+        };
+        for step in 0..=16 {
+            let edge = [step as f32 - 0.5, 0.5, -0.5];
+            assert!(positions.contains(&edge), "no top-face vertex at {edge:?}");
+        }
+    }
+
+    #[test]
+    fn test_ambient_occlusion_stops_faces_merging() {
+        let mut chunk = floor_chunk();
+        chunk.set_block_at(U16Vec3::new(8, 1, 8), BlockType::Stone);
+        // one quad per face of the floor and of the pillar would be 44; the shaded ring around it splits the top
+        assert!(mesh_vertices(chunk) > 44);
+    }
+
     #[test]
     fn test_lod_border_exposes_surface_cells_as_skirt() {
         let lod = flat_lod(8);
@@ -816,13 +1147,18 @@ mod tests {
     fn bench_generate_and_mesh_chunks() {
         let noise = Arc::new(NoiseGenerator::new(42));
 
-        // x,z: 20 chunks across; y: from deep underground (-10) to above the surface (9),
-        // so the batch mixes uniform deep chunks with real varied surface terrain.
+        // Meshed chunks are the inner ones, so every one has real neighbours on all sides.
+        let offset: i64 = std::env::var("BENCH_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
         let mut coords = Vec::new();
-        for x in 0..20 {
-            for y in -10..10 {
-                for z in 0..20 {
-                    coords.push(ChunkCoordinate(I64Vec3::new(x, y, z)));
+        let mut meshed = Vec::new();
+        for x in 0..24 {
+            for y in -3..10 {
+                for z in 0..24 {
+                    let coord = ChunkCoordinate(I64Vec3::new(x + offset, y, z + offset));
+                    coords.push(coord);
+                    if (2..22).contains(&x) && (-1..8).contains(&y) && (2..22).contains(&z) {
+                        meshed.push(coord);
+                    }
                 }
             }
         }
@@ -835,18 +1171,25 @@ mod tests {
             .collect();
         let generate_elapsed = start.elapsed();
 
-        let start = std::time::Instant::now();
-        for &c in &coords {
-            let neighbours = c.neighbors_26().iter().map(|n| data.get(n).cloned()).collect();
-            generate_chunk_mesh(data[&c].clone(), neighbours);
+        let mut best = std::time::Duration::MAX;
+        let mut vertices = 0;
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            vertices = 0;
+            for &c in &meshed {
+                let neighbours = c.neighbors_26().iter().map(|n| data.get(n).cloned()).collect();
+                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours);
+                vertices += meshes.opaque.count_vertices();
+            }
+            best = best.min(start.elapsed());
         }
-        let mesh_elapsed = start.elapsed();
 
         println!(
-            "bench_generate_and_mesh_chunks: {} chunks, generate={:?}, mesh={:?}",
-            coords.len(),
+            "bench_generate_and_mesh_chunks: {} chunks meshed, generate={:?}, mesh={:?} (best of 3), opaque vertices={}",
+            meshed.len(),
             generate_elapsed,
-            mesh_elapsed
+            best,
+            vertices
         );
     }
 }

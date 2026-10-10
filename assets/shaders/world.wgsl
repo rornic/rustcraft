@@ -6,6 +6,10 @@
 
 @group(2) @binding(3) var<uniform> material_fade: vec4<f32>;
 
+// textures in blocks.png, one per block type but air
+const ATLAS_CELLS: f32 = 5.0;
+const TILE_INSET: f32 = 0.002;
+
 fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
     var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
     let p = vec2<u32>(frag_coord) % 4u;
@@ -26,7 +30,17 @@ fn fragment(
 
     let brightness = dot(normalize(in.world_normal), normalize(vec3(-0.2, 0.7, 0.2)));
 
-    let texel = textureSample(material_color_texture, material_color_sampler, in.uv);
+    // block meshes put tile counts in uv and the atlas cell in vertex alpha, so merged faces repeat their texture
+    var atlas_cell = 0.0;
+#ifdef VERTEX_COLORS
+    atlas_cell = floor(in.color.a + 0.5);
+#endif
+    // kept just inside the cell: a fract near 1.0 would round into the next block's texture
+    let tile_uv = clamp(fract(in.uv), vec2<f32>(TILE_INSET), vec2<f32>(1.0 - TILE_INSET));
+    let atlas_uv = vec2<f32>((atlas_cell + tile_uv.x) / ATLAS_CELLS, tile_uv.y);
+    let atlas_dx = vec2<f32>(dpdx(in.uv.x) / ATLAS_CELLS, dpdx(in.uv.y));
+    let atlas_dy = vec2<f32>(dpdy(in.uv.x) / ATLAS_CELLS, dpdy(in.uv.y));
+    let texel = textureSampleGrad(material_color_texture, material_color_sampler, atlas_uv, atlas_dx, atlas_dy);
     let color_lit = material_color * select(texel, vec4<f32>(1.0), in.uv.x < 0.0);
 
     let dark = color_lit * 0.7;
