@@ -17,6 +17,8 @@ pub struct RendererSettings {
     pub smooth_lod_level: u8,
     /// How long swapping between LOD levels takes to cross-fade, in seconds.
     pub lod_fade_seconds: f32,
+    /// How far out fog starts, as a fraction of the distance to where it's fully opaque.
+    pub fog_start_fraction: f32,
 }
 
 impl Default for RendererSettings {
@@ -26,6 +28,7 @@ impl Default for RendererSettings {
             full_detail_distance: 32,
             smooth_lod_level: 2,
             lod_fade_seconds: 0.6,
+            fog_start_fraction: 0.6,
         }
     }
 }

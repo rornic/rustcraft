@@ -307,6 +307,7 @@ pub struct GenerateLodMesh {
 #[derive(Resource)]
 pub struct LodLoader {
     layout: LodLayout,
+    fog_start_fraction: f32,
     // LOD levels from here out are drawn as a smooth surface instead of blocks
     smooth_level: u8,
     band: LodBand,
@@ -324,8 +325,16 @@ pub struct LodLoader {
 }
 
 impl LodLoader {
+    /// Where fog starts if it's fully opaque at `end`, never over the full-detail area.
+    pub fn fog_start(&self, end: f32) -> f32 {
+        (end * self.fog_start_fraction)
+            .max(self.layout.fog_start())
+            .min(end - 1.0)
+    }
+
     pub fn new(
         layout: LodLayout,
+        fog_start_fraction: f32,
         smooth_level: u8,
         world_height: u64,
         material: Handle<ChunkMaterial>,
@@ -333,6 +342,7 @@ impl LodLoader {
     ) -> Self {
         Self {
             layout,
+            fog_start_fraction,
             smooth_level,
             band: LodBand {
                 min_y: 0,
@@ -357,19 +367,58 @@ type PendingChunk = Or<(
     With<GenerateChunkMesh>,
 )>;
 
-pub fn update_lod_selection(mut lods: ResMut<LodLoader>, chunk_loader: Res<ChunkLoader>) {
+// Nodes to spawn, popped from the end: gaps with nothing drawn in their place first, so
+// the loaded edge keeps up when moving fast, then everything else, nearest first.
+fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec<LodKey> {
+    let mut queued: Vec<(bool, f32, LodKey)> = unspawned
+        .map(|key| {
+            (
+                !state.covered_while_loading(key),
+                key.distance(state.anchor),
+                key,
+            )
+        })
+        .collect();
+    queued.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)));
+    queued.into_iter().map(|(_, _, key)| key).collect()
+}
+
+pub fn update_lod_selection(
+    mut lods: ResMut<LodLoader>,
+    chunk_loader: Res<ChunkLoader>,
+    pending_lods: Query<(), With<GenerateLodMesh>>,
+    pending_chunks: Query<(), PendingChunk>,
+) {
     let anchor = chunk_loader.anchor();
     if lods.anchor == Some(anchor) {
         return;
     }
 
     let selected = select_lods(anchor, lods.layout, lods.band);
-    let mut to_spawn: Vec<LodKey> = selected
-        .iter()
-        .filter(|&key| !lods.nodes.contains_key(key))
-        .copied()
-        .collect();
-    to_spawn.sort_by(|a, b| b.distance(anchor).total_cmp(&a.distance(anchor)));
+    let nodes = &lods.nodes;
+    let node_exists = |key: LodKey| nodes.contains_key(&key);
+    let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+    let chunk_ready = |chunk: ChunkCoordinate| {
+        chunk_loader
+            .chunk_entity(chunk)
+            .is_some_and(|e| !pending_chunks.contains(e))
+    };
+    let state = LodState {
+        anchor,
+        layout: lods.layout,
+        band: lods.band,
+        selected: &selected,
+        node_exists: &node_exists,
+        node_ready: &node_ready,
+        chunk_ready: &chunk_ready,
+    };
+    let to_spawn = spawn_order(
+        &state,
+        selected
+            .iter()
+            .filter(|&key| !nodes.contains_key(key))
+            .copied(),
+    );
     let retiring = lods
         .nodes
         .keys()
@@ -611,7 +660,8 @@ pub fn refresh_lod_visibility(
 
 const FOG_MIN_DEPTH: f32 = 128.0;
 const FOG_UPDATE_INTERVAL: f32 = 0.25;
-const FOG_PULL_IN_SECONDS: f32 = 0.3;
+// How fast fog can close in, in blocks per second, so outrunning loading never snaps it in.
+const FOG_PULL_IN_SPEED: f32 = 100.0;
 const FOG_EASE_OUT_SECONDS: f32 = 2.0;
 
 #[allow(clippy::too_many_arguments)]
@@ -656,18 +706,17 @@ pub fn update_horizon_fog(
 
     let target = target.unwrap();
     let current = visibility.unwrap_or(target);
-    let seconds = if target < current {
-        FOG_PULL_IN_SECONDS
+    let end = if target < current {
+        (current - FOG_PULL_IN_SPEED * time.delta_secs()).max(target)
     } else {
-        FOG_EASE_OUT_SECONDS
+        current + (target - current) * (1.0 - (-time.delta_secs() / FOG_EASE_OUT_SECONDS).exp())
     };
-    let eased = current + (target - current) * (1.0 - (-time.delta_secs() / seconds).exp());
-    *visibility = Some(eased);
+    *visibility = Some(end);
 
     if let Ok(mut fog) = fog.get_single_mut() {
         fog.falloff = FogFalloff::Linear {
-            start: lods.layout.fog_start(),
-            end: eased,
+            start: lods.fog_start(end),
+            end,
         };
     }
 }
@@ -974,6 +1023,45 @@ mod tests {
             with_state(anchor, &selected, &children_exist, &ready, true, |s| s
                 .loaded_distance())
         );
+    }
+
+    #[test]
+    fn test_gaps_spawn_before_nearer_detail_swaps() {
+        let before = chunk(0, 4, 0);
+        let loaded = select_lods(before, layout(2), BAND);
+        let after = chunk(6, 4, 0);
+        let selected = select_lods(after, layout(2), BAND);
+        let exists = |k| loaded.contains(&k);
+        let ready: HashMap<_, _> = loaded.iter().map(|&k| (k, true)).collect();
+        with_state(after, &selected, &exists, &ready, true, |s| {
+            let mut queue =
+                super::spawn_order(s, selected.iter().filter(|k| !exists(**k)).copied());
+            let mut seen_covered = false;
+            while let Some(key) = queue.pop() {
+                let gap = !s.covered_while_loading(key);
+                assert!(
+                    !(gap && seen_covered),
+                    "gap {key:?} queued after a covered node"
+                );
+                seen_covered |= !gap;
+            }
+            assert!(seen_covered);
+        });
+    }
+
+    #[test]
+    fn test_fog_starts_part_way_out_but_not_over_full_detail() {
+        let lods = super::LodLoader::new(
+            layout(2),
+            0.6,
+            2,
+            256,
+            Default::default(),
+            Default::default(),
+        );
+        assert_eq!(2048.0 * 0.6, lods.fog_start(2048.0));
+        assert_eq!(512.0, lods.fog_start(600.0));
+        assert_eq!(499.0, lods.fog_start(500.0));
     }
 
     #[test]

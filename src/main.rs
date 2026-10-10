@@ -118,6 +118,7 @@ fn setup_scene(
     ));
     commands.insert_resource(LodLoader::new(
         layout,
+        renderer.fog_start_fraction,
         renderer.smooth_lod_level,
         world_height,
         chunk_material_handle.clone(),
