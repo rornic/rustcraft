@@ -3,7 +3,6 @@ use std::time::{Duration, Instant};
 use bevy::{
     asset::{Assets, Handle},
     ecs::{
-        change_detection::DetectChangesMut,
         component::Component,
         entity::Entity,
         query::{Added, Or, With},
@@ -795,15 +794,9 @@ pub fn refresh_lod_visibility(
         }
     }
 
-    // newly meshed chunks just appear, hidden straight away if a node still covers them
+    // newly meshed chunks arrive hidden, and fade in unless a node still covers them
     for (entity, chunk) in new_chunks.iter() {
-        if let Ok((mut v, _)) = visibility.get_mut(entity) {
-            v.set_if_neq(if state.chunk_visible(chunk.coord) {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            });
-        }
+        set(entity, state.chunk_visible(chunk.coord));
     }
 
     lods.refresh_all = false;
