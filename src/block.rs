@@ -29,19 +29,20 @@ impl BlockType {
         }
     }
 
-    // How many levels of sky light this block takes from light passing through it, see `light.rs`.
+    // How many levels of sky light this block takes from light passing through it: all of
+    // it for opaque blocks, see `light.rs`.
     pub fn light_opacity(&self) -> u8 {
         match self {
             BlockType::Air => 0,
             BlockType::Leaves => 1,
             BlockType::Water => 2,
-            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow | BlockType::Log => 15,
+            _ => crate::chunks::generate::light::MAX_LIGHT,
         }
     }
 
     // Whether the faces of blocks behind this one are hidden by it. Leaves have holes.
     pub fn is_opaque(&self) -> bool {
-        !matches!(self, BlockType::Air | BlockType::Water | BlockType::Leaves)
+        self.light_opacity() == crate::chunks::generate::light::MAX_LIGHT
     }
 }
 
