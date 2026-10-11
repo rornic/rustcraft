@@ -60,6 +60,10 @@ fn fragment(
     if threshold < material_fade.x || threshold >= material_fade.y {
         discard;
     }
+    // the holes in leaves: this shader replaces Bevy's, so must cut out alpha-masked texels itself
+    if color.a < 0.5 {
+        discard;
+    }
 
     var output: FragmentOutput;
     output.color = color;

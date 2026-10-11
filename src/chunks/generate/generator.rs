@@ -720,11 +720,13 @@ fn mesh_opaque_greedy(
                 for a in 0..size {
                     let coord = normal_unit * slice + ta * a + tb * b;
                     let block = source.block(coord);
+                    // faces show through leaves' holes, including other leaves'
                     let visible = !matches!(block, BlockType::Air | BlockType::Water)
-                        && matches!(source.block(coord + normal), BlockType::Air | BlockType::Water);
+                        && !source.block(coord + normal).is_opaque();
                     mask[(b * size + a) as usize] = visible.then(|| FaceCell {
                         block,
-                        ao: if ambient_occlusion {
+                        // unshaded leaves merge into big quads, which keeps the faces between them cheap
+                        ao: if ambient_occlusion && block != BlockType::Leaves {
                             std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position))
                         } else {
                             [1.0; 4]
@@ -851,7 +853,7 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: boo
         // Order matches `water_face_vertices` and `FACE_NORMAL_OFFSET`.
         let sides = FACE_NORMAL_OFFSET.map(|offset| source.block(block_coord + offset));
         for (i, side) in sides.iter().enumerate() {
-            if *side != BlockType::Air {
+            if !matches!(side, BlockType::Air | BlockType::Leaves) {
                 continue;
             }
 
