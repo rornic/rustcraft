@@ -127,6 +127,8 @@ impl RegionStore {
     }
 }
 
+const SLOPE_SPAN: i64 = 6;
+
 // Enough for a lookup area that touches a corner where four regions meet.
 const SAMPLER_REGIONS: usize = 4;
 
@@ -144,11 +146,15 @@ impl HeightSampler<'_> {
             .height_at(world_x - origin.x, world_z - origin.y) as f64
     }
 
-    // Central-difference gradient over the heightmap, in block-height units.
+    // Central-difference gradient over the heightmap, as the height change across two
+    // blocks. Measured over SLOPE_SPAN blocks either side, so block-sized bumps don't
+    // flip the surface between snow, stone and grass column by column.
     pub fn gradient(&mut self, world_x: i64, world_z: i64) -> (f64, f64) {
-        let gradient_x = self.height(world_x + 1, world_z) - self.height(world_x - 1, world_z);
-        let gradient_z = self.height(world_x, world_z + 1) - self.height(world_x, world_z - 1);
-        (gradient_x, gradient_z)
+        let span = SLOPE_SPAN;
+        let scale = 1.0 / span as f64;
+        let gradient_x = self.height(world_x + span, world_z) - self.height(world_x - span, world_z);
+        let gradient_z = self.height(world_x, world_z + span) - self.height(world_x, world_z - span);
+        (gradient_x * scale, gradient_z * scale)
     }
 
     fn region(&mut self, coord: RegionCoord) -> &Region {
