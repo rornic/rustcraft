@@ -510,8 +510,12 @@ pub fn generate_chunk_mesh(
         chunk: &chunk,
         neighbors: &adjacent_chunks,
     };
-    mesh_blocks(&source, 1)
+    mesh_blocks(&source, 1, true)
 }
+
+// Ambient occlusion is barely visible on cells this many blocks across or more, but stops
+// their faces merging, so coarser block LODs leave it out.
+const AO_MAX_CELL_SIZE: i64 = 2;
 
 pub fn generate_lod_mesh(
     regions: Arc<RegionStore>,
@@ -521,7 +525,8 @@ pub fn generate_lod_mesh(
     let meshes = if key.level >= smooth_level {
         mesh_surface(&Surface::sample(&regions, key), key)
     } else {
-        mesh_blocks(&LodBlocks::sample(&regions, key), key.cell_size())
+        let cell_size = key.cell_size();
+        mesh_blocks(&LodBlocks::sample(&regions, key), cell_size, cell_size <= AO_MAX_CELL_SIZE)
     };
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
@@ -597,6 +602,7 @@ fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
     face_vertices: &[&[Vertex]; 6],
     buffers: &mut MeshBuffers,
+    ambient_occlusion: bool,
 ) {
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
@@ -627,7 +633,11 @@ fn mesh_opaque_greedy(
                         && matches!(source.block(coord + normal), BlockType::Air | BlockType::Water);
                     mask[(b * size + a) as usize] = visible.then(|| FaceCell {
                         block,
-                        ao: std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position)),
+                        ao: if ambient_occlusion {
+                            std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position))
+                        } else {
+                            [1.0; 4]
+                        },
                     });
                 }
             }
@@ -694,7 +704,7 @@ fn mesh_opaque_greedy(
 }
 
 // `cell_size` is how many blocks wide each cell of `source` is.
-fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
+fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: bool) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
 
@@ -784,7 +794,12 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
         }
     }
 
-    mesh_opaque_greedy(&GridView { size, blocks: &blocks, source }, &face_vertices, &mut opaque);
+    mesh_opaque_greedy(
+        &GridView { size, blocks: &blocks, source },
+        &face_vertices,
+        &mut opaque,
+        ambient_occlusion,
+    );
 
     let water_mesh = if water.vertices.is_empty() {
         None
