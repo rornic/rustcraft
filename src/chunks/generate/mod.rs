@@ -1,5 +1,6 @@
 pub mod biome;
 pub mod generator;
+pub mod light;
 pub mod noise;
 pub mod region;
 pub mod region_store;

@@ -10,6 +10,16 @@
 const ATLAS_CELLS: f32 = 7.0;
 const TILE_INSET: f32 = 0.002;
 
+// How bright the darkest shade is: nothing lights the world but the sky yet.
+const AMBIENT: f32 = 0.18;
+// Above 1, light falls away quickly at first under cover, then more slowly.
+const SKY_LIGHT_CURVE: f32 = 1.6;
+
+// Brightness for sky light 0..1, see `light.rs`.
+fn sky_brightness(sky: f32) -> f32 {
+    return mix(AMBIENT, 1.0, pow(clamp(sky, 0.0, 1.0), SKY_LIGHT_CURVE));
+}
+
 fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
     var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
     let p = vec2<u32>(frag_coord) % 4u;
@@ -48,6 +58,11 @@ fn fragment(
 
 #ifdef VERTEX_COLORS
     color = vec4<f32>(color.rgb * in.color.rgb, color.a);
+#endif
+
+    // block meshes carry smoothed sky light; far smooth terrain is all under open sky
+#ifdef VERTEX_UVS_B
+    color = vec4<f32>(color.rgb * sky_brightness(in.uv_b.x), color.a);
 #endif
 
     // This shader fully replaces Bevy's standard PBR fragment stage, so fog isn't

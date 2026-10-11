@@ -151,6 +151,28 @@ impl ChunkData {
         }
     }
 
+    // Calls `f` with every block but air, far faster than a `get_block_at` each.
+    pub fn for_each_non_air(&self, mut f: impl FnMut(U16Vec3, BlockType)) {
+        let mut index = 0;
+        for run in &self.runs {
+            if run.block != BlockType::Air {
+                let mut coord = self.coord_from_index(index);
+                for _ in 0..run.length {
+                    f(coord, run.block);
+                    // y innermost, then z, then x, see `linear_index`
+                    coord.y += 1;
+                    if coord.y == self.size {
+                        (coord.y, coord.z) = (0, coord.z + 1);
+                        if coord.z == self.size {
+                            (coord.z, coord.x) = (0, coord.x + 1);
+                        }
+                    }
+                }
+            }
+            index += run.length as usize;
+        }
+    }
+
     pub fn empty(&self) -> bool {
         self.runs.iter().all(|r| r.block == BlockType::Air)
     }
@@ -388,6 +410,24 @@ mod tests {
 
         assert_eq!(1, chunk_data.runs.len());
         assert_eq!(BlockType::Stone, chunk_data.get_block_at(U16Vec3::new(0, 0, 0)));
+    }
+
+    #[test]
+    fn test_for_each_non_air_visits_exactly_the_set_blocks() {
+        let mut chunk = ChunkData::default();
+        let set = [(U16Vec3::new(0, 15, 0), BlockType::Stone), (U16Vec3::new(3, 0, 15), BlockType::Leaves), (U16Vec3::new(15, 15, 15), BlockType::Sand)];
+        for (coord, block) in set {
+            chunk.set_block_at(coord, block);
+        }
+        for x in 0..16 {
+            chunk.set_block_at(U16Vec3::new(x, 7, 9), BlockType::Grass);
+        }
+        let mut seen = Vec::new();
+        chunk.for_each_non_air(|coord, block| seen.push((coord, block)));
+        assert_eq!(set.len() + 16, seen.len());
+        for (coord, block) in seen {
+            assert_eq!(block, chunk.get_block_at(coord));
+        }
     }
 
     #[test]

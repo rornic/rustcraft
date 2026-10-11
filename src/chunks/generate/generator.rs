@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{cell::LazyCell, collections::HashMap, sync::Arc};
 
 use bevy::{
     math::{I64Vec2, IVec3, U16Vec3, Vec3},
@@ -9,6 +9,7 @@ use bevy::{
 };
 
 use super::biome::{grass_tint, BiomeId, Biomes};
+use super::light::{SkyLight, MAX_LIGHT};
 use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
@@ -276,6 +277,38 @@ fn vertex_ao(
     1.0 - (sum / 3.0).clamp(0.0, 1.0) * AO_STRENGTH
 }
 
+// Sky light at a face's corner, 0..1: the average over the cells around the corner on the
+// face's open side, leaving out solid ones, and the diagonal when both sides are solid
+// since light can't reach round to it.
+fn vertex_light(
+    light: &SkyLight,
+    block_coord: IVec3,
+    face_index: usize,
+    vertex_local_pos: [f32; 3],
+) -> f32 {
+    let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
+    let front = block_coord + FACE_NORMAL_OFFSET[face_index];
+    let open = |coord: IVec3| !light.opaque(coord);
+    let (side_a, side_b) = (open(front + offset_a), open(front + offset_b));
+    let corner = (side_a || side_b) && open(front + offset_a + offset_b);
+    let (mut total, mut count) = (light.level(front) as f32, 1.0);
+    for (cell, lit) in [(front + offset_a, side_a), (front + offset_b, side_b), (front + offset_a + offset_b, corner)] {
+        if lit {
+            total += light.level(cell) as f32;
+            count += 1.0;
+        }
+    }
+    total / count / MAX_LIGHT as f32
+}
+
+// One light level for a whole face, 0..1, in a few coarse steps so neighbouring faces
+// match and merge.
+fn face_light(level: u8) -> f32 {
+    const STEP: u8 = 3;
+    let stepped = (level + STEP / 2) / STEP * STEP;
+    stepped.min(MAX_LIGHT) as f32 / MAX_LIGHT as f32
+}
+
 // Fraction of a water top-face vertex's same-height tangent corners that are solid
 // land - used to bake a shoreline mask into the water mesh so the shader can lap
 // foam there.
@@ -400,6 +433,8 @@ pub(super) struct MeshBuffers {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     colors: Vec<[f32; 4]>,
+    // sky light per vertex, for block faces only, see `world.wgsl`
+    lights: Vec<[f32; 2]>,
 }
 
 impl MeshBuffers {
@@ -426,7 +461,14 @@ impl MeshBuffers {
     }
 
     // `uvs` count tiles across the quad, and the colour alpha carries the atlas cell, see `world.wgsl`.
-    fn push_tiled_quad(&mut self, positions: [[f32; 3]; 4], normal: [f32; 3], uvs: [[f32; 2]; 4], colors: [[f32; 4]; 4]) {
+    fn push_tiled_quad(
+        &mut self,
+        positions: [[f32; 3]; 4],
+        normal: [f32; 3],
+        uvs: [[f32; 2]; 4],
+        colors: [[f32; 4]; 4],
+        lights: [f32; 4],
+    ) {
         let triangle_start: u32 = self.vertices.len() as u32;
         for j in 0..4 {
             self.vertices.push(Vertex {
@@ -435,6 +477,7 @@ impl MeshBuffers {
                 uv: uvs[j],
             });
             self.colors.push(colors[j]);
+            self.lights.push([lights[j], 0.0]);
         }
         self.indices.extend([
             triangle_start,
@@ -463,6 +506,7 @@ impl MeshBuffers {
                 uv,
             });
             self.colors.push((quad.color)(position));
+            self.lights.push([quad.light, 0.0]);
             self.vertices.len() as u32 - 1
         };
         let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
@@ -507,6 +551,10 @@ impl MeshBuffers {
             Mesh::ATTRIBUTE_COLOR,
             VertexAttributeValues::Float32x4(self.colors),
         );
+        if !self.lights.is_empty() {
+            assert_eq!(self.lights.len(), self.vertices.len(), "only some vertices carry light");
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(self.lights));
+        }
         mesh
     }
 }
@@ -518,6 +566,7 @@ struct FanQuad<'a> {
     size: (usize, usize),
     normal: [f32; 3],
     color: &'a dyn Fn(Vec3) -> [f32; 4],
+    light: f32,
     uv_at: &'a dyn Fn(usize, usize) -> [f32; 2],
     reversed: bool,
 }
@@ -597,7 +646,71 @@ pub fn generate_chunk_mesh(
         neighbors: &adjacent_chunks,
     };
     let tint = GrassTint::new(noise, (coord.0 * CHUNK_SIZE as i64).as_vec3(), 1.0);
-    mesh_blocks(&source, 1, true, &tint)
+    // worked out only once there's a face to light: buried and empty chunks have none
+    let light = LazyCell::new(|| neighbourhood_light(&chunk, &adjacent_chunks, coord));
+    mesh_blocks(&source, 1, true, &tint, &light)
+}
+
+// Light falling into the top of a box whose highest block is at `top`, in boxes of `cell`
+// blocks: full sky, less any sea above it.
+fn sky_above(top: i64, cell: i64) -> u8 {
+    let water_above = ((WATER_LEVEL - 1 - top) / cell).clamp(0, MAX_LIGHT as i64) as u8;
+    MAX_LIGHT.saturating_sub(water_above.saturating_mul(BlockType::Water.light_opacity()))
+}
+
+// How far to each side of a chunk its light takes blocks into account: light that could
+// only arrive from further out would already have faded to deep shade.
+const LIGHT_MARGIN: i32 = 8;
+
+// Sky light for the chunk and a block around it, from the chunk and its 26 neighbours, as
+// high as the top of the chunk above, with open sky above that.
+fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>], coord: ChunkCoordinate) -> SkyLight {
+    let size = CHUNK_SIZE as i32;
+    let span = 3 * size;
+    let mut blocks = vec![BlockType::Air; (span * span * span) as usize];
+    let at = |c: IVec3| (((c.x + size) * span + c.z + size) * span + c.y + size) as usize;
+    let beside = |v: i32| (-LIGHT_MARGIN..size + LIGHT_MARGIN).contains(&v);
+    let fill = |blocks: &mut Vec<BlockType>, data: &ChunkData, offset: IVec3| {
+        data.for_each_non_air(|local, block| {
+            let c = offset * size + local.as_ivec3();
+            if beside(c.x) && beside(c.z) {
+                blocks[at(c)] = block;
+            }
+        });
+    };
+    fill(&mut blocks, chunk, IVec3::ZERO);
+    for dx in -1..=1 {
+        for dy in -1..=1 {
+            for dz in -1..=1 {
+                if (dx, dy, dz) == (0, 0, 0) {
+                    continue;
+                }
+                let Some(data) = &neighbours[neighbor_26_index(dx, dy, dz)] else {
+                    continue;
+                };
+                if dy < 0 {
+                    // only the top layer of the chunks below is in the box
+                    for x in 0..size {
+                        for z in 0..size {
+                            let local = U16Vec3::new(x as u16, size as u16 - 1, z as u16);
+                            let c = IVec3::new(dx, dy, dz) * size + local.as_ivec3();
+                            if beside(c.x) && beside(c.z) {
+                                blocks[at(c)] = data.get_block_at(local);
+                            }
+                        }
+                    }
+                } else {
+                    fill(&mut blocks, data, IVec3::new(dx, dy, dz));
+                }
+            }
+        }
+    }
+    let (min, max) = (
+        IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN),
+        IVec3::new(size + LIGHT_MARGIN, 2 * size, size + LIGHT_MARGIN),
+    );
+    let top = coord.0.y * size as i64 + max.y as i64 - 1;
+    SkyLight::new(min, max - min, sky_above(top, 1), |c| blocks[at(c)])
 }
 
 // Ambient occlusion is barely visible on cells this many blocks across or more, but stops
@@ -616,7 +729,13 @@ pub fn generate_lod_mesh(
         // matches `lod_transform`
         let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
         let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
-        mesh_blocks(&LodBlocks::sample(&regions, key), cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint)
+        let blocks = LodBlocks::sample(&regions, key);
+        let padded = blocks.size + 2;
+        let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
+        let light = LazyCell::new(|| {
+            SkyLight::new(IVec3::splat(-1), IVec3::splat(padded), sky_above(top, cell_size), |c| blocks.raw(c))
+        });
+        mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint, &light)
     };
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
@@ -674,16 +793,22 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
 struct FaceCell {
     block: BlockType,
     ao: [f32; 4],
+    // sky light at each corner, 0..1
+    light: [f32; 4],
 }
 
 impl FaceCell {
     fn flat(&self) -> bool {
-        self.ao.iter().all(|&ao| ao == self.ao[0])
+        self.ao.iter().all(|&ao| ao == self.ao[0]) && self.light.iter().all(|&l| l == self.light[0])
     }
 
     // Only flat-shaded faces merge: stretching a gradient over several blocks would change the shading.
     fn merges_with(&self, other: &FaceCell) -> bool {
-        self.block == other.block && self.flat() && other.flat() && self.ao[0] == other.ao[0]
+        self.block == other.block
+            && self.flat()
+            && other.flat()
+            && self.ao[0] == other.ao[0]
+            && self.light[0] == other.light[0]
     }
 }
 
@@ -694,6 +819,7 @@ fn mesh_opaque_greedy(
     buffers: &mut MeshBuffers,
     ambient_occlusion: bool,
     grass_tint: &GrassTint,
+    light: &LazyCell<SkyLight, impl FnOnce() -> SkyLight>,
 ) {
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
@@ -723,13 +849,20 @@ fn mesh_opaque_greedy(
                     // faces show through leaves' holes, including other leaves'
                     let visible = !matches!(block, BlockType::Air | BlockType::Water)
                         && !source.block(coord + normal).is_opaque();
+                    // unshaded leaves merge into big quads, which keeps the faces between them cheap,
+                    // so they and coarse LODs take one light level a face instead of smooth light
+                    let smooth = ambient_occlusion && block != BlockType::Leaves;
                     mask[(b * size + a) as usize] = visible.then(|| FaceCell {
                         block,
-                        // unshaded leaves merge into big quads, which keeps the faces between them cheap
-                        ao: if ambient_occlusion && block != BlockType::Leaves {
+                        ao: if smooth {
                             std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position))
                         } else {
                             [1.0; 4]
+                        },
+                        light: if smooth {
+                            std::array::from_fn(|j| vertex_light(&**light, coord, i, template[j].position))
+                        } else {
+                            [face_light(light.level(coord + normal)); 4]
                         },
                     });
                 }
@@ -771,7 +904,7 @@ fn mesh_opaque_greedy(
                         let uvs = std::array::from_fn(|j| template[j].uv);
                         let colors = std::array::from_fn(|j| color(cell.ao[j], positions[j]));
                         let positions = positions.map(|p| p.to_array());
-                        buffers.push_tiled_quad(positions, template[0].normal, uvs, colors);
+                        buffers.push_tiled_quad(positions, template[0].normal, uvs, colors, cell.light);
                         continue;
                     }
 
@@ -794,6 +927,7 @@ fn mesh_opaque_greedy(
                         size: (w, h),
                         normal: template[0].normal,
                         color: &|position| color(cell.ao[0], position),
+                        light: cell.light[0],
                         uv_at: &uv_at,
                         reversed: !ccw_in_ab,
                     });
@@ -804,7 +938,13 @@ fn mesh_opaque_greedy(
 }
 
 // `cell_size` is how many blocks wide each cell of `source` is.
-fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: bool, grass_tint: &GrassTint) -> ChunkMeshes {
+fn mesh_blocks(
+    source: &impl BlockSource,
+    cell_size: i64,
+    ambient_occlusion: bool,
+    grass_tint: &GrassTint,
+    light: &LazyCell<SkyLight, impl FnOnce() -> SkyLight>,
+) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
 
@@ -900,6 +1040,7 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: boo
         &mut opaque,
         ambient_occlusion,
         grass_tint,
+        light,
     );
 
     let water_mesh = if water.vertices.is_empty() {
@@ -1175,7 +1316,9 @@ mod tests {
     }
 
     fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
-        generate_chunk_mesh(Arc::new(chunk), vec![None; 26], ChunkCoordinate(I64Vec3::ZERO), &NoiseGenerator::new(3))
+        // well above the sea, under open sky
+        let coord = ChunkCoordinate(I64Vec3::new(0, 40, 0));
+        generate_chunk_mesh(Arc::new(chunk), vec![None; 26], coord, &NoiseGenerator::new(3))
     }
 
     fn mesh_vertices(chunk: ChunkData) -> usize {
@@ -1197,9 +1340,17 @@ mod tests {
                 chunk.set_block_at(U16Vec3::new(x, 0, z), BlockType::Stone);
             }
         }
-        // each quad is a centre point plus a vertex per block step round its border:
-        // top and bottom are 16x16, the four sides 16x1
-        assert_eq!(2 * (1 + 64) + 4 * (1 + 34), mesh_vertices(chunk));
+        // each quad is a centre point plus a vertex per block step round its border: the top
+        // is 16x16, the four sides 16x1. The underside shades as light creeps in under it.
+        let mesh = mesh_chunk(chunk).opaque;
+        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            panic!("missing normals");
+        };
+        let facing = |n: [f32; 3]| normals.iter().filter(|&&v| v == n).count();
+        assert_eq!(1 + 64, facing([0.0, 1.0, 0.0]));
+        for side in [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]] {
+            assert_eq!(1 + 34, facing(side));
+        }
     }
 
     #[test]
@@ -1310,6 +1461,51 @@ mod tests {
         let node = GrassTint::new(&noise, Vec3::new(64.0, 0.0, 64.0) + Vec3::splat(1.5), 4.0);
         assert!(node.at(Vec3::splat(-0.5)).abs_diff_eq(chunk_tint(4, 4).at(Vec3::splat(-0.5)), 1e-5));
         assert!(node.at(Vec3::splat(15.5)).abs_diff_eq(chunk_tint(7, 7).at(Vec3::splat(15.5)), 1e-5));
+    }
+
+    // top-face sky light at each vertex, by position
+    fn top_lights(mesh: &Mesh) -> Vec<([f32; 3], f32)> {
+        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            panic!("missing positions");
+        };
+        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            panic!("missing normals");
+        };
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+            panic!("missing light");
+        };
+        (0..positions.len())
+            .filter(|&i| normals[i] == [0.0, 1.0, 0.0])
+            .map(|i| (positions[i], lights[i][0]))
+            .collect()
+    }
+
+    #[test]
+    fn test_open_ground_is_fully_lit() {
+        let lights = top_lights(&mesh_chunk(floor_chunk()).opaque);
+        assert!(!lights.is_empty() && lights.iter().all(|(_, l)| *l == 1.0));
+    }
+
+    #[test]
+    fn test_ground_under_a_roof_is_shaded_smoothly() {
+        let mut chunk = floor_chunk();
+        // a stone roof over x 4..12, z 4..12, three blocks up
+        for x in 4..12 {
+            for z in 4..12 {
+                chunk.set_block_at(U16Vec3::new(x, 3, z), BlockType::Stone);
+            }
+        }
+        let lights = top_lights(&mesh_chunk(chunk).opaque);
+        let floor: Vec<_> = lights.iter().filter(|(p, _)| p[1] == 0.5).collect();
+        let (darkest, _) = floor.iter().map(|(p, l)| (p, *l)).fold((&[0.0; 3], 1.0), |a, b| if b.1 < a.1 { b } else { a });
+        assert!(floor.iter().any(|(_, l)| *l == 1.0), "nowhere on the floor is in the open");
+        assert!((4.5..=11.5).contains(&darkest[0]) && (4.5..=11.5).contains(&darkest[2]), "darkest at {darkest:?}");
+        let mut levels: Vec<f32> = floor.iter().map(|(_, l)| *l).collect();
+        levels.sort_by(f32::total_cmp);
+        levels.dedup();
+        assert!(levels.len() >= 4, "light falls off in steps {levels:?}");
+        // the roof's top is under open sky
+        assert!(lights.iter().any(|(p, l)| p[1] == 3.5 && *l == 1.0));
     }
 
     #[test]
