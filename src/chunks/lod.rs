@@ -92,8 +92,8 @@ impl LodLayout {
 const LOD_TASKS_PER_THREAD: usize = 32;
 // The spawn queue is re-sorted this often, since nodes drift between covered and gap as terrain loads.
 const LOD_RESORT_INTERVAL: f32 = 2.0;
-// Nodes known to be all air are added straight away without a task, up to this many a frame.
-const LOD_AIR_NODES_PER_FRAME: usize = 2048;
+// Nodes known to have nothing to draw are added straight away without a task, up to this many a frame.
+const LOD_EMPTY_NODES_PER_FRAME: usize = 2048;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -529,9 +529,9 @@ pub fn spawn_lods(
     let task_pool = AsyncComputeTaskPool::get();
     let max_in_flight = LOD_TASKS_PER_THREAD * task_pool.thread_num();
     let mut in_flight = pending.iter().count();
-    let mut air_nodes = 0;
+    let mut empty_nodes = 0;
 
-    while air_nodes < LOD_AIR_NODES_PER_FRAME {
+    while empty_nodes < LOD_EMPTY_NODES_PER_FRAME {
         let Some(key) = lods.to_spawn.pop() else {
             break;
         };
@@ -539,12 +539,12 @@ pub fn spawn_lods(
             continue;
         }
         // nothing to mesh, so the node is ready as soon as it exists
-        if known_air(key, &world.region_store) {
+        if known_empty(key, &world.region_store) {
             let entity = commands
                 .spawn((LodNode { key }, lod_transform(key), Visibility::Hidden))
                 .id();
             lods.nodes.insert(key, entity);
-            air_nodes += 1;
+            empty_nodes += 1;
             continue;
         }
         if in_flight >= max_in_flight {
@@ -570,23 +570,28 @@ pub fn spawn_lods(
     }
 }
 
-// Whether `key` is above the sea and all the terrain its mesh would sample, going by
-// regions already computed - never computes one, so it can run on the main thread.
-// Only knows about generated terrain, since LOD meshes are built from it alone - if they
-// ever show player edits, edited areas must stop counting as air here too.
-fn known_air(key: LodKey, regions: &RegionStore) -> bool {
+// Whether `key` is known to have nothing to draw, going by regions already computed -
+// never computes one, so it can run on the main thread. That's when the terrain its mesh
+// would sample is all below it with only air or only water above, or all above it so it's
+// buried in rock. Only knows about generated terrain, since LOD meshes are built from it
+// alone - if they ever show player edits or caves, those must stop counting as empty here.
+fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
     let min = key.min_block();
-    if min.y <= WATER_LEVEL {
-        return false;
-    }
-    // meshes sample a cell past the node's edges, and a block either side for slopes
-    let margin = key.cell_size() + 1;
+    let cell = key.cell_size();
     let width = key.width() * CHUNK_SIZE as i64;
+    // meshes sample a cell past the node's edges, and a block either side for slopes
+    let margin = cell + 1;
     let min_xz = I64Vec2::new(min.x, min.z) - margin;
     let max_xz = I64Vec2::new(min.x, min.z) + width - 1 + margin;
-    regions
-        .loaded_max_height(min_xz, max_xz)
-        .is_some_and(|highest| (min.y as f32) > highest.round() + 1.0)
+    let Some((lowest, highest)) = regions.loaded_height_range(min_xz, max_xz) else {
+        return false;
+    };
+    let (bottom, top) = (min.y - cell, min.y + width + cell);
+    let above_terrain = bottom > highest.round() as i64 + 1;
+    let in_air = bottom > WATER_LEVEL;
+    let under_water = top < WATER_LEVEL - 1;
+    let buried = top < lowest.round() as i64 - 1;
+    above_terrain && (in_air || under_water) || buried
 }
 
 fn lod_transform(key: LodKey) -> Transform {
@@ -1120,41 +1125,58 @@ mod tests {
     }
 
     #[test]
-    fn test_known_air_nodes_have_nothing_to_mesh() {
+    fn test_known_empty_nodes_have_nothing_to_mesh() {
         use crate::chunks::generate::{
             generator::generate_lod_mesh, noise::NoiseGenerator, region_store::RegionStore,
+            WATER_LEVEL, WORLD_HEIGHT,
         };
+        use crate::chunks::chunk::CHUNK_SIZE;
+        use bevy::math::I64Vec2;
         use std::sync::Arc;
 
-        // a mountain range, so terrain rises through many of the nodes
-        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(42))));
-        let corner = chunk(624, 0, 188);
-        let nodes: Vec<LodKey> = (1..=2u8)
-            .flat_map(|level| {
-                let across = 16 >> level;
-                let first = LodKey::containing(corner, level).coord;
-                (0..across).flat_map(move |x| {
-                    (0..32 >> level).flat_map(move |y| {
-                        (0..across).map(move |z| LodKey {
-                            level,
-                            coord: first + I64Vec3::new(x, y, z),
+        let noise = Arc::new(NoiseGenerator::new(42));
+        // a mountain range and the deep ocean, so terrain and water fill many of the nodes
+        let find = |wanted: &dyn Fn(f64) -> bool| {
+            (-20..20)
+                .flat_map(|z| (-20..20).map(move |x| I64Vec2::new(x, z) * 512))
+                .find(|&p| wanted(noise.get(p) - WATER_LEVEL as f64))
+                .expect("no such terrain near the centre")
+        };
+        let patches = [find(&|h| h > 250.0), find(&|h| h < -300.0)];
+
+        let regions = Arc::new(RegionStore::new(noise.clone()));
+        let layers = (WORLD_HEIGHT / CHUNK_SIZE as u64) as i64;
+        let nodes: Vec<LodKey> = patches
+            .iter()
+            .flat_map(|&p| {
+                let corner = chunk(p.x / CHUNK_SIZE as i64, 0, p.y / CHUNK_SIZE as i64);
+                (1..=2u8).flat_map(move |level| {
+                    let across = 16 >> level;
+                    let first = LodKey::containing(corner, level).coord;
+                    (0..across).flat_map(move |x| {
+                        (0..layers >> level).flat_map(move |y| {
+                            (0..across).map(move |z| LodKey {
+                                level,
+                                coord: first + I64Vec3::new(x, y, z),
+                            })
                         })
                     })
                 })
             })
             .collect();
         // nothing is known until the regions under a node are computed
-        assert!(nodes.iter().all(|&key| !super::known_air(key, &regions)));
+        assert!(nodes.iter().all(|&key| !super::known_empty(key, &regions)));
 
-        let mut air = 0;
+        let mut empty = 0;
         for &key in &nodes {
             let meshed = generate_lod_mesh(regions.clone(), key, 2).is_some();
-            if super::known_air(key, &regions) {
-                assert!(!meshed, "{key:?} was taken for air but has a mesh");
-                air += 1;
+            if super::known_empty(key, &regions) {
+                assert!(!meshed, "{key:?} was taken as empty but has a mesh");
+                empty += 1;
             }
         }
-        assert!(air > nodes.len() / 2, "only {air} of {} nodes known to be air", nodes.len());
+        // most of each column is air, rock or open water
+        assert!(empty > nodes.len() * 3 / 4, "only {empty} of {} nodes known to be empty", nodes.len());
     }
 
     #[test]

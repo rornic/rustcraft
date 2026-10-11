@@ -3,7 +3,7 @@ use bevy::math::I64Vec2;
 use super::noise::NoiseGenerator;
 
 pub const REGION_SIZE: i64 = 256;
-// Regions keep the highest column in each tile this many blocks across.
+// Regions keep the lowest and highest column in each tile this many blocks across.
 const TILE_SIZE: i64 = 16;
 const TILES: i64 = REGION_SIZE / TILE_SIZE;
 
@@ -26,8 +26,8 @@ impl RegionCoord {
 // One region's column heights, REGION_SIZE x REGION_SIZE, row-major [z][x].
 pub struct Region {
     pub heights: Vec<f32>,
-    // the highest column in each TILE_SIZE tile, TILES x TILES, row-major [z][x]
-    tile_max: Vec<f32>,
+    // the lowest and highest column in each TILE_SIZE tile, TILES x TILES, row-major [z][x]
+    tile_range: Vec<(f32, f32)>,
 }
 
 impl Region {
@@ -39,13 +39,13 @@ impl Region {
         self.heights[Self::index(local_x, local_z)]
     }
 
-    /// The highest column in `min..=max` (local x, z), rounded out to whole tiles.
-    pub fn max_height(&self, min: I64Vec2, max: I64Vec2) -> f32 {
+    /// The lowest and highest columns in `min..=max` (local x, z), rounded out to whole tiles.
+    pub fn height_range(&self, min: I64Vec2, max: I64Vec2) -> (f32, f32) {
         let (min, max) = (min / TILE_SIZE, max / TILE_SIZE);
         (min.y..=max.y)
             .flat_map(|z| (min.x..=max.x).map(move |x| (z * TILES + x) as usize))
-            .map(|i| self.tile_max[i])
-            .fold(f32::MIN, f32::max)
+            .map(|i| self.tile_range[i])
+            .fold((f32::MAX, f32::MIN), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)))
     }
 }
 
@@ -55,16 +55,16 @@ impl Region {
 pub fn compute_region(noise: &NoiseGenerator, coord: RegionCoord) -> Region {
     let origin = coord.origin();
     let mut heights = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
-    let mut tile_max = vec![f32::MIN; (TILES * TILES) as usize];
+    let mut tile_range = vec![(f32::MAX, f32::MIN); (TILES * TILES) as usize];
     for z in 0..REGION_SIZE {
         for x in 0..REGION_SIZE {
             let height = noise.get(I64Vec2::new(origin.x + x, origin.y + z)) as f32;
             heights.push(height);
-            let tile = &mut tile_max[((z / TILE_SIZE) * TILES + x / TILE_SIZE) as usize];
-            *tile = tile.max(height);
+            let tile = &mut tile_range[((z / TILE_SIZE) * TILES + x / TILE_SIZE) as usize];
+            *tile = (tile.0.min(height), tile.1.max(height));
         }
     }
-    Region { heights, tile_max }
+    Region { heights, tile_range }
 }
 
 #[cfg(test)]
@@ -79,14 +79,16 @@ mod tests {
     }
 
     #[test]
-    fn test_max_height_covers_every_column_in_range() {
+    fn test_height_range_covers_every_column_in_range() {
         let region = &compute_region(&NoiseGenerator::new(1), RegionCoord::from_world(0, 0));
         for (min, max) in [(0, 0), (5, 40), (17, 31), (0, REGION_SIZE - 1)] {
             let (min, max) = (I64Vec2::splat(min), I64Vec2::splat(max));
-            let highest = (min.y..=max.y)
-                .flat_map(|z| (min.x..=max.x).map(move |x| region.height_at(x, z)))
-                .fold(f32::MIN, f32::max);
-            assert!(region.max_height(min, max) >= highest);
+            let (lowest, highest) = region.height_range(min, max);
+            for z in min.y..=max.y {
+                for x in min.x..=max.x {
+                    assert!((lowest..=highest).contains(&region.height_at(x, z)));
+                }
+            }
         }
     }
 

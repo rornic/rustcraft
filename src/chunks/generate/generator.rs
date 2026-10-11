@@ -926,7 +926,7 @@ mod tests {
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0));
         assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0));
         assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0));
-        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, 80, 0.0));
+        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0));
     }
 
     fn test_regions() -> Arc<RegionStore> {

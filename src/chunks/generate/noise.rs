@@ -10,7 +10,7 @@ pub const WORLD_HALF_SIZE: i64 = WORLD_SIZE / 2;
 // A little headroom under the top of the world.
 const MAX_HEIGHT: f64 = WORLD_HEIGHT as f64 - 16.0;
 // Peaks above this are eased towards MAX_HEIGHT instead of being cut off flat.
-const PEAK_EASE_START: f64 = 400.0;
+const PEAK_EASE_START: f64 = MAX_HEIGHT - 96.0;
 
 // Each field gets its own block of seeds, since a fractal seeds its octaves seed, seed+1, ...
 const SEED_STRIDE: u32 = 101;
@@ -59,15 +59,20 @@ const EDGE_FALLOFF_END: f64 = 0.97;
 
 // Below this continentalness the sea floor only gets plain detail noise.
 const OPEN_OCEAN: f64 = -0.25;
-const SEA_FLOOR_DETAIL: f64 = 3.0;
+const SEA_FLOOR_DETAIL: f64 = 10.0;
 
-// Continentalness to height above sea level: deep ocean, continental shelf, coast, inland.
-const CONTINENT_SPLINE: [(f64, f64); 10] = [
-    (-1.0, -46.0),
-    (-0.4, -44.0),
-    (-0.22, -30.0),
-    (-0.12, -10.0),
-    (-0.03, -3.0),
+// Continentalness to height above sea level: abyssal plain, continental slope, the
+// shelf around each coast, then the coast and inland.
+const CONTINENT_SPLINE: [(f64, f64); 14] = [
+    (-1.0, -390.0),
+    (-0.6, -375.0),
+    (-0.4, -340.0),
+    (-0.3, -220.0),
+    (-0.22, -75.0),
+    (-0.18, -55.0),
+    (-0.1, -35.0),
+    (-0.04, -14.0),
+    (-0.01, -3.0),
     (0.0, 0.5),
     (0.015, 3.0),
     (0.05, 8.0),
