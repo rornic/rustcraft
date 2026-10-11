@@ -39,16 +39,14 @@ pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
 pub const SUN_COLOR: Color = Color::srgb(1.0, 0.9, 0.75);
 // How bright sunlight is in the world shader, where the camera's exposure cancels out.
 const SUN_BRIGHTNESS: f32 = 1.3;
-// How far shadows reach, in blocks. Every cascade draws all the terrain in its slice
-// again, so this stays near the player, well short of the render distance.
-const SHADOW_DISTANCE: f32 = 160.0;
 // Bevy's default is four cascades: three is one pass over the terrain fewer, and still
 // keeps shadows sharp up close.
 const SHADOW_CASCADES: usize = 3;
 const FIRST_CASCADE_DISTANCE: f32 = 20.0;
 
-/// The sun, with shadows out to `SHADOW_DISTANCE` or `view_distance` if nearer.
-pub fn sun(view_distance: f32) -> impl Bundle {
+/// The sun, with shadows out to `shadow_distance` blocks. Every cascade draws all the
+/// terrain in its slice again, so that's kept to the full-detail terrain near the player.
+pub fn sun(shadow_distance: f32) -> impl Bundle {
     (
         DirectionalLight {
             color: SUN_COLOR,
@@ -60,7 +58,7 @@ pub fn sun(view_distance: f32) -> impl Bundle {
         CascadeShadowConfigBuilder {
             num_cascades: SHADOW_CASCADES,
             first_cascade_far_bound: FIRST_CASCADE_DISTANCE,
-            maximum_distance: SHADOW_DISTANCE.min(view_distance),
+            maximum_distance: shadow_distance,
             ..Default::default()
         }
         .build(),

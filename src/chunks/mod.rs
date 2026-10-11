@@ -87,7 +87,6 @@ pub fn insert_terrain_resources(
     ));
     commands.insert_resource(LodLoader::new(
         layout,
-        renderer.smooth_lod_level,
         world_height,
         chunk_material.clone(),
         water_material.clone(),

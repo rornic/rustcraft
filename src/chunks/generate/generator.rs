@@ -699,12 +699,13 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
 // their faces merging, so coarser block LODs leave it out.
 const AO_MAX_CELL_SIZE: i64 = 2;
 
+// `smooth` draws the node as a smooth surface instead of blocks, see `LodLayout::smooth`.
 pub fn generate_lod_mesh(
     regions: Arc<RegionStore>,
     key: LodKey,
-    smooth_level: u8,
+    smooth: bool,
 ) -> Option<ChunkMeshes> {
-    let meshes = if key.level >= smooth_level {
+    let meshes = if smooth {
         mesh_surface(&Surface::sample(&regions, key), key)
     } else {
         let cell_size = key.cell_size();
@@ -1513,7 +1514,7 @@ mod tests {
         let chunk = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), height.div_euclid(16), p.y.div_euclid(16)));
         let regions = Arc::new(RegionStore::new(noise));
         let key = crate::chunks::lod::LodKey::containing(chunk, 1);
-        let mesh = super::generate_lod_mesh(regions, key, 3).expect("no mesh").opaque;
+        let mesh = super::generate_lod_mesh(regions, key, false).expect("no mesh").opaque;
         let lights = top_lights(&mesh);
         assert!(!lights.is_empty());
         let dark: Vec<_> = lights.iter().filter(|(_, l)| *l < 1.0).collect();
