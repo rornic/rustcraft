@@ -12,7 +12,7 @@ use bevy::{
     math::{Dir3, I64Vec3, Vec3},
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
-    render::{camera::Camera, mesh::Mesh, primitives::Aabb},
+    render::{camera::Camera, mesh::Mesh, primitives::Aabb, view::Visibility},
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::{GlobalTransform, Transform},
     utils::{futures, HashMap},
@@ -279,11 +279,14 @@ pub fn load_chunks(
                 // polled a second time next frame if we deferred using it here.
                 if let Some(chunk_meshes) = futures::check_ready(task) {
                     let (t, aabb) = chunk_components(chunk.coord);
+                    // hidden until refresh_lod_visibility fades it in, so it never
+                    // flashes up over the LOD node it's replacing
                     commands.entity(entity).insert((
                         Mesh3d(meshes.add(chunk_meshes.opaque)),
                         MeshMaterial3d(chunk_loader.material.clone_weak()),
                         t,
                         aabb,
+                        Visibility::Hidden,
                     ));
                     if let Some(water_mesh) = chunk_meshes.water {
                         let (_, water_aabb) = chunk_components(chunk.coord);

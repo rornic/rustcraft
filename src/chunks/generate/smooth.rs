@@ -253,7 +253,10 @@ mod tests {
     use bevy::math::{I64Vec3, Vec3};
     use bevy::render::mesh::{Mesh, VertexAttributeValues};
 
-    use super::{block_colour, mesh_surface, surface_y, Surface, CELLS, COLOUR_CELLS, CORNERS};
+    use super::{
+        block_colour, mesh_surface, surface_y, Surface, CELLS, CHUNK_SIZE, COLOUR_CELLS, CORNERS,
+        WATER_LEVEL,
+    };
     use crate::block::BlockType;
     use crate::chunks::lod::LodKey;
     use crate::util::primitives::cube;
@@ -320,8 +323,10 @@ mod tests {
     #[test]
     fn test_flat_surface_drawn_by_the_node_it_falls_in() {
         // above sea level, so the node draws no water
-        let surface = flat(80.0);
-        let inside = mesh_surface(&surface, node(1));
+        let height = WATER_LEVEL + 16;
+        let surface = flat(height as f32);
+        let level_node = |y| height.div_euclid(node(0).width() * CHUNK_SIZE as i64) + y;
+        let inside = mesh_surface(&surface, node(level_node(0)));
         // a quad per cell, plus a skirt quad per cell edge around the border
         assert_eq!(
             (CELLS * CELLS + 4 * CELLS) as usize * 4,
@@ -329,7 +334,7 @@ mod tests {
         );
         assert!(inside.water.is_none());
 
-        let above = mesh_surface(&surface, node(2));
+        let above = mesh_surface(&surface, node(level_node(1)));
         assert_eq!(0, above.opaque.count_vertices());
     }
 
@@ -411,7 +416,9 @@ mod tests {
 
     #[test]
     fn test_water_drawn_over_low_ground() {
-        let meshes = mesh_surface(&flat(20.0), node(0));
+        // the node the sea's surface falls in
+        let y = (WATER_LEVEL - 1).div_euclid(node(0).width() * CHUNK_SIZE as i64);
+        let meshes = mesh_surface(&flat((WATER_LEVEL - 20) as f32), node(y));
         let water = meshes.water.expect("water over ground below sea level");
         assert_eq!((CELLS * CELLS) as usize * 4, water.count_vertices());
     }

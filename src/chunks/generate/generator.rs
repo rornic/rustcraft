@@ -155,10 +155,20 @@ fn is_solid(block: BlockType) -> bool {
     block.occlusion_weight() == 1.0
 }
 
+// Height above the sea where snow starts to settle.
+const SNOW_LINE: i64 = 220;
+
+// The steepest ground snow settles on, `above_sea` blocks up: only gentle ground at the snow
+// line, steeper the higher it gets, until only cliffs are left bare.
+fn snow_holding_slope(above_sea: i64) -> f64 {
+    let t = ((above_sea - SNOW_LINE) as f64 / 120.0).clamp(0.0, 1.0);
+    1.5 + 3.0 * t
+}
+
 pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
     if world_y < column_height.max(SOLID_FLOOR) {
         let above_sea = world_y - WATER_LEVEL;
-        if above_sea >= 220 && combined_gradient <= 2.0 {
+        if above_sea >= SNOW_LINE && combined_gradient <= snow_holding_slope(above_sea) {
             BlockType::Snow
         } else if above_sea >= 120 && combined_gradient >= 2.0
             || (above_sea >= 2 && combined_gradient >= 3.5)
@@ -500,8 +510,12 @@ pub fn generate_chunk_mesh(
         chunk: &chunk,
         neighbors: &adjacent_chunks,
     };
-    mesh_blocks(&source, 1)
+    mesh_blocks(&source, 1, true)
 }
+
+// Ambient occlusion is barely visible on cells this many blocks across or more, but stops
+// their faces merging, so coarser block LODs leave it out.
+const AO_MAX_CELL_SIZE: i64 = 2;
 
 pub fn generate_lod_mesh(
     regions: Arc<RegionStore>,
@@ -511,7 +525,8 @@ pub fn generate_lod_mesh(
     let meshes = if key.level >= smooth_level {
         mesh_surface(&Surface::sample(&regions, key), key)
     } else {
-        mesh_blocks(&LodBlocks::sample(&regions, key), key.cell_size())
+        let cell_size = key.cell_size();
+        mesh_blocks(&LodBlocks::sample(&regions, key), cell_size, cell_size <= AO_MAX_CELL_SIZE)
     };
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
@@ -587,6 +602,7 @@ fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
     face_vertices: &[&[Vertex]; 6],
     buffers: &mut MeshBuffers,
+    ambient_occlusion: bool,
 ) {
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
@@ -617,7 +633,11 @@ fn mesh_opaque_greedy(
                         && matches!(source.block(coord + normal), BlockType::Air | BlockType::Water);
                     mask[(b * size + a) as usize] = visible.then(|| FaceCell {
                         block,
-                        ao: std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position)),
+                        ao: if ambient_occlusion {
+                            std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position))
+                        } else {
+                            [1.0; 4]
+                        },
                     });
                 }
             }
@@ -684,7 +704,7 @@ fn mesh_opaque_greedy(
 }
 
 // `cell_size` is how many blocks wide each cell of `source` is.
-fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
+fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: bool) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
 
@@ -774,7 +794,12 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64) -> ChunkMeshes {
         }
     }
 
-    mesh_opaque_greedy(&GridView { size, blocks: &blocks, source }, &face_vertices, &mut opaque);
+    mesh_opaque_greedy(
+        &GridView { size, blocks: &blocks, source },
+        &face_vertices,
+        &mut opaque,
+        ambient_occlusion,
+    );
 
     let water_mesh = if water.vertices.is_empty() {
         None
@@ -926,7 +951,21 @@ mod tests {
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0));
         assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0));
         assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0));
-        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, 80, 0.0));
+        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0));
+    }
+
+    #[test]
+    fn test_snow_settles_on_steeper_ground_higher_up() {
+        let at = |above_sea: i64, slope: f64| {
+            let y = WATER_LEVEL + above_sea;
+            terrain_block(y, y + 1, slope)
+        };
+        assert_ne!(BlockType::Snow, at(200, 0.0));
+        assert_eq!(BlockType::Snow, at(230, 1.0));
+        assert_ne!(BlockType::Snow, at(230, 3.0));
+        assert_eq!(BlockType::Snow, at(360, 3.0));
+        // cliffs stay bare however high they are
+        assert_ne!(BlockType::Snow, at(400, 6.0));
     }
 
     fn test_regions() -> Arc<RegionStore> {

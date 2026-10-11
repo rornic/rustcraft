@@ -3,14 +3,13 @@ use std::time::{Duration, Instant};
 use bevy::{
     asset::{Assets, Handle},
     ecs::{
-        change_detection::DetectChangesMut,
         component::Component,
         entity::Entity,
         query::{Added, Or, With},
         system::{Commands, Local, Query, Res, ResMut, Resource, SystemParam},
     },
     hierarchy::{BuildChildren, ChildBuild},
-    math::{I64Vec3, Vec3},
+    math::{I64Vec2, I64Vec3, Vec3},
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
     render::{mesh::Mesh, primitives::Aabb, view::Visibility},
@@ -24,7 +23,11 @@ use super::{
     chunk::{ChunkCoordinate, CHUNK_SIZE},
     chunk_loader::{Chunk, ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
     fade::{fade_out_and_despawn, set_shown, Fade},
-    generate::generator::{generate_lod_mesh, ChunkMeshes},
+    generate::{
+        generator::{generate_lod_mesh, ChunkMeshes},
+        region_store::RegionStore,
+        WATER_LEVEL,
+    },
     material::{ChunkMaterial, WaterMaterial},
 };
 use crate::world::World;
@@ -88,6 +91,8 @@ impl LodLayout {
 const LOD_TASKS_PER_THREAD: usize = 32;
 // The spawn queue is re-sorted this often, since nodes drift between covered and gap as terrain loads.
 const LOD_RESORT_INTERVAL: f32 = 2.0;
+// Nodes known to have nothing to draw are added straight away without a task, up to this many a frame.
+const LOD_EMPTY_NODES_PER_FRAME: usize = 2048;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -171,10 +176,21 @@ impl LodBand {
 
 /// The LOD nodes to draw around `anchor`, leaving out the area drawn at full detail.
 pub fn select_lods(anchor: ChunkCoordinate, layout: LodLayout, band: LodBand) -> HashSet<LodKey> {
+    select_lods_and_stand_ins(anchor, layout, band).0
+}
+
+/// The LOD nodes to draw around `anchor`, and the level-1 nodes covering the full-detail
+/// area, which stand in for its chunks until they're ready.
+pub fn select_lods_and_stand_ins(
+    anchor: ChunkCoordinate,
+    layout: LodLayout,
+    band: LodBand,
+) -> (HashSet<LodKey>, HashSet<LodKey>) {
     let mut selected = HashSet::new();
+    let mut stand_ins = HashSet::new();
     let max_level = layout.max_level;
     if max_level == 0 {
-        return selected;
+        return (selected, stand_ins);
     }
 
     let width = 1i64 << max_level;
@@ -189,12 +205,12 @@ pub fn select_lods(anchor: ChunkCoordinate, layout: LodLayout, band: LodBand) ->
                     coord: I64Vec3::new(centre.x + x, y, centre.z + z),
                 };
                 if key.distance(anchor) < range {
-                    select_within(key, anchor, layout, band, &mut selected);
+                    select_within(key, anchor, layout, band, &mut selected, &mut stand_ins);
                 }
             }
         }
     }
-    selected
+    (selected, stand_ins)
 }
 
 fn select_within(
@@ -203,6 +219,7 @@ fn select_within(
     layout: LodLayout,
     band: LodBand,
     selected: &mut HashSet<LodKey>,
+    stand_ins: &mut HashSet<LodKey>,
 ) {
     if !band.intersects(key) {
         return;
@@ -211,8 +228,10 @@ fn select_within(
         selected.insert(key);
     } else if key.level > 1 {
         for child in key.children() {
-            select_within(child, anchor, layout, band, selected);
+            select_within(child, anchor, layout, band, selected, stand_ins);
         }
+    } else {
+        stand_ins.insert(key);
     }
 }
 
@@ -323,6 +342,8 @@ pub struct LodLoader {
     band: LodBand,
     anchor: Option<ChunkCoordinate>,
     selected: HashSet<LodKey>,
+    // level-1 nodes over the full-detail area, drawn while its chunks aren't ready
+    stand_ins: HashSet<LodKey>,
     nodes: HashMap<LodKey, Entity>,
     // farthest first, so popping yields the nearest
     to_spawn: Vec<LodKey>,
@@ -369,6 +390,7 @@ impl LodLoader {
             },
             anchor: None,
             selected: HashSet::new(),
+            stand_ins: HashSet::new(),
             nodes: HashMap::new(),
             to_spawn: Vec::new(),
             retiring: Vec::new(),
@@ -454,7 +476,7 @@ pub fn update_lod_selection(
         return;
     }
 
-    let selected = select_lods(anchor, lods.layout, lods.band);
+    let (selected, stand_ins) = select_lods_and_stand_ins(anchor, lods.layout, lods.band);
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
     let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
@@ -471,6 +493,7 @@ pub fn update_lod_selection(
         &state,
         selected
             .iter()
+            .chain(stand_ins.iter().filter(|&&key| !state.covered(key)))
             .filter(|&key| !nodes.contains_key(key))
             .copied(),
     );
@@ -483,6 +506,7 @@ pub fn update_lod_selection(
 
     lods.anchor = Some(anchor);
     lods.selected = selected;
+    lods.stand_ins = stand_ins;
     lods.to_spawn = to_spawn;
     lods.retiring = retiring;
     lods.refresh_all = true;
@@ -497,7 +521,6 @@ pub fn spawn_lods(
     pending: Query<(), With<GenerateLodMesh>>,
     mut since_resort: Local<f32>,
 ) {
-
     *since_resort += time.delta_secs();
     if *since_resort >= LOD_RESORT_INTERVAL {
         *since_resort = 0.0;
@@ -524,13 +547,36 @@ pub fn spawn_lods(
     let task_pool = AsyncComputeTaskPool::get();
     let max_in_flight = LOD_TASKS_PER_THREAD * task_pool.thread_num();
     let mut in_flight = pending.iter().count();
+    let mut empty_nodes = 0;
 
-    while in_flight < max_in_flight {
+    while empty_nodes < LOD_EMPTY_NODES_PER_FRAME {
         let Some(key) = lods.to_spawn.pop() else {
             break;
         };
-        if !lods.selected.contains(&key) || lods.nodes.contains_key(&key) {
+        if lods.nodes.contains_key(&key) {
             continue;
+        }
+        let stand_in = lods.stand_ins.contains(&key);
+        // a stand-in is only needed until its chunks are ready
+        let chunks_ready = || key.chunks().all(|chunk| chunks.get(chunk).ready());
+        if !lods.selected.contains(&key) && !(stand_in && !chunks_ready()) {
+            continue;
+        }
+        // nothing to mesh, so the node is ready as soon as it exists
+        if known_empty(key, &world.region_store) {
+            let entity = commands
+                .spawn((LodNode { key }, lod_transform(key), Visibility::Hidden))
+                .id();
+            lods.nodes.insert(key, entity);
+            if stand_in {
+                lods.retiring.push(key);
+            }
+            empty_nodes += 1;
+            continue;
+        }
+        if in_flight >= max_in_flight {
+            lods.to_spawn.push(key);
+            break;
         }
 
         let regions = world.region_store.clone();
@@ -547,8 +593,35 @@ pub fn spawn_lods(
             ))
             .id();
         lods.nodes.insert(key, entity);
+        if stand_in {
+            lods.retiring.push(key);
+        }
         in_flight += 1;
     }
+}
+
+// Whether `key` is known to have nothing to draw, going by regions already computed -
+// never computes one, so it can run on the main thread. That's when the terrain its mesh
+// would sample is all below it with only air or only water above, or all above it so it's
+// buried in rock. Only knows about generated terrain, since LOD meshes are built from it
+// alone - if they ever show player edits or caves, those must stop counting as empty here.
+fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
+    let min = key.min_block();
+    let cell = key.cell_size();
+    let width = key.width() * CHUNK_SIZE as i64;
+    // meshes sample a cell past the node's edges, and a block either side for slopes
+    let margin = cell + 1;
+    let min_xz = I64Vec2::new(min.x, min.z) - margin;
+    let max_xz = I64Vec2::new(min.x, min.z) + width - 1 + margin;
+    let Some((lowest, highest)) = regions.loaded_height_range(min_xz, max_xz) else {
+        return false;
+    };
+    let (bottom, top) = (min.y - cell, min.y + width + cell);
+    let above_terrain = bottom > highest.round() as i64 + 1;
+    let in_air = bottom > WATER_LEVEL;
+    let under_water = top < WATER_LEVEL - 1;
+    let buried = top < lowest.round() as i64 - 1;
+    above_terrain && (in_air || under_water) || buried
 }
 
 fn lod_transform(key: LodKey) -> Transform {
@@ -661,7 +734,8 @@ pub fn refresh_lod_visibility(
     pending_lods: Query<(), With<GenerateLodMesh>>,
     all_chunks: Query<(Entity, &Chunk), With<Mesh3d>>,
     new_chunks: Query<(Entity, &Chunk), Added<Mesh3d>>,
-    all_nodes: Query<(Entity, &LodNode)>,
+    // only nodes with something to draw - nodes still loading are shown when their mesh lands
+    all_nodes: Query<(Entity, &LodNode), With<Mesh3d>>,
     mut visibility: Query<(&mut Visibility, Option<&Fade>)>,
 ) {
     let Some(anchor) = lods.anchor else {
@@ -720,15 +794,9 @@ pub fn refresh_lod_visibility(
         }
     }
 
-    // newly meshed chunks just appear, hidden straight away if a node still covers them
+    // newly meshed chunks arrive hidden, and fade in unless a node still covers them
     for (entity, chunk) in new_chunks.iter() {
-        if let Ok((mut v, _)) = visibility.get_mut(entity) {
-            v.set_if_neq(if state.chunk_visible(chunk.coord) {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            });
-        }
+        set(entity, state.chunk_visible(chunk.coord));
     }
 
     lods.refresh_all = false;
@@ -886,6 +954,22 @@ mod tests {
         assert_exact_cover(chunk(0, 3, 0), 2);
         assert_exact_cover(chunk(-7, 9, 13), 2);
         assert_exact_cover(chunk(5, -4, -3), 3);
+    }
+
+    #[test]
+    fn test_stand_ins_cover_exactly_the_full_detail_chunks() {
+        let anchor = chunk(3, 4, -2);
+        let layout = LodLayout::new(8, 128, 4);
+        let (_, stand_ins) = super::select_lods_and_stand_ins(anchor, layout, BAND);
+        for x in -12..12 {
+            for z in -12..12 {
+                for y in BAND.min_y..BAND.max_y {
+                    let c = chunk(anchor.0.x + x, y, anchor.0.z + z);
+                    let covered = stand_ins.contains(&LodKey::containing(c, 1));
+                    assert_eq!(layout.full_detail(c, anchor), covered, "chunk {:?}", c.0);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1079,6 +1163,61 @@ mod tests {
             .find(|&&k| k != farthest && !is_ancestor(cover_for(farthest), k))
             .unwrap();
         assert_eq!(vec![gap, farthest], spawn_order_of(anchor, farthest, gap));
+    }
+
+    #[test]
+    fn test_known_empty_nodes_have_nothing_to_mesh() {
+        use crate::chunks::generate::{
+            generator::generate_lod_mesh, noise::NoiseGenerator, region_store::RegionStore,
+            WATER_LEVEL, WORLD_HEIGHT,
+        };
+        use crate::chunks::chunk::CHUNK_SIZE;
+        use bevy::math::I64Vec2;
+        use std::sync::Arc;
+
+        let noise = Arc::new(NoiseGenerator::new(42));
+        // a mountain range and the deep ocean, so terrain and water fill many of the nodes
+        let find = |wanted: &dyn Fn(f64) -> bool| {
+            (-20..20)
+                .flat_map(|z| (-20..20).map(move |x| I64Vec2::new(x, z) * 512))
+                .find(|&p| wanted(noise.get(p) - WATER_LEVEL as f64))
+                .expect("no such terrain near the centre")
+        };
+        let patches = [find(&|h| h > 250.0), find(&|h| h < -300.0)];
+
+        let regions = Arc::new(RegionStore::new(noise.clone()));
+        let layers = (WORLD_HEIGHT / CHUNK_SIZE as u64) as i64;
+        let nodes: Vec<LodKey> = patches
+            .iter()
+            .flat_map(|&p| {
+                let corner = chunk(p.x / CHUNK_SIZE as i64, 0, p.y / CHUNK_SIZE as i64);
+                (1..=2u8).flat_map(move |level| {
+                    let across = 16 >> level;
+                    let first = LodKey::containing(corner, level).coord;
+                    (0..across).flat_map(move |x| {
+                        (0..layers >> level).flat_map(move |y| {
+                            (0..across).map(move |z| LodKey {
+                                level,
+                                coord: first + I64Vec3::new(x, y, z),
+                            })
+                        })
+                    })
+                })
+            })
+            .collect();
+        // nothing is known until the regions under a node are computed
+        assert!(nodes.iter().all(|&key| !super::known_empty(key, &regions)));
+
+        let mut empty = 0;
+        for &key in &nodes {
+            let meshed = generate_lod_mesh(regions.clone(), key, 2).is_some();
+            if super::known_empty(key, &regions) {
+                assert!(!meshed, "{key:?} was taken as empty but has a mesh");
+                empty += 1;
+            }
+        }
+        // most of each column is air, rock or open water
+        assert!(empty > nodes.len() * 3 / 4, "only {empty} of {} nodes known to be empty", nodes.len());
     }
 
     #[test]

@@ -5,6 +5,6 @@ pub mod region_store;
 mod smooth;
 
 /// Height of the world in blocks.
-pub const WORLD_HEIGHT: u64 = 512;
+pub const WORLD_HEIGHT: u64 = 1024;
 /// Height of the sea's surface in blocks.
-pub const WATER_LEVEL: i64 = 64;
+pub const WATER_LEVEL: i64 = 448;

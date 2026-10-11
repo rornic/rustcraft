@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
+use bevy::math::I64Vec2;
+
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 
@@ -93,6 +95,26 @@ impl RegionStore {
             .clone()
     }
 
+    /// The lowest and highest terrain in the block range `min..=max` (x, z), rounded out
+    /// to whole tiles, or None if a region it touches hasn't been computed yet. Never blocks.
+    pub fn loaded_height_range(&self, min: I64Vec2, max: I64Vec2) -> Option<(f32, f32)> {
+        let lru = self.lru.read().unwrap();
+        let (first, last) = (RegionCoord::from_world(min.x, min.y), RegionCoord::from_world(max.x, max.y));
+        let (mut lowest, mut highest) = (f32::MAX, f32::MIN);
+        for rz in first.0.y..=last.0.y {
+            for rx in first.0.x..=last.0.x {
+                let coord = RegionCoord(I64Vec2::new(rx, rz));
+                let region = lru.entries.get(&coord)?.0.get()?;
+                let origin = coord.origin();
+                let local_min = (min - origin).max(I64Vec2::ZERO);
+                let local_max = (max - origin).min(I64Vec2::splat(REGION_SIZE - 1));
+                let (lo, hi) = region.height_range(local_min, local_max);
+                (lowest, highest) = (lowest.min(lo), highest.max(hi));
+            }
+        }
+        Some((lowest, highest))
+    }
+
     pub fn sampler(&self) -> HeightSampler<'_> {
         HeightSampler {
             store: self,
@@ -104,6 +126,8 @@ impl RegionStore {
         self.sampler().height(world_x, world_z)
     }
 }
+
+const SLOPE_SPAN: i64 = 6;
 
 // Enough for a lookup area that touches a corner where four regions meet.
 const SAMPLER_REGIONS: usize = 4;
@@ -122,11 +146,15 @@ impl HeightSampler<'_> {
             .height_at(world_x - origin.x, world_z - origin.y) as f64
     }
 
-    // Central-difference gradient over the heightmap, in block-height units.
+    // Central-difference gradient over the heightmap, as the height change across two
+    // blocks. Measured over SLOPE_SPAN blocks either side, so block-sized bumps don't
+    // flip the surface between snow, stone and grass column by column.
     pub fn gradient(&mut self, world_x: i64, world_z: i64) -> (f64, f64) {
-        let gradient_x = self.height(world_x + 1, world_z) - self.height(world_x - 1, world_z);
-        let gradient_z = self.height(world_x, world_z + 1) - self.height(world_x, world_z - 1);
-        (gradient_x, gradient_z)
+        let span = SLOPE_SPAN;
+        let scale = 1.0 / span as f64;
+        let gradient_x = self.height(world_x + span, world_z) - self.height(world_x - span, world_z);
+        let gradient_z = self.height(world_x, world_z + span) - self.height(world_x, world_z - span);
+        (gradient_x * scale, gradient_z * scale)
     }
 
     fn region(&mut self, coord: RegionCoord) -> &Region {
@@ -151,7 +179,6 @@ mod tests {
     use std::sync::Barrier;
 
     use super::*;
-    use bevy::math::I64Vec2;
 
     #[test]
     fn test_resident_cap_covers_render_area() {
@@ -174,6 +201,26 @@ mod tests {
             assert_eq!(expected, sampler.height(x, z));
         }
         assert!(sampler.recent.len() <= SAMPLER_REGIONS);
+    }
+
+    #[test]
+    fn test_loaded_height_range_waits_for_every_region_it_touches() {
+        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        // spans the corner of regions (0, 0) to (1, 1)
+        let (min, max) = (I64Vec2::splat(200), I64Vec2::splat(300));
+        assert_eq!(None, store.loaded_height_range(min, max));
+        store.get_region(RegionCoord(I64Vec2::new(0, 0)));
+        assert_eq!(None, store.loaded_height_range(min, max));
+        for (x, z) in [(1, 0), (0, 1), (1, 1)] {
+            store.get_region(RegionCoord(I64Vec2::new(x, z)));
+        }
+        let (lowest, highest) = store.loaded_height_range(min, max).unwrap();
+        let mut sampler = store.sampler();
+        for z in 200..=300 {
+            for x in 200..=300 {
+                assert!((lowest..=highest).contains(&(sampler.height(x, z) as f32)));
+            }
+        }
     }
 
     #[test]
