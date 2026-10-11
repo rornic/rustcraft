@@ -20,7 +20,7 @@ fn block_alpha(uv: vec2<f32>, vertex_alpha: f32) -> f32 {
 }
 
 // Block meshes put tile counts in uv and the atlas cell in vertex alpha, so merged faces
-// repeat their texture. Untextured meshes, like smooth far terrain, have a negative uv.
+// repeat their texture.
 fn block_texel(uv: vec2<f32>, vertex_alpha: f32) -> vec4<f32> {
     let atlas_cell = floor(vertex_alpha + 0.5);
     // kept just inside the cell: a fract near 1.0 would round into the next block's texture
@@ -29,5 +29,5 @@ fn block_texel(uv: vec2<f32>, vertex_alpha: f32) -> vec4<f32> {
     let atlas_dx = vec2<f32>(dpdx(uv.x) / ATLAS_CELLS, dpdx(uv.y));
     let atlas_dy = vec2<f32>(dpdy(uv.x) / ATLAS_CELLS, dpdy(uv.y));
     let texel = textureSampleGrad(material_color_texture, material_color_sampler, atlas_uv, atlas_dx, atlas_dy);
-    return material_color * select(texel, vec4<f32>(1.0), uv.x < 0.0);
+    return material_color * texel;
 }

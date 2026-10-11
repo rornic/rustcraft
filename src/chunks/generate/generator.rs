@@ -13,7 +13,6 @@ use super::light::{SkyLight, MAX_LIGHT};
 use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
-use super::smooth::{mesh_surface, Surface};
 use super::trees::{grows_into, trees_near, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
@@ -39,9 +38,9 @@ const FACE_TANGENTS: [(IVec3, IVec3); 6] = [
 ];
 const AO_STRENGTH: f32 = 0.5;
 
-pub(super) const SOLID_FLOOR: i64 = 16;
+const SOLID_FLOOR: i64 = 16;
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
-pub(super) const WATER_TOP: f32 = 0.4;
+const WATER_TOP: f32 = 0.4;
 
 trait BlockSource {
     fn block(&self, coord: IVec3) -> BlockType;
@@ -186,7 +185,7 @@ fn snow_holding_slope(above_sea: i64) -> f64 {
     1.5 + 3.0 * t
 }
 
-pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
+fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
     if world_y < column_height.max(SOLID_FLOOR) {
         let above_sea = world_y - WATER_LEVEL;
         if above_sea >= SNOW_LINE && combined_gradient <= snow_holding_slope(above_sea) {
@@ -431,7 +430,7 @@ fn trees_may_reach(bottom: i64, top: i64, lowest: i64, highest: i64) -> bool {
 // opaque blocks, a second for water, so they can become separate `Mesh`es with
 // separate materials (water needs alpha blending, opaque blocks don't).
 #[derive(Default)]
-pub(super) struct MeshBuffers {
+struct MeshBuffers {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     colors: Vec<[f32; 4]>,
@@ -440,7 +439,7 @@ pub(super) struct MeshBuffers {
 }
 
 impl MeshBuffers {
-    pub(super) fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
+    fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
         let uv_scale = 1.0 / (BLOCK_COUNT - 1) as f32;
 
         let triangle_start: u32 = self.vertices.len() as u32;
@@ -527,11 +526,7 @@ impl MeshBuffers {
         }
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.vertices.is_empty()
-    }
-
-    pub(super) fn build_mesh(self) -> Mesh {
+    fn build_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
             bevy::render::mesh::PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
@@ -699,27 +694,19 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
 // their faces merging, so coarser block LODs leave it out.
 const AO_MAX_CELL_SIZE: i64 = 2;
 
-pub fn generate_lod_mesh(
-    regions: Arc<RegionStore>,
-    key: LodKey,
-    smooth_level: u8,
-) -> Option<ChunkMeshes> {
-    let meshes = if key.level >= smooth_level {
-        mesh_surface(&Surface::sample(&regions, key), key)
-    } else {
-        let cell_size = key.cell_size();
-        // matches `lod_transform`
-        let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
-        let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
-        let blocks = LodBlocks::sample(&regions, key);
-        let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
-        // the padded cells are already in `SkyLight::index` order
-        let light = LazyCell::new(|| {
-            let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
-            SkyLight::new(IVec3::splat(-1), IVec3::splat(blocks.size + 2), sky_above(top, cell_size), opacity)
-        });
-        mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint, &light)
-    };
+pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
+    let cell_size = key.cell_size();
+    // matches `lod_transform`
+    let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
+    let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
+    let blocks = LodBlocks::sample(&regions, key);
+    let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
+    // the padded cells are already in `SkyLight::index` order
+    let light = LazyCell::new(|| {
+        let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
+        SkyLight::new(IVec3::splat(-1), IVec3::splat(blocks.size + 2), sky_above(top, cell_size), opacity)
+    });
+    let meshes = mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint, &light);
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
     }
@@ -1513,7 +1500,7 @@ mod tests {
         let chunk = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), height.div_euclid(16), p.y.div_euclid(16)));
         let regions = Arc::new(RegionStore::new(noise));
         let key = crate::chunks::lod::LodKey::containing(chunk, 1);
-        let mesh = super::generate_lod_mesh(regions, key, 3).expect("no mesh").opaque;
+        let mesh = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
         let lights = top_lights(&mesh);
         assert!(!lights.is_empty());
         let dark: Vec<_> = lights.iter().filter(|(_, l)| *l < 1.0).collect();

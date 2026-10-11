@@ -4,7 +4,6 @@ pub mod light;
 pub mod noise;
 pub mod region;
 pub mod region_store;
-mod smooth;
 pub mod trees;
 
 /// Height of the world in blocks.

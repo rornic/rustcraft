@@ -112,7 +112,7 @@ fn height_colour(above_sea: f64) -> [f64; 3] {
 
 const SAND: [f64; 3] = [222.0, 196.0, 132.0];
 
-// Grass in this climate under trees this dense, as an sRGB map colour, as far LODs draw it.
+// Grass in this climate under trees this dense, as an sRGB map colour.
 fn grass_map_colour(climate: Climate, trees: f64) -> [f64; 3] {
     let canopy = (trees * 1.6).min(1.0) as f32;
     let linear = grass_colour(climate).lerp(leaf_colour(climate), canopy);

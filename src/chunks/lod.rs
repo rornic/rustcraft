@@ -81,6 +81,14 @@ impl LodLayout {
         self.splits(LodKey::containing(chunk, 1), anchor)
     }
 
+    /// How far out, in chunks, the farthest LOD level starts: halfway out with no LOD levels.
+    pub fn last_level_start(self) -> f32 {
+        match self.max_level {
+            0 => self.render_distance / 2.0,
+            level => self.reach(level - 1),
+        }
+    }
+
     /// How far full-detail chunks reach: a level-1 node in range, plus its diagonal.
     pub fn full_detail_reach(self) -> u32 {
         (self.full_detail_distance + 2.0 * 3f32.sqrt()).ceil() as u32
@@ -338,8 +346,6 @@ pub struct GenerateLodMesh {
 #[derive(Resource)]
 pub struct LodLoader {
     layout: LodLayout,
-    // LOD levels from here out are drawn as a smooth surface instead of blocks
-    smooth_level: u8,
     band: LodBand,
     anchor: Option<ChunkCoordinate>,
     selected: HashSet<LodKey>,
@@ -377,14 +383,12 @@ impl LodLoader {
 
     pub fn new(
         layout: LodLayout,
-        smooth_level: u8,
         world_height: u64,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
     ) -> Self {
         Self {
             layout,
-            smooth_level,
             band: LodBand {
                 min_y: 0,
                 max_y: (world_height as i64 + CHUNK_SIZE as i64 - 1) / CHUNK_SIZE as i64,
@@ -581,13 +585,12 @@ pub fn spawn_lods(
         }
 
         let regions = world.region_store.clone();
-        let smooth_level = lods.smooth_level;
         let entity = commands
             .spawn((
                 LodNode { key },
                 GenerateLodMesh {
                     task: task_pool
-                        .spawn(async move { generate_lod_mesh(regions, key, smooth_level) }),
+                        .spawn(async move { generate_lod_mesh(regions, key) }),
                 },
                 lod_transform(key),
                 Visibility::Hidden,
@@ -884,6 +887,13 @@ mod tests {
         assert_eq!(2, LodLayout::new(16, 128, 4).max_level);
         assert_eq!(3, LodLayout::new(16, 257, 4).max_level);
         assert_eq!(128.0, layout(2).render_distance());
+    }
+
+    #[test]
+    fn test_last_level_starts_where_the_one_before_ends() {
+        let layout = LodLayout::new(16, 256, 4);
+        assert_eq!(64.0, layout.last_level_start());
+        assert_eq!(32.0, LodLayout::new(64, 64, 4).last_level_start());
     }
 
     #[test]
@@ -1212,7 +1222,7 @@ mod tests {
 
         let mut empty = 0;
         for &key in &nodes {
-            let meshed = generate_lod_mesh(regions.clone(), key, 2).is_some();
+            let meshed = generate_lod_mesh(regions.clone(), key).is_some();
             if super::known_empty(key, &regions) {
                 assert!(!meshed, "{key:?} was taken as empty but has a mesh");
                 empty += 1;

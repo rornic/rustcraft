@@ -67,7 +67,9 @@ fn setup_scene(
             DistanceFog {
                 color: scene_colour(HORIZON_COLOR).with_alpha(FOG_MAX_OPACITY).into(),
                 falloff: FogFalloff::Linear {
-                    start: fog_distance * renderer.fog_start_fraction.clamp(0.0, 0.99),
+                    // half fogged where the farthest LOD level starts, hiding the swap to it,
+                    // see `fog.wgsl`
+                    start: layout.last_level_start() * 16.0,
                     end: fog_distance,
                 },
                 ..default()
@@ -85,7 +87,9 @@ fn setup_scene(
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
-    commands.spawn(sun(fog_distance));
+    // shadows reach as far as full-detail terrain, beyond which LODs take over
+    let shadow_distance = (layout.full_detail_distance * 16.0).min(fog_distance);
+    commands.spawn(sun(shadow_distance));
 
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
