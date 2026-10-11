@@ -177,10 +177,21 @@ impl LodBand {
 
 /// The LOD nodes to draw around `anchor`, leaving out the area drawn at full detail.
 pub fn select_lods(anchor: ChunkCoordinate, layout: LodLayout, band: LodBand) -> HashSet<LodKey> {
+    select_lods_and_stand_ins(anchor, layout, band).0
+}
+
+/// The LOD nodes to draw around `anchor`, and the level-1 nodes covering the full-detail
+/// area, which stand in for its chunks until they're ready.
+pub fn select_lods_and_stand_ins(
+    anchor: ChunkCoordinate,
+    layout: LodLayout,
+    band: LodBand,
+) -> (HashSet<LodKey>, HashSet<LodKey>) {
     let mut selected = HashSet::new();
+    let mut stand_ins = HashSet::new();
     let max_level = layout.max_level;
     if max_level == 0 {
-        return selected;
+        return (selected, stand_ins);
     }
 
     let width = 1i64 << max_level;
@@ -195,12 +206,12 @@ pub fn select_lods(anchor: ChunkCoordinate, layout: LodLayout, band: LodBand) ->
                     coord: I64Vec3::new(centre.x + x, y, centre.z + z),
                 };
                 if key.distance(anchor) < range {
-                    select_within(key, anchor, layout, band, &mut selected);
+                    select_within(key, anchor, layout, band, &mut selected, &mut stand_ins);
                 }
             }
         }
     }
-    selected
+    (selected, stand_ins)
 }
 
 fn select_within(
@@ -209,6 +220,7 @@ fn select_within(
     layout: LodLayout,
     band: LodBand,
     selected: &mut HashSet<LodKey>,
+    stand_ins: &mut HashSet<LodKey>,
 ) {
     if !band.intersects(key) {
         return;
@@ -217,8 +229,10 @@ fn select_within(
         selected.insert(key);
     } else if key.level > 1 {
         for child in key.children() {
-            select_within(child, anchor, layout, band, selected);
+            select_within(child, anchor, layout, band, selected, stand_ins);
         }
+    } else {
+        stand_ins.insert(key);
     }
 }
 
@@ -329,6 +343,8 @@ pub struct LodLoader {
     band: LodBand,
     anchor: Option<ChunkCoordinate>,
     selected: HashSet<LodKey>,
+    // level-1 nodes over the full-detail area, drawn while its chunks aren't ready
+    stand_ins: HashSet<LodKey>,
     nodes: HashMap<LodKey, Entity>,
     // farthest first, so popping yields the nearest
     to_spawn: Vec<LodKey>,
@@ -375,6 +391,7 @@ impl LodLoader {
             },
             anchor: None,
             selected: HashSet::new(),
+            stand_ins: HashSet::new(),
             nodes: HashMap::new(),
             to_spawn: Vec::new(),
             retiring: Vec::new(),
@@ -460,7 +477,7 @@ pub fn update_lod_selection(
         return;
     }
 
-    let selected = select_lods(anchor, lods.layout, lods.band);
+    let (selected, stand_ins) = select_lods_and_stand_ins(anchor, lods.layout, lods.band);
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
     let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
@@ -477,6 +494,7 @@ pub fn update_lod_selection(
         &state,
         selected
             .iter()
+            .chain(stand_ins.iter().filter(|&&key| !state.covered(key)))
             .filter(|&key| !nodes.contains_key(key))
             .copied(),
     );
@@ -489,6 +507,7 @@ pub fn update_lod_selection(
 
     lods.anchor = Some(anchor);
     lods.selected = selected;
+    lods.stand_ins = stand_ins;
     lods.to_spawn = to_spawn;
     lods.retiring = retiring;
     lods.refresh_all = true;
@@ -535,7 +554,13 @@ pub fn spawn_lods(
         let Some(key) = lods.to_spawn.pop() else {
             break;
         };
-        if !lods.selected.contains(&key) || lods.nodes.contains_key(&key) {
+        if lods.nodes.contains_key(&key) {
+            continue;
+        }
+        let stand_in = lods.stand_ins.contains(&key);
+        // a stand-in is only needed until its chunks are ready
+        let chunks_ready = || key.chunks().all(|chunk| chunks.get(chunk).ready());
+        if !lods.selected.contains(&key) && !(stand_in && !chunks_ready()) {
             continue;
         }
         // nothing to mesh, so the node is ready as soon as it exists
@@ -544,6 +569,9 @@ pub fn spawn_lods(
                 .spawn((LodNode { key }, lod_transform(key), Visibility::Hidden))
                 .id();
             lods.nodes.insert(key, entity);
+            if stand_in {
+                lods.retiring.push(key);
+            }
             empty_nodes += 1;
             continue;
         }
@@ -566,6 +594,9 @@ pub fn spawn_lods(
             ))
             .id();
         lods.nodes.insert(key, entity);
+        if stand_in {
+            lods.retiring.push(key);
+        }
         in_flight += 1;
     }
 }
@@ -704,7 +735,8 @@ pub fn refresh_lod_visibility(
     pending_lods: Query<(), With<GenerateLodMesh>>,
     all_chunks: Query<(Entity, &Chunk), With<Mesh3d>>,
     new_chunks: Query<(Entity, &Chunk), Added<Mesh3d>>,
-    all_nodes: Query<(Entity, &LodNode)>,
+    // only nodes with something to draw - nodes still loading are shown when their mesh lands
+    all_nodes: Query<(Entity, &LodNode), With<Mesh3d>>,
     mut visibility: Query<(&mut Visibility, Option<&Fade>)>,
 ) {
     let Some(anchor) = lods.anchor else {
@@ -929,6 +961,22 @@ mod tests {
         assert_exact_cover(chunk(0, 3, 0), 2);
         assert_exact_cover(chunk(-7, 9, 13), 2);
         assert_exact_cover(chunk(5, -4, -3), 3);
+    }
+
+    #[test]
+    fn test_stand_ins_cover_exactly_the_full_detail_chunks() {
+        let anchor = chunk(3, 4, -2);
+        let layout = LodLayout::new(8, 128, 4);
+        let (_, stand_ins) = super::select_lods_and_stand_ins(anchor, layout, BAND);
+        for x in -12..12 {
+            for z in -12..12 {
+                for y in BAND.min_y..BAND.max_y {
+                    let c = chunk(anchor.0.x + x, y, anchor.0.z + z);
+                    let covered = stand_ins.contains(&LodKey::containing(c, 1));
+                    assert_eq!(layout.full_detail(c, anchor), covered, "chunk {:?}", c.0);
+                }
+            }
+        }
     }
 
     #[test]

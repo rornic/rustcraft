@@ -2,16 +2,17 @@
 // renderer settings from assets/settings.toml: lets the start area load, flies the
 // player along +x, then stops. Every 2 seconds it reports, by distance in chunks,
 // surface chunks with nothing visible drawing them, and full-detail chunks still
-// drawn outside the full-detail area. Run with:
+// drawn outside the full-detail area, and logs frames slower than 100ms. Run with:
 //   cargo run --release --example lod_sim -- [speed in blocks/s, default 80] [seconds moving, default 10]
 use std::time::{Duration, Instant};
 
-use bevy::math::I64Vec3;
+use bevy::math::{I64Vec2, I64Vec3};
 use bevy::prelude::*;
 use bevy::utils::HashMap;
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use rustcraft::chunks::chunk_loader::Chunk;
 use rustcraft::chunks::fade::FULLY_VISIBLE;
+use rustcraft::chunks::generate::noise::NoiseGenerator;
 use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::lod::{LodKey, LodLayout, LodNode};
 use rustcraft::chunks::material::{ChunkMaterial, WaterMaterial};
@@ -84,7 +85,8 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
         .map(|(c, v)| (c.coord, *v != Visibility::Hidden))
         .collect();
     let game_world = world.resource::<rustcraft::world::World>();
-    let regions = game_world.region_store.clone();
+    // sampled straight from the noise, so reporting never computes regions for the game
+    let noise = NoiseGenerator::new(game_world.seed());
     let anchor = game_world.block_to_chunk_coordinate(pos.floor().as_i64vec3());
     let full = layout.full_detail_distance;
     let far = layout.render_distance().min(120.0);
@@ -99,8 +101,8 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
             }
             let (cx, cz) = (anchor.0.x + dx, anchor.0.z + dz);
             let size = CHUNK_SIZE as i64;
-            let h = regions
-                .get_height(cx * size + size / 2, cz * size + size / 2)
+            let h = noise
+                .get(I64Vec2::new(cx * size + size / 2, cz * size + size / 2))
                 .max(WATER_LEVEL as f64);
             let c = ChunkCoordinate(I64Vec3::new(cx, (h as i64 - 1).div_euclid(size), cz));
             let drawn = chunk_vis.get(&c).copied().unwrap_or(false)
@@ -179,7 +181,11 @@ fn main() {
                 }
             }
         }
+        let frame = Instant::now();
         app.update();
+        if frame.elapsed() > Duration::from_millis(100) {
+            println!("t={t:5.1} slow frame: {:?}", frame.elapsed());
+        }
         std::thread::sleep(Duration::from_millis(5));
         if t - last_report >= 2.0 {
             last_report = t;
