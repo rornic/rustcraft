@@ -11,9 +11,9 @@ const ATLAS_CELLS: f32 = 7.0;
 const TILE_INSET: f32 = 0.002;
 
 // How bright the darkest shade is: nothing lights the world but the sky yet.
-const AMBIENT: f32 = 0.18;
+const AMBIENT: f32 = 0.12;
 // Above 1, light falls away quickly at first under cover, then more slowly.
-const SKY_LIGHT_CURVE: f32 = 1.6;
+const SKY_LIGHT_CURVE: f32 = 2.0;
 
 // Brightness for sky light 0..1, see `light.rs`.
 fn sky_brightness(sky: f32) -> f32 {
