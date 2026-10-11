@@ -1,4 +1,4 @@
-use std::{cell::LazyCell, collections::HashMap, sync::Arc};
+use std::{cell::LazyCell, collections::HashMap, ops::Deref, sync::Arc};
 
 use bevy::{
     math::{I64Vec2, IVec3, U16Vec3, Vec3},
@@ -21,7 +21,7 @@ use crate::chunks::lod::LodKey;
 use crate::util::primitives::Vertex;
 
 // Face order matches `face_vertices`/`sides` below: [front, right, left, back, top, bottom].
-const FACE_NORMAL_OFFSET: [IVec3; 6] = [
+pub(super) const FACE_NORMAL_OFFSET: [IVec3; 6] = [
     IVec3::new(0, 0, -1), // front
     IVec3::new(1, 0, 0),  // right
     IVec3::new(-1, 0, 0), // left
@@ -281,6 +281,7 @@ fn vertex_ao(
 // face's open side, leaving out solid ones, and the diagonal when both sides are solid
 // since light can't reach round to it.
 fn vertex_light(
+    source: &impl BlockSource,
     light: &SkyLight,
     block_coord: IVec3,
     face_index: usize,
@@ -288,17 +289,18 @@ fn vertex_light(
 ) -> f32 {
     let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
     let front = block_coord + FACE_NORMAL_OFFSET[face_index];
-    let open = |coord: IVec3| !light.opaque(coord);
+    // the terrain the light was worked out from, not the skirts LODs add at their edges
+    let open = |coord: IVec3| !source.terrain(coord).is_opaque();
     let (side_a, side_b) = (open(front + offset_a), open(front + offset_b));
     let corner = (side_a || side_b) && open(front + offset_a + offset_b);
-    let (mut total, mut count) = (light.level(front) as f32, 1.0);
-    for (cell, lit) in [(front + offset_a, side_a), (front + offset_b, side_b), (front + offset_a + offset_b, corner)] {
-        if lit {
-            total += light.level(cell) as f32;
-            count += 1.0;
-        }
-    }
-    total / count / MAX_LIGHT as f32
+    let cells = [
+        Some(front),
+        side_a.then_some(front + offset_a),
+        side_b.then_some(front + offset_b),
+        corner.then_some(front + offset_a + offset_b),
+    ];
+    let levels: Vec<f32> = cells.into_iter().flatten().map(|c| light.level(c) as f32).collect();
+    levels.iter().sum::<f32>() / levels.len() as f32 / MAX_LIGHT as f32
 }
 
 // One light level for a whole face, 0..1, in a few coarse steps so neighbouring faces
@@ -434,7 +436,7 @@ pub(super) struct MeshBuffers {
     indices: Vec<u32>,
     colors: Vec<[f32; 4]>,
     // sky light per vertex, for block faces only, see `world.wgsl`
-    lights: Vec<[f32; 2]>,
+    lights: Vec<f32>,
 }
 
 impl MeshBuffers {
@@ -477,7 +479,7 @@ impl MeshBuffers {
                 uv: uvs[j],
             });
             self.colors.push(colors[j]);
-            self.lights.push([lights[j], 0.0]);
+            self.lights.push(lights[j]);
         }
         self.indices.extend([
             triangle_start,
@@ -506,7 +508,7 @@ impl MeshBuffers {
                 uv,
             });
             self.colors.push((quad.color)(position));
-            self.lights.push([quad.light, 0.0]);
+            self.lights.push(quad.light);
             self.vertices.len() as u32 - 1
         };
         let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
@@ -553,7 +555,8 @@ impl MeshBuffers {
         );
         if !self.lights.is_empty() {
             assert_eq!(self.lights.len(), self.vertices.len(), "only some vertices carry light");
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(self.lights));
+            let lights = self.lights.into_iter().map(|l| [l, 0.0]).collect();
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(lights));
         }
         mesh
     }
@@ -666,51 +669,30 @@ const LIGHT_MARGIN: i32 = 8;
 // high as the top of the chunk above, with open sky above that.
 fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>], coord: ChunkCoordinate) -> SkyLight {
     let size = CHUNK_SIZE as i32;
-    let span = 3 * size;
-    let mut blocks = vec![BlockType::Air; (span * span * span) as usize];
-    let at = |c: IVec3| (((c.x + size) * span + c.z + size) * span + c.y + size) as usize;
-    let beside = |v: i32| (-LIGHT_MARGIN..size + LIGHT_MARGIN).contains(&v);
-    let fill = |blocks: &mut Vec<BlockType>, data: &ChunkData, offset: IVec3| {
-        data.for_each_non_air(|local, block| {
-            let c = offset * size + local.as_ivec3();
-            if beside(c.x) && beside(c.z) {
-                blocks[at(c)] = block;
-            }
-        });
-    };
-    fill(&mut blocks, chunk, IVec3::ZERO);
+    let min = IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN);
+    let span = IVec3::new(size + LIGHT_MARGIN, 2 * size, size + LIGHT_MARGIN) - min;
+    let mut opacity = vec![0; (span.x * span.y * span.z) as usize];
     for dx in -1..=1 {
         for dy in -1..=1 {
             for dz in -1..=1 {
-                if (dx, dy, dz) == (0, 0, 0) {
-                    continue;
-                }
-                let Some(data) = &neighbours[neighbor_26_index(dx, dy, dz)] else {
+                let data = match (dx, dy, dz) {
+                    (0, 0, 0) => Some(chunk),
+                    _ => neighbours[neighbor_26_index(dx, dy, dz)].as_deref(),
+                };
+                let Some(data) = data else {
                     continue;
                 };
-                if dy < 0 {
-                    // only the top layer of the chunks below is in the box
-                    for x in 0..size {
-                        for z in 0..size {
-                            let local = U16Vec3::new(x as u16, size as u16 - 1, z as u16);
-                            let c = IVec3::new(dx, dy, dz) * size + local.as_ivec3();
-                            if beside(c.x) && beside(c.z) {
-                                blocks[at(c)] = data.get_block_at(local);
-                            }
-                        }
+                for (local, block) in data.iter_non_air() {
+                    let cell = IVec3::new(dx, dy, dz) * size + local.as_ivec3() - min;
+                    if cell.cmpge(IVec3::ZERO).all() && cell.cmplt(span).all() {
+                        opacity[SkyLight::index(span, cell)] = block.light_opacity();
                     }
-                } else {
-                    fill(&mut blocks, data, IVec3::new(dx, dy, dz));
                 }
             }
         }
     }
-    let (min, max) = (
-        IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN),
-        IVec3::new(size + LIGHT_MARGIN, 2 * size, size + LIGHT_MARGIN),
-    );
-    let top = coord.0.y * size as i64 + max.y as i64 - 1;
-    SkyLight::new(min, max - min, sky_above(top, 1), |c| blocks[at(c)])
+    let top = coord.0.y * size as i64 + (min.y + span.y) as i64 - 1;
+    SkyLight::new(min, span, sky_above(top, 1), opacity)
 }
 
 // Ambient occlusion is barely visible on cells this many blocks across or more, but stops
@@ -730,10 +712,11 @@ pub fn generate_lod_mesh(
         let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
         let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
         let blocks = LodBlocks::sample(&regions, key);
-        let padded = blocks.size + 2;
         let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
+        // the padded cells are already in `SkyLight::index` order
         let light = LazyCell::new(|| {
-            SkyLight::new(IVec3::splat(-1), IVec3::splat(padded), sky_above(top, cell_size), |c| blocks.raw(c))
+            let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
+            SkyLight::new(IVec3::splat(-1), IVec3::splat(blocks.size + 2), sky_above(top, cell_size), opacity)
         });
         mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint, &light)
     };
@@ -784,6 +767,14 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
         }
     }
 
+    fn terrain(&self, coord: IVec3) -> BlockType {
+        if coord.min_element() >= 0 && coord.max_element() < self.size {
+            self.blocks[grid_index(self.size, coord)]
+        } else {
+            self.source.terrain(coord)
+        }
+    }
+
     fn non_air(&self) -> Vec<(IVec3, BlockType)> {
         self.source.non_air()
     }
@@ -819,7 +810,7 @@ fn mesh_opaque_greedy(
     buffers: &mut MeshBuffers,
     ambient_occlusion: bool,
     grass_tint: &GrassTint,
-    light: &LazyCell<SkyLight, impl FnOnce() -> SkyLight>,
+    light: &impl Deref<Target = SkyLight>,
 ) {
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
@@ -860,7 +851,7 @@ fn mesh_opaque_greedy(
                             [1.0; 4]
                         },
                         light: if smooth {
-                            std::array::from_fn(|j| vertex_light(&**light, coord, i, template[j].position))
+                            std::array::from_fn(|j| vertex_light(source, light, coord, i, template[j].position))
                         } else {
                             [face_light(light.level(coord + normal)); 4]
                         },
@@ -943,7 +934,7 @@ fn mesh_blocks(
     cell_size: i64,
     ambient_occlusion: bool,
     grass_tint: &GrassTint,
-    light: &LazyCell<SkyLight, impl FnOnce() -> SkyLight>,
+    light: &impl Deref<Target = SkyLight>,
 ) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
@@ -1497,7 +1488,7 @@ mod tests {
         }
         let lights = top_lights(&mesh_chunk(chunk).opaque);
         let floor: Vec<_> = lights.iter().filter(|(p, _)| p[1] == 0.5).collect();
-        let (darkest, _) = floor.iter().map(|(p, l)| (p, *l)).fold((&[0.0; 3], 1.0), |a, b| if b.1 < a.1 { b } else { a });
+        let (darkest, _) = floor.iter().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
         assert!(floor.iter().any(|(_, l)| *l == 1.0), "nowhere on the floor is in the open");
         assert!((4.5..=11.5).contains(&darkest[0]) && (4.5..=11.5).contains(&darkest[2]), "darkest at {darkest:?}");
         let mut levels: Vec<f32> = floor.iter().map(|(_, l)| *l).collect();
@@ -1506,6 +1497,27 @@ mod tests {
         assert!(levels.len() >= 4, "light falls off in steps {levels:?}");
         // the roof's top is under open sky
         assert!(lights.iter().any(|(p, l)| p[1] == 3.5 && *l == 1.0));
+    }
+
+    #[test]
+    fn test_lod_ground_under_open_sky_is_lit_to_its_edges() {
+        use bevy::math::I64Vec2;
+
+        // a mountainside, where LOD skirts stand in for the solid ground beside the node
+        let noise = Arc::new(NoiseGenerator::new(42));
+        let p = (-40..40)
+            .flat_map(|z| (-40..40).map(move |x| I64Vec2::new(x, z) * 256))
+            .find(|p| (150.0..250.0).contains(&(noise.get(*p) - WATER_LEVEL as f64)))
+            .expect("no mountainside near the centre");
+        let height = noise.get(p) as i64;
+        let chunk = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), height.div_euclid(16), p.y.div_euclid(16)));
+        let regions = Arc::new(RegionStore::new(noise));
+        let key = crate::chunks::lod::LodKey::containing(chunk, 1);
+        let mesh = super::generate_lod_mesh(regions, key, 3).expect("no mesh").opaque;
+        let lights = top_lights(&mesh);
+        assert!(!lights.is_empty());
+        let dark: Vec<_> = lights.iter().filter(|(_, l)| *l < 1.0).collect();
+        assert!(dark.is_empty(), "shaded under open sky: {dark:?}");
     }
 
     #[test]
@@ -1623,3 +1635,4 @@ mod tests {
         );
     }
 }
+

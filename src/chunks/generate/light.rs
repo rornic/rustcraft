@@ -1,128 +1,117 @@
 use std::collections::VecDeque;
 
-use bevy::math::IVec3;
+use super::generator::FACE_NORMAL_OFFSET;
 
-use crate::block::BlockType;
+use bevy::math::IVec3;
 
 /// Sky light under open sky. Each block it spreads sideways or up loses one level, and
 /// blocks it passes through take their `light_opacity` too.
 pub const MAX_LIGHT: u8 = 15;
 
-const NEIGHBOURS: [IVec3; 6] = [IVec3::X, IVec3::NEG_X, IVec3::Y, IVec3::NEG_Y, IVec3::Z, IVec3::NEG_Z];
-
-// Sky light over a box of cells, worked out from the blocks in it.
+// Sky light over a box of cells, worked out from how much light each lets through.
 pub struct SkyLight {
     min: IVec3,
     size: IVec3,
     levels: Vec<u8>,
-    opacity: Vec<u8>,
 }
 
 impl SkyLight {
-    /// Lights the box of `size` cells from `min`, where `block` gives each cell's block,
-    /// with `sky` falling into the top of every column.
-    pub fn new(min: IVec3, size: IVec3, sky: u8, block: impl Fn(IVec3) -> BlockType) -> Self {
-        let count = (size.x * size.y * size.z) as usize;
-        let mut light = Self {
-            min,
-            size,
-            levels: vec![0; count],
-            opacity: vec![0; count],
-        };
+    /// Lights the box of `size` cells from `min`, whose `light_opacity`s are in `opacity`
+    /// in `SkyLight::index` order, with `sky` falling into the top of every column.
+    pub fn new(min: IVec3, size: IVec3, sky: u8, opacity: Vec<u8>) -> Self {
+        assert_eq!((size.x * size.y * size.z) as usize, opacity.len());
+        let mut levels = vec![0; opacity.len()];
         // whether anything light can pass through is shaded, so light has somewhere to spread
         let mut shade = false;
-        for x in 0..size.x {
-            for z in 0..size.z {
-                // straight down, it keeps its full strength through open air
-                let mut level = sky;
-                for y in (0..size.y).rev() {
-                    let local = IVec3::new(x, y, z);
-                    let cell = light.index(local);
-                    let opacity = block(min + local).light_opacity();
-                    level = level.saturating_sub(opacity);
-                    light.opacity[cell] = opacity;
-                    light.levels[cell] = level;
-                    shade |= opacity < MAX_LIGHT && level < MAX_LIGHT;
-                }
+        // each column is a contiguous run of cells, lowest first
+        for (column, opacity) in levels.chunks_mut(size.y as usize).zip(opacity.chunks(size.y as usize)) {
+            // straight down, it keeps its full strength through open air
+            let mut level = sky;
+            for (cell, &opacity) in column.iter_mut().zip(opacity).rev() {
+                level = level.saturating_sub(opacity);
+                *cell = level;
+                shade |= opacity < MAX_LIGHT && level < MAX_LIGHT;
             }
         }
+        let mut light = Self { min, size, levels };
         if shade {
-            light.spread();
+            light.spread(&opacity);
         }
         light
     }
 
-    fn index(&self, local: IVec3) -> usize {
-        ((local.x * self.size.z + local.z) * self.size.y + local.y) as usize
+    pub fn index(size: IVec3, local: IVec3) -> usize {
+        ((local.x * size.z + local.z) * size.y + local.y) as usize
     }
 
-    fn local(&self, coord: IVec3) -> Option<IVec3> {
-        let local = coord - self.min;
-        (local.cmpge(IVec3::ZERO).all() && local.cmplt(self.size).all()).then_some(local)
-    }
-
-    // Floods light out from wherever it's brighter than next door, into shade.
-    fn spread(&mut self) {
-        let opacity = std::mem::take(&mut self.opacity);
-        let gain = |from: u8, into: usize| from.saturating_sub(1 + opacity[into]);
-        let mut queue = VecDeque::new();
+    // Floods light from every lit cell into any neighbour it would brighten.
+    fn spread(&mut self, opacity: &[u8]) {
+        let mut queue: VecDeque<IVec3> = VecDeque::new();
         for x in 0..self.size.x {
             for z in 0..self.size.z {
                 for y in 0..self.size.y {
                     let local = IVec3::new(x, y, z);
-                    let cell = self.index(local);
-                    if opacity[cell] >= MAX_LIGHT || self.levels[cell] >= MAX_LIGHT - 1 {
-                        continue;
-                    }
-                    let brightest = NEIGHBOURS
-                        .iter()
-                        .filter_map(|&d| self.local(self.min + local + d))
-                        .map(|n| gain(self.levels[self.index(n)], cell))
-                        .max()
-                        .unwrap_or(0);
-                    if brightest > self.levels[cell] {
-                        self.levels[cell] = brightest;
+                    let level = self.levels[Self::index(self.size, local)];
+                    // only light beside something darker has anywhere to go
+                    let darker = |offset: IVec3| {
+                        let next = local + offset;
+                        !(next.cmplt(IVec3::ZERO).any() || next.cmpge(self.size).any())
+                            && self.levels[Self::index(self.size, next)] + 1 < level
+                    };
+                    if level > 1 && FACE_NORMAL_OFFSET.into_iter().any(darker) {
                         queue.push_back(local);
                     }
                 }
             }
         }
         while let Some(local) = queue.pop_front() {
-            let level = self.levels[self.index(local)];
-            for d in NEIGHBOURS {
-                let Some(n) = self.local(self.min + local + d) else {
+            let level = self.levels[Self::index(self.size, local)];
+            for offset in FACE_NORMAL_OFFSET {
+                let next = local + offset;
+                if next.cmplt(IVec3::ZERO).any() || next.cmpge(self.size).any() {
                     continue;
-                };
-                let cell = self.index(n);
-                let lit = gain(level, cell);
+                }
+                let cell = Self::index(self.size, next);
+                let lit = level.saturating_sub(1 + opacity[cell]);
                 if lit > self.levels[cell] {
                     self.levels[cell] = lit;
-                    queue.push_back(n);
+                    queue.push_back(next);
                 }
             }
         }
-        self.opacity = opacity;
-    }
-
-    /// Whether `coord` hides the blocks behind it from the light, see `BlockType::is_opaque`.
-    /// Outside the box is open.
-    pub fn opaque(&self, coord: IVec3) -> bool {
-        self.local(coord).is_some_and(|local| self.opacity[self.index(local)] >= MAX_LIGHT)
     }
 
     /// The light at `coord`, or full light outside the box.
     pub fn level(&self, coord: IVec3) -> u8 {
-        self.local(coord).map_or(MAX_LIGHT, |local| self.levels[self.index(local)])
+        let local = coord - self.min;
+        if local.cmplt(IVec3::ZERO).any() || local.cmpge(self.size).any() {
+            return MAX_LIGHT;
+        }
+        self.levels[Self::index(self.size, local)]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::block::BlockType;
+
+    fn light(size: IVec3, block: impl Fn(IVec3) -> BlockType) -> SkyLight {
+        let mut opacity = vec![0; (size.x * size.y * size.z) as usize];
+        for x in 0..size.x {
+            for z in 0..size.z {
+                for y in 0..size.y {
+                    let c = IVec3::new(x, y, z);
+                    opacity[SkyLight::index(size, c)] = block(c).light_opacity();
+                }
+            }
+        }
+        SkyLight::new(IVec3::ZERO, size, MAX_LIGHT, opacity)
+    }
 
     // a 9x12x9 box with a flat roof of `roof` blocks at y 8, from x and z 2 to 6
     fn under_roof(roof: BlockType) -> SkyLight {
-        SkyLight::new(IVec3::ZERO, IVec3::new(9, 12, 9), MAX_LIGHT, |c| {
+        light(IVec3::new(9, 12, 9), |c| {
             let roofed = (2..=6).contains(&c.x) && (2..=6).contains(&c.z) && c.y == 8;
             if c.y == 0 {
                 BlockType::Stone
@@ -162,9 +151,7 @@ mod tests {
 
     #[test]
     fn test_deep_water_darkens() {
-        let light = SkyLight::new(IVec3::ZERO, IVec3::new(1, 20, 1), MAX_LIGHT, |c| {
-            if c.y < 19 { BlockType::Water } else { BlockType::Air }
-        });
+        let light = light(IVec3::new(1, 20, 1), |c| if c.y < 19 { BlockType::Water } else { BlockType::Air });
         let depths: Vec<u8> = (0..20).rev().map(|y| light.level(IVec3::new(0, y, 0))).collect();
         assert!(depths.windows(2).all(|w| w[0] >= w[1]), "{depths:?}");
         assert_eq!(0, light.level(IVec3::ZERO));
