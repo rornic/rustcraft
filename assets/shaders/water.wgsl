@@ -56,6 +56,11 @@ const WAVE_FADE_START: f32 = 192.0;
 const FOAM_FADE_END: f32 = 192.0;
 const FOAM_FADE_START: f32 = 144.0;
 
+// Water's colours are picked as they should look on screen, so they're turned back into
+// the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
+const EXPOSURE_SCALE: f32 = 1.4142135; // 2 to the power of tonemap.rs's EXPOSURE
+const UNTONEMAP_STEPS: i32 = 4;
+
 struct FragmentOutput {
   @location(0) color: vec4<f32>
 }
@@ -117,6 +122,35 @@ fn hash2(p: vec2<f32>) -> f32 {
 fn foam_cells(xz: vec2<f32>, frame: f32, coverage: f32) -> f32 {
     let cell = floor(xz / FOAM_CELL_SIZE) + vec2<f32>(frame * 13.7, frame * 7.3);
     return step(1.0 - coverage, hash2(cell));
+}
+
+fn tonemap_curve(v: vec3<f32>) -> vec3<f32> {
+    return 1.0 - exp(-v);
+}
+
+// Bevy's somewhat boring display transform, after exposure.
+fn displayed(scene: vec3<f32>) -> vec3<f32> {
+    let colour = scene * EXPOSURE_SCALE;
+    let luma = dot(colour, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let chroma = vec2<f32>(
+        dot(colour, vec3<f32>(-0.1146, -0.3854, 0.5)),
+        dot(colour, vec3<f32>(0.5, -0.4542, -0.0458)),
+    );
+    let bt = 1.0 - exp(-length(chroma) * 2.4);
+    let desat_amount = max((bt - 0.7) * 0.8, 0.0);
+    let desat = mix(colour, vec3<f32>(luma), desat_amount * desat_amount);
+    let tm0 = colour * max(0.0, (1.0 - exp(-luma)) / max(1e-5, luma));
+    return mix(tm0, tonemap_curve(desat), bt * bt) * 0.97;
+}
+
+// Close to the identity for all but bright colours, so a few nudges towards the target
+// by however far off it still is land near enough.
+fn scene_colour(display: vec3<f32>) -> vec3<f32> {
+    var scene = display / EXPOSURE_SCALE;
+    for (var i = 0; i < UNTONEMAP_STEPS; i++) {
+        scene = max(scene + (display - displayed(scene)) * 1.5 / EXPOSURE_SCALE, vec3<f32>(0.0));
+    }
+    return scene;
 }
 
 @fragment
@@ -192,7 +226,8 @@ fn fragment(
     // This shader fully replaces Bevy's standard PBR fragment stage, so fog isn't
     // applied automatically the way it would be for StandardMaterial - apply it
     // explicitly so distant water fades into the sky instead of popping in/out.
-    let fogged = apply_fog(view_bindings::fog, vec4<f32>(color.rgb, alpha), world_position, view_position);
+    let scene = scene_colour(color.rgb);
+    let fogged = apply_fog(view_bindings::fog, vec4<f32>(scene, alpha), world_position, view_position);
 
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);

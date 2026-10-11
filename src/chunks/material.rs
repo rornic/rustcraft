@@ -28,6 +28,11 @@ impl Material for ChunkMaterial {
         "shaders/world.wgsl".into()
     }
 
+    // cuts the holes in leaves out of their shadows too
+    fn prepass_fragment_shader() -> ShaderRef {
+        "shaders/world_prepass.wgsl".into()
+    }
+
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Mask(0.5)
     }
