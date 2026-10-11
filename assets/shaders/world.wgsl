@@ -1,11 +1,14 @@
 #import bevy_pbr::{
-    forward_io::VertexOutput,
+    forward_io::{Vertex, VertexOutput},
+    mesh_functions,
     mesh_view_bindings as view_bindings,
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     pbr_functions::apply_fog,
     shadows::fetch_directional_shadow,
+    view_transformations::position_world_to_clip,
 }
 #import "shaders/block_texture.wgsl"::{block_texel, material_fade}
+#import "shaders/foliage.wgsl"::swayed
 
 // Light falling on a face from the open sky, cool against the warm sun: faces up get
 // the sky's blue, faces down only what the ground bounces back.
@@ -64,6 +67,32 @@ fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
     var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
     let p = vec2<u32>(frag_coord) % 4u;
     return (bayer[p.y * 4u + p.x] + 0.5) / 16.0;
+}
+
+// Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves
+// swaying in the wind.
+@vertex
+fn vertex(vertex: Vertex) -> VertexOutput {
+    var out: VertexOutput;
+    let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
+    out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
+#ifdef VERTEX_COLORS
+    out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, view_bindings::globals.time), 1.0);
+    out.color = vertex.color;
+#endif
+    out.position = position_world_to_clip(out.world_position.xyz);
+    out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+    out.uv = vertex.uv;
+#ifdef VERTEX_UVS_B
+    out.uv_b = vertex.uv_b;
+#endif
+#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+    out.instance_index = vertex.instance_index;
+#endif
+#ifdef VISIBILITY_RANGE_DITHER
+    out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(vertex.instance_index, world_from_local[3]);
+#endif
+    return out;
 }
 
 struct FragmentOutput {

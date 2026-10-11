@@ -24,8 +24,18 @@ pub struct ChunkMaterial {
 }
 
 impl Material for ChunkMaterial {
+    // sways leaves in the wind
+    fn vertex_shader() -> ShaderRef {
+        "shaders/world.wgsl".into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         "shaders/world.wgsl".into()
+    }
+
+    // sways leaves just as the main pass does, so they keep to their shadows
+    fn prepass_vertex_shader() -> ShaderRef {
+        "shaders/world_prepass.wgsl".into()
     }
 
     // cuts the holes in leaves out of their shadows too

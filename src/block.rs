@@ -51,6 +51,14 @@ mod tests {
     use super::BlockType;
 
     #[test]
+    fn test_foliage_shader_sways_the_leaves_atlas_cell() {
+        // block meshes carry each block's atlas cell, its type less one for air, in vertex alpha
+        let shader = std::fs::read_to_string("assets/shaders/foliage.wgsl").unwrap();
+        let cell = (BlockType::Leaves as usize - 1) as f32;
+        assert!(shader.contains(&format!("const LEAF_CELL: f32 = {cell:.1};")), "foliage.wgsl's LEAF_CELL isn't {cell}");
+    }
+
+    #[test]
     fn test_occlusion_weight_air_is_zero() {
         assert_eq!(0.0, BlockType::Air.occlusion_weight());
     }
