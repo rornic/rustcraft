@@ -13,7 +13,7 @@ use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::chunks::generate::biome::{grass_colour, BiomeId, Climate};
+use rustcraft::chunks::generate::biome::{grass_colour, Biomes, Climate};
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
 
 struct Args {
@@ -119,7 +119,7 @@ fn grass_map_colour(climate: Climate) -> [f64; 3] {
     (srgb.as_dvec3() * 255.0).into()
 }
 
-fn render(samples: &[(TerrainSample, Climate)], args: &Args) -> image::RgbImage {
+fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) -> image::RgbImage {
     let size = args.pixels;
     let at = |x: u32, z: u32| samples[(z.min(size - 1) * size + x.min(size - 1)) as usize];
     let height_at = |x: u32, z: u32| at(x, z).0.height;
@@ -133,7 +133,10 @@ fn render(samples: &[(TerrainSample, Climate)], args: &Args) -> image::RgbImage 
             // up to where the height colours turn to rock
             if args.biomes && (2.0..140.0).contains(&above_sea) {
                 let (sample, climate) = at(x, z);
-                let ground = if sample.biome == BiomeId::BASE { grass_map_colour(climate) } else { SAND };
+                let ground = match biomes.name(sample.biome) {
+                    Some("desert") => SAND,
+                    _ => grass_map_colour(climate),
+                };
                 let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
                 colour = lerp_rgb(ground, colour, rock);
             }
@@ -155,12 +158,17 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[((sorted.len() - 1) as f64 * p) as usize]
 }
 
-fn print_stats(samples: &[(TerrainSample, Climate)]) {
+fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
     let samples: Vec<TerrainSample> = samples.iter().map(|s| s.0).collect();
     let land = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64).count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
-    let desert = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64 && s.biome != BiomeId::BASE).count();
-    println!("desert: {:.1}% of land", 100.0 * desert as f64 / land.max(1) as f64);
+    for name in ["desert", "foothills"] {
+        let count = samples
+            .iter()
+            .filter(|s| s.height >= WATER_LEVEL as f64 && biomes.name(s.biome) == Some(name))
+            .count();
+        println!("{name}: {:.1}% of land", 100.0 * count as f64 / land.max(1) as f64);
+    }
 
     let mut heights: Vec<f64> = samples.iter().map(|s| s.height).collect();
     heights.sort_by(f64::total_cmp);
@@ -184,10 +192,10 @@ fn main() {
     let samples = sample_map(&noise, &args);
     println!("sampled {}x{} in {:.1?}", args.pixels, args.pixels, start.elapsed());
 
-    print_stats(&samples);
+    print_stats(&samples, noise.biomes());
     let spawn = noise.find_spawn();
     println!("spawn: x={} z={} height={:.1}", spawn.0, spawn.1, spawn.2);
 
-    render(&samples, &args).save(&args.out).expect("failed to save image");
+    render(&samples, noise.biomes(), &args).save(&args.out).expect("failed to save image");
     println!("wrote {}", args.out);
 }

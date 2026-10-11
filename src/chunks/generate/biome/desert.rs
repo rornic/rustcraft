@@ -1,6 +1,6 @@
 use noise::{NoiseFn, Perlin};
 
-use super::{smoothstep, BaseColumn, Biome, Climate};
+use super::{smoothstep, BaseColumn, Biome};
 use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
 
@@ -19,8 +19,6 @@ const CREST_BEND: f64 = 0.8;
 const CREST_BEND_WAVELENGTH: f64 = 400.0;
 // Where dunes stand tall and where they lie low, so the sand isn't one even sea of crests.
 const DUNE_FIELD_WAVELENGTH: f64 = 700.0;
-// How much of the base terrain's bumps the wind smooths away.
-const SMOOTHING: f64 = 0.9;
 // Dunes build up inland from the beach and give way to rock on high ground.
 const DUNE_SHORE: (f64, f64) = (2.0, 14.0);
 const DUNE_HIGH_GROUND: (f64, f64) = (70.0, 140.0);
@@ -55,7 +53,12 @@ impl Desert {
 }
 
 impl Biome for Desert {
-    fn strength(&self, climate: Climate) -> f64 {
+    fn name(&self) -> &'static str {
+        "desert"
+    }
+
+    fn strength(&self, column: &BaseColumn) -> f64 {
+        let climate = column.climate;
         smoothstep(HOT.0, HOT.1, climate.temperature as f64) * smoothstep(DRY.0, DRY.1, climate.humidity as f64)
     }
 
@@ -68,7 +71,7 @@ impl Biome for Desert {
         }
         let field = smoothstep(-0.5, 0.3, self.dune_field.get([column.x / DUNE_FIELD_WAVELENGTH, column.z / DUNE_FIELD_WAVELENGTH]));
         let dune = self.dune(column.x, column.z) * DUNE_HEIGHT * (0.4 + 0.6 * field);
-        column.height + (dune - column.bumps * SMOOTHING) * room
+        column.height + dune * room
     }
 
     fn block(&self, base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
@@ -82,6 +85,7 @@ impl Biome for Desert {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunks::generate::biome::Climate;
 
     fn climate(temperature: f32, humidity: f32) -> Climate {
         Climate { temperature, humidity }
@@ -90,10 +94,11 @@ mod tests {
     #[test]
     fn test_only_hot_dry_climates_are_desert() {
         let desert = Desert::new(1);
-        assert_eq!(1.0, desert.strength(climate(0.9, 0.1)));
-        assert_eq!(0.0, desert.strength(climate(0.9, 0.6)));
-        assert_eq!(0.0, desert.strength(climate(0.4, 0.1)));
-        assert_eq!(0.0, desert.strength(Climate::default()));
+        let strength = |climate| desert.strength(&BaseColumn { climate, ..column(0.0, 30.0) });
+        assert_eq!(1.0, strength(climate(0.9, 0.1)));
+        assert_eq!(0.0, strength(climate(0.9, 0.6)));
+        assert_eq!(0.0, strength(climate(0.4, 0.1)));
+        assert_eq!(0.0, strength(Climate::default()));
     }
 
     #[test]
@@ -110,8 +115,8 @@ mod tests {
             x,
             z: 0.0,
             height: WATER_LEVEL as f64 + above_sea,
-            bumps: 0.0,
             continentalness: 0.3,
+            ruggedness: -1.0,
             climate: climate(1.0, 0.0),
         }
     }

@@ -1,10 +1,12 @@
 mod desert;
+mod foothills;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::Vec3;
 
 use crate::block::BlockType;
 pub use desert::Desert;
+pub use foothills::Foothills;
 
 // How hot and how wet a column is, each 0..1. See `NoiseGenerator::climate`.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -28,18 +30,21 @@ pub struct BaseColumn {
     pub x: f64,
     pub z: f64,
     pub height: f64,
-    // the part of `height` that's bumps a few blocks across, for biomes that want smoother ground
-    pub bumps: f64,
+    // how far inland, negative out to sea
     pub continentalness: f64,
+    // where mountain ranges rise: they start at 0 and grow with it
+    pub ruggedness: f64,
     pub climate: Climate,
 }
 
-// A biome takes over from the base terrain where the climate suits it: it can reshape
-// the ground and swap the blocks the base terrain would have used.
+// A biome takes over from the base terrain where the climate or lie of the land suits it:
+// it can reshape the ground and swap the blocks the base terrain would have used.
 pub trait Biome: Send + Sync {
-    // How strongly this biome holds in a climate, 0..1. The ground it shapes blends in
+    fn name(&self) -> &'static str;
+
+    // How strongly this biome holds on a column, 0..1. The ground it shapes blends in
     // with this strength, and it owns the column's blocks where it's over 0.5.
-    fn strength(&self, climate: Climate) -> f64;
+    fn strength(&self, column: &BaseColumn) -> f64;
 
     // The column's height, given the base terrain's.
     fn height(&self, column: &BaseColumn) -> f64 {
@@ -68,7 +73,8 @@ pub struct Biomes {
 
 impl Biomes {
     pub fn new(seed: u32) -> Self {
-        Self::with(vec![Box::new(Desert::new(seed))])
+        // earlier biomes win ties for a column
+        Self::with(vec![Box::new(Desert::new(seed)), Box::new(Foothills::new(seed))])
     }
 
     pub fn with(biomes: Vec<Box<dyn Biome>>) -> Self {
@@ -81,7 +87,7 @@ impl Biomes {
         let mut height = column.height;
         let (mut owner, mut strongest) = (BiomeId::BASE, 0.5);
         for (i, biome) in self.biomes.iter().enumerate() {
-            let strength = biome.strength(column.climate);
+            let strength = biome.strength(column);
             if strength <= 0.0 {
                 continue;
             }
@@ -91,6 +97,11 @@ impl Biomes {
             }
         }
         (height, owner)
+    }
+
+    // The biome's name, or None for the base terrain.
+    pub fn name(&self, biome: BiomeId) -> Option<&'static str> {
+        biome.0.checked_sub(1).map(|i| self.biomes[i as usize].name())
     }
 
     // The block `biome` uses in place of the base terrain's `base`.
@@ -140,8 +151,12 @@ mod tests {
     struct Raise(f64);
 
     impl Biome for Raise {
-        fn strength(&self, climate: Climate) -> f64 {
-            climate.temperature as f64
+        fn name(&self) -> &'static str {
+            "raise"
+        }
+
+        fn strength(&self, column: &BaseColumn) -> f64 {
+            column.climate.temperature as f64
         }
 
         fn height(&self, column: &BaseColumn) -> f64 {
@@ -158,8 +173,8 @@ mod tests {
             x: 0.0,
             z: 0.0,
             height: 500.0,
-            bumps: 0.0,
             continentalness: 0.3,
+            ruggedness: -1.0,
             climate: Climate { temperature, humidity: 0.5 },
         }
     }
@@ -187,6 +202,8 @@ mod tests {
         let (_, owner) = biomes.shape(&hot_dry);
         // both hold fully, so the first listed keeps it
         assert_eq!(BiomeId(1), owner);
+        assert_eq!(Some("raise"), biomes.name(owner));
+        assert_eq!(None, biomes.name(BiomeId::BASE));
     }
 
     fn climate(temperature: f32, humidity: f32) -> Climate {

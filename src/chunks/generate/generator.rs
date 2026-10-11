@@ -1005,17 +1005,16 @@ mod tests {
 
     #[test]
     fn test_desert_ground_is_sand_and_other_lowland_grass() {
-        use crate::chunks::generate::biome::BiomeId;
         use bevy::math::I64Vec2;
 
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(3))));
-        let lowland = |biome_is_base: bool| {
+        let lowland = |desert: bool| {
             (-60..60)
                 .flat_map(|z| (-60..60).map(move |x| I64Vec2::new(x, z) * 128))
                 .find(|p| {
                     let sample = regions.noise().sample(p.x as f64, p.y as f64);
                     let above_sea = sample.height - WATER_LEVEL as f64;
-                    (sample.biome == BiomeId::BASE) == biome_is_base
+                    (regions.noise().biomes().name(sample.biome) == Some("desert")) == desert
                         && (20.0..60.0).contains(&above_sea)
                         && regions.sampler().gradient(p.x, p.y).0.abs() < 0.5
                         && regions.sampler().gradient(p.x, p.y).1.abs() < 0.5
@@ -1028,8 +1027,8 @@ mod tests {
             let local = U16Vec3::new(p.x.rem_euclid(16) as u16, top.rem_euclid(16) as u16, p.y.rem_euclid(16) as u16);
             generate_chunk(regions.clone(), coord).get_block_at(local)
         };
-        assert_eq!(BlockType::Sand, surface(lowland(false)));
-        assert_eq!(BlockType::Grass, surface(lowland(true)));
+        assert_eq!(BlockType::Sand, surface(lowland(true)));
+        assert_eq!(BlockType::Grass, surface(lowland(false)));
     }
 
     #[test]

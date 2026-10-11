@@ -48,10 +48,8 @@ const PLAINS_DETAIL: f64 = 6.0;
 const RUGGED_DETAIL: f64 = 18.0;
 const MOUNTAIN_DETAIL: f64 = 30.0;
 
-// Bumps a few blocks across, so the ground is never glassy smooth up close.
+// Crags a few blocks across on mountains. Foothills bring their own, see `biome::Foothills`.
 const TEXTURE_WAVELENGTH: f64 = 32.0;
-const PLAINS_TEXTURE: f64 = 5.0;
-const RUGGED_TEXTURE: f64 = 9.0;
 const MOUNTAIN_TEXTURE: f64 = 16.0;
 
 // Where the ocean ring around the world starts and ends, as a fraction of the half size.
@@ -148,13 +146,13 @@ impl NoiseGenerator {
 
     // The base terrain, then whichever biomes the climate here calls for.
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
-        let (continentalness, height, bumps) = self.base_terrain(x, z);
+        let (continentalness, ruggedness, height) = self.base_terrain(x, z);
         let (height, biome) = self.biomes.shape(&BaseColumn {
             x,
             z,
             height,
-            bumps,
             continentalness,
+            ruggedness,
             climate: self.climate(x, z),
         });
         TerrainSample {
@@ -164,8 +162,7 @@ impl NoiseGenerator {
         }
     }
 
-    // Continentalness and height of the terrain every biome starts from, and how much of that
-    // height is block-scale bumps.
+    // Continentalness, ruggedness and height of the terrain every biome starts from.
     fn base_terrain(&self, x: f64, z: f64) -> (f64, f64, f64) {
         let warp_x = self.warp_x.get([x, z]) * WARP_STRENGTH;
         let warp_z = self.warp_z.get([x, z]) * WARP_STRENGTH;
@@ -216,14 +213,13 @@ impl NoiseGenerator {
         let detail_amplitude = SEA_FLOOR_DETAIL.lerp(land_detail, sea_floor_blend) * shore_calm;
         let detail = self.detail.get([x, z]) * detail_amplitude;
 
-        let rugged = smoothstep(-0.3, 0.4, ruggedness);
-        let land_texture = PLAINS_TEXTURE.lerp(RUGGED_TEXTURE, rugged) + mountain_mask * MOUNTAIN_TEXTURE;
+        let land_texture = mountain_mask * MOUNTAIN_TEXTURE;
         // none right at the shore, or it raises specks of land out of the shallows
         let shore_fade = smoothstep(0.0, 0.06, continentalness.abs());
         let texture = self.texture.get([x, z]) * land_texture * sea_floor_blend * shore_fade;
 
         let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
-        (continentalness, height, texture)
+        (continentalness, ruggedness, height)
     }
 
     // How hot and wet the column at (x, z) is.
