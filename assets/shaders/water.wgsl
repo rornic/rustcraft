@@ -58,8 +58,11 @@ const FOAM_FADE_START: f32 = 144.0;
 
 // Water's colours are picked as they should look on screen, so they're turned back into
 // the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
-const EXPOSURE_SCALE: f32 = 1.4142135; // 2 to the power of tonemap.rs's EXPOSURE
 const UNTONEMAP_STEPS: i32 = 4;
+
+fn exposure_scale() -> f32 {
+    return exp2(view_bindings::view.color_grading.exposure);
+}
 
 struct FragmentOutput {
   @location(0) color: vec4<f32>
@@ -130,7 +133,7 @@ fn tonemap_curve(v: vec3<f32>) -> vec3<f32> {
 
 // Bevy's somewhat boring display transform, after exposure.
 fn displayed(scene: vec3<f32>) -> vec3<f32> {
-    let colour = scene * EXPOSURE_SCALE;
+    let colour = scene * exposure_scale();
     let luma = dot(colour, vec3<f32>(0.2126, 0.7152, 0.0722));
     let chroma = vec2<f32>(
         dot(colour, vec3<f32>(-0.1146, -0.3854, 0.5)),
@@ -146,9 +149,10 @@ fn displayed(scene: vec3<f32>) -> vec3<f32> {
 // Close to the identity for all but bright colours, so a few nudges towards the target
 // by however far off it still is land near enough.
 fn scene_colour(display: vec3<f32>) -> vec3<f32> {
-    var scene = display / EXPOSURE_SCALE;
+    let scale = exposure_scale();
+    var scene = display / scale;
     for (var i = 0; i < UNTONEMAP_STEPS; i++) {
-        scene = max(scene + (display - displayed(scene)) * 1.5 / EXPOSURE_SCALE, vec3<f32>(0.0));
+        scene = max(scene + (display - displayed(scene)) * 1.5 / scale, vec3<f32>(0.0));
     }
     return scene;
 }

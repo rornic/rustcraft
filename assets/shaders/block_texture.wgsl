@@ -10,6 +10,15 @@
 const ATLAS_CELLS: f32 = 7.0;
 const TILE_INSET: f32 = 0.002;
 
+// Just the alpha of `block_texel`, at full detail: without screen-space derivatives, so
+// it's fine where only some fragments sample, as the shadow pass does for leaves.
+fn block_alpha(uv: vec2<f32>, vertex_alpha: f32) -> f32 {
+    let atlas_cell = floor(vertex_alpha + 0.5);
+    let tile_uv = clamp(fract(uv), vec2<f32>(TILE_INSET), vec2<f32>(1.0 - TILE_INSET));
+    let atlas_uv = vec2<f32>((atlas_cell + tile_uv.x) / ATLAS_CELLS, tile_uv.y);
+    return textureSampleLevel(material_color_texture, material_color_sampler, atlas_uv, 0.0).a * material_color.a;
+}
+
 // Block meshes put tile counts in uv and the atlas cell in vertex alpha, so merged faces
 // repeat their texture. Untextured meshes, like smooth far terrain, have a negative uv.
 fn block_texel(uv: vec2<f32>, vertex_alpha: f32) -> vec4<f32> {

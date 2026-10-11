@@ -3,23 +3,22 @@
 
 #import bevy_pbr::{mesh_functions, prepass_io, view_transformations::position_world_to_clip}
 #import bevy_render::globals::Globals
-#import "shaders/block_texture.wgsl"::block_texel
-#import "shaders/foliage.wgsl"::swayed
+#import "shaders/block_texture.wgsl"::block_alpha
+#import "shaders/foliage.wgsl"::{is_leaf, swayed}
 
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
 @group(0) @binding(1) var<uniform> globals: Globals;
 
 // Bevy's prepass vertex shader, for meshes that are never skinned or morphed and with no
-// motion vectors, with leaves swaying just as in the main pass.
+// motion vectors, with leaves swaying just as in the main pass. Block meshes always carry
+// vertex colours, see `MeshBuffers`.
 @vertex
 fn vertex(vertex: prepass_io::Vertex) -> prepass_io::VertexOutput {
     var out: prepass_io::VertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
-#ifdef VERTEX_COLORS
     out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, globals.time), 1.0);
     out.color = vertex.color;
-#endif
     out.position = position_world_to_clip(out.world_position.xyz);
 #ifdef DEPTH_CLAMP_ORTHO
     out.clip_position_unclamped = out.position;
@@ -40,12 +39,9 @@ fn vertex(vertex: prepass_io::Vertex) -> prepass_io::VertexOutput {
     return out;
 }
 
+// Only leaves have holes, so only they pay for a texture sample.
 fn cut_leaf_holes(in: prepass_io::VertexOutput) {
-    var vertex_alpha = 0.0;
-#ifdef VERTEX_COLORS
-    vertex_alpha = in.color.a;
-#endif
-    if block_texel(in.uv, vertex_alpha).a < 0.5 {
+    if is_leaf(in.color.a) && block_alpha(in.uv, in.color.a) < 0.5 {
         discard;
     }
 }

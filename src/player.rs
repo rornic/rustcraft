@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use bevy::{
     core_pipeline::{
         dof::{DepthOfField, DepthOfFieldMode},
@@ -175,7 +177,8 @@ pub fn update_underwater_effects(
         // Matches ClearColor to the fog color, same trick setup_scene uses above water (its
         // ClearColor equals the dry fog's color) - otherwise empty/unloaded space shows the old
         // background color straight through, breaking the underwater illusion.
-        let underwater_color: Color = scene_colour(Color::srgb_u8(20, 90, 130)).into();
+        static UNDERWATER_COLOR: LazyLock<Color> = LazyLock::new(|| scene_colour(Color::srgb_u8(20, 90, 130)).into());
+        let underwater_color = *UNDERWATER_COLOR;
         *fog = DistanceFog {
             color: underwater_color,
             falloff: FogFalloff::Linear {

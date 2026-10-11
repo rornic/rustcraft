@@ -1,5 +1,5 @@
 use bevy::{
-    color::{Color, LinearRgba},
+    color::{Alpha, Color, ColorToComponents, LinearRgba},
     core_pipeline::tonemapping::Tonemapping,
     math::{Mat3, Vec3},
     render::view::{ColorGrading, ColorGradingGlobal},
@@ -10,7 +10,7 @@ use bevy::{
 pub const TONEMAPPING: Tonemapping = Tonemapping::SomewhatBoringDisplayTransform;
 
 /// Stops of exposure before tonemapping, so a mid grey stays about mid grey once the
-/// tonemapping curve has bent it. `water.wgsl` has a copy.
+/// tonemapping curve has bent it. `water.wgsl` reads it from the view's colour grading.
 pub const EXPOSURE: f32 = 0.5;
 
 /// The camera's colour grading out of water.
@@ -24,7 +24,6 @@ pub fn dry_color_grading() -> ColorGrading {
     }
 }
 
-const LUMA: Vec3 = Vec3::new(0.2126, 0.7152, 0.0722);
 // rows: luma, then the two chroma channels
 const RGB_TO_YCBCR: Mat3 = Mat3::from_cols(
     Vec3::new(0.2126, -0.1146, 0.5),
@@ -44,7 +43,7 @@ fn somewhat_boring_display_transform(colour: Vec3) -> Vec3 {
     let bt = tonemap_curve(Vec3::new(0.0, ycbcr.y, ycbcr.z).length() * 2.4);
     let desat = ((bt - 0.7) * 0.8).max(0.0).powi(2);
     let desat_colour = colour.lerp(Vec3::splat(ycbcr.x), desat);
-    let luma_scale = tonemap_curve(ycbcr.x) / colour.dot(LUMA).max(1e-5);
+    let luma_scale = tonemap_curve(ycbcr.x) / ycbcr.x.max(1e-5);
     let tm0 = colour * luma_scale.max(0.0);
     let tm1 = desat_colour.to_array().map(tonemap_curve);
     tm0.lerp(Vec3::from_array(tm1), bt * bt) * 0.97
@@ -54,36 +53,34 @@ fn exposure_scale() -> f32 {
     2f32.powf(EXPOSURE)
 }
 
-fn rgb(colour: LinearRgba) -> Vec3 {
-    Vec3::new(colour.red, colour.green, colour.blue)
+fn displayed_rgb(scene: Vec3) -> Vec3 {
+    somewhat_boring_display_transform(scene.max(Vec3::ZERO) * exposure_scale())
 }
 
 /// What a scene colour looks like on screen once exposed and tonemapped.
 pub fn displayed(scene: LinearRgba) -> LinearRgba {
-    let out = somewhat_boring_display_transform(rgb(scene).max(Vec3::ZERO) * exposure_scale());
-    LinearRgba::new(out.x, out.y, out.z, scene.alpha)
+    LinearRgba::from_vec3(displayed_rgb(scene.to_vec3())).with_alpha(scene.alpha)
 }
 
 /// The scene colour to draw for `display` to show on screen after tonemapping: for things
 /// like the sky and fog that were picked to look a certain way rather than be lit.
 pub fn scene_colour(display: Color) -> LinearRgba {
     let display = display.to_linear();
-    let target = rgb(display);
+    let target = display.to_vec3();
     // tonemapping is near enough the identity up close that nudging towards the target
     // by however far off it still is converges
     let mut scene = target;
     for _ in 0..INVERSE_STEPS {
-        let shown = rgb(displayed(LinearRgba::rgb(scene.x, scene.y, scene.z)));
-        scene = (scene + target - shown).max(Vec3::ZERO);
+        scene = (scene + target - displayed_rgb(scene)).max(Vec3::ZERO);
     }
-    LinearRgba::new(scene.x, scene.y, scene.z, display.alpha)
+    LinearRgba::from_vec3(scene).with_alpha(display.alpha)
 }
 
 #[cfg(test)]
 mod tests {
     use bevy::color::{Color, ColorToComponents, LinearRgba};
 
-    use super::{displayed, scene_colour, EXPOSURE};
+    use super::{displayed, scene_colour};
 
     fn assert_close(expected: LinearRgba, actual: LinearRgba) {
         for (e, a) in expected.to_f32_array().iter().zip(actual.to_f32_array()) {
@@ -118,17 +115,5 @@ mod tests {
         let bright = displayed(LinearRgba::rgb(2.0, 2.0, 2.0));
         let brighter = displayed(LinearRgba::rgb(4.0, 4.0, 4.0));
         assert!(bright.green < brighter.green && brighter.green < 1.0);
-    }
-
-    #[test]
-    fn test_water_shader_has_the_same_exposure() {
-        let shader = std::fs::read_to_string("assets/shaders/water.wgsl").unwrap();
-        let line = shader
-            .lines()
-            .find(|line| line.starts_with("const EXPOSURE_SCALE"))
-            .unwrap();
-        let value = line.split(['=', ';']).nth(1).unwrap().trim();
-        let scale: f32 = value.parse().unwrap();
-        assert!((scale - 2f32.powf(EXPOSURE)).abs() < 1e-4, "{scale}");
     }
 }

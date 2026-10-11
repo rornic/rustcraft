@@ -5,7 +5,7 @@
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     pbr_functions::apply_fog,
     shadows::fetch_directional_shadow,
-    view_transformations::position_world_to_clip,
+    view_transformations::{position_world_to_clip, position_world_to_view},
 }
 #import "shaders/block_texture.wgsl"::{block_texel, material_fade}
 #import "shaders/foliage.wgsl"::swayed
@@ -35,13 +35,7 @@ fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>) -> f32 {
     if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
         return 1.0;
     }
-    let view_from_world = view_bindings::view.view_from_world;
-    let view_z = dot(vec4<f32>(
-        view_from_world[0].z,
-        view_from_world[1].z,
-        view_from_world[2].z,
-        view_from_world[3].z,
-    ), world_position);
+    let view_z = position_world_to_view(world_position.xyz).z;
     let shadow = fetch_directional_shadow(0u, world_position, normal, view_z);
     let reach = (*sun).cascades[(*sun).num_cascades - 1u].far_bound;
     return mix(shadow, 1.0, smoothstep(reach * SHADOW_FADE_START, reach, -view_z));
@@ -70,16 +64,14 @@ fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
 }
 
 // Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves
-// swaying in the wind.
+// swaying in the wind. Block meshes always carry vertex colours, see `MeshBuffers`.
 @vertex
 fn vertex(vertex: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
-#ifdef VERTEX_COLORS
     out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, view_bindings::globals.time), 1.0);
     out.color = vertex.color;
-#endif
     out.position = position_world_to_clip(out.world_position.xyz);
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
     out.uv = vertex.uv;
@@ -108,16 +100,9 @@ fn fragment(
     let view_position = view_bindings::view.world_position.xyz;
     let normal = normalize(in.world_normal);
 
-    var vertex_alpha = 0.0;
-#ifdef VERTEX_COLORS
-    vertex_alpha = in.color.a;
-#endif
-    var color = block_texel(in.uv, vertex_alpha);
-
+    var color = block_texel(in.uv, in.color.a);
     // ambient occlusion and grass/leaf tint
-#ifdef VERTEX_COLORS
     color = vec4<f32>(color.rgb * in.color.rgb, color.a);
-#endif
 
     // block meshes carry smoothed sky light; far smooth terrain is all under open sky
     var sky = 1.0;
