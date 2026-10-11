@@ -20,6 +20,14 @@ fn water_level() -> ShaderDefVal {
     ShaderDefVal::Int("WATER_LEVEL".into(), WATER_LEVEL as i32)
 }
 
+// Every stage needs every def its file's imports use, since each is built from the whole file.
+fn push_shader_defs(descriptor: &mut RenderPipelineDescriptor, defs: &[ShaderDefVal]) {
+    descriptor.vertex.shader_defs.extend_from_slice(defs);
+    if let Some(fragment) = &mut descriptor.fragment {
+        fragment.shader_defs.extend_from_slice(defs);
+    }
+}
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct ChunkMaterial {
     #[uniform(0)]
@@ -65,10 +73,7 @@ impl Material for ChunkMaterial {
         descriptor.primitive.cull_mode = Some(Face::Front);
         // the main and shadow passes both sway leaves, see `foliage.wgsl`
         let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), BlockType::Leaves as u32 - 1);
-        descriptor.vertex.shader_defs.push(leaf_cell.clone());
-        if let Some(fragment) = &mut descriptor.fragment {
-            fragment.shader_defs.extend([leaf_cell, water_level()]);
-        }
+        push_shader_defs(descriptor, &[leaf_cell, water_level()]);
         Ok(())
     }
 }
@@ -107,9 +112,7 @@ impl Material for WaterMaterial {
         // unlike ChunkMaterial, water has no back-face culling: the player can swim
         // underneath the lowered surface and must still see it rendered from below.
         descriptor.primitive.cull_mode = None;
-        if let Some(fragment) = &mut descriptor.fragment {
-            fragment.shader_defs.push(water_level());
-        }
+        push_shader_defs(descriptor, &[water_level()]);
         Ok(())
     }
 }
