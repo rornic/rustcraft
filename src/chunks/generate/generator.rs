@@ -289,7 +289,8 @@ fn vertex_light(
 ) -> f32 {
     let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
     let front = block_coord + FACE_NORMAL_OFFSET[face_index];
-    let open = |coord: IVec3| !source.block(coord).is_opaque();
+    // the terrain the light was worked out from, not the skirts LODs add at their edges
+    let open = |coord: IVec3| !source.terrain(coord).is_opaque();
     let (side_a, side_b) = (open(front + offset_a), open(front + offset_b));
     let corner = (side_a || side_b) && open(front + offset_a + offset_b);
     let cells = [
@@ -763,6 +764,14 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
             self.blocks[grid_index(self.size, coord)]
         } else {
             self.source.block(coord)
+        }
+    }
+
+    fn terrain(&self, coord: IVec3) -> BlockType {
+        if coord.min_element() >= 0 && coord.max_element() < self.size {
+            self.blocks[grid_index(self.size, coord)]
+        } else {
+            self.source.terrain(coord)
         }
     }
 
@@ -1491,6 +1500,27 @@ mod tests {
     }
 
     #[test]
+    fn test_lod_ground_under_open_sky_is_lit_to_its_edges() {
+        use bevy::math::I64Vec2;
+
+        // a mountainside, where LOD skirts stand in for the solid ground beside the node
+        let noise = Arc::new(NoiseGenerator::new(42));
+        let p = (-40..40)
+            .flat_map(|z| (-40..40).map(move |x| I64Vec2::new(x, z) * 256))
+            .find(|p| (150.0..250.0).contains(&(noise.get(*p) - WATER_LEVEL as f64)))
+            .expect("no mountainside near the centre");
+        let height = noise.get(p) as i64;
+        let chunk = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), height.div_euclid(16), p.y.div_euclid(16)));
+        let regions = Arc::new(RegionStore::new(noise));
+        let key = crate::chunks::lod::LodKey::containing(chunk, 1);
+        let mesh = super::generate_lod_mesh(regions, key, 3).expect("no mesh").opaque;
+        let lights = top_lights(&mesh);
+        assert!(!lights.is_empty());
+        let dark: Vec<_> = lights.iter().filter(|(_, l)| *l < 1.0).collect();
+        assert!(dark.is_empty(), "shaded under open sky: {dark:?}");
+    }
+
+    #[test]
     fn test_ambient_occlusion_stops_faces_merging() {
         let mut chunk = floor_chunk();
         chunk.set_block_at(U16Vec3::new(8, 1, 8), BlockType::Stone);
@@ -1605,3 +1635,4 @@ mod tests {
         );
     }
 }
+
