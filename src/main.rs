@@ -9,6 +9,7 @@ use rustcraft::chunks::{
     material::{ChunkMaterial, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
+use rustcraft::clouds::CloudPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 use rustcraft::sky::{gradient_skybox, sun, FOG_MAX_OPACITY, HORIZON_COLOR};
@@ -134,6 +135,7 @@ fn main() {
                 ..default()
             },
             TerrainPlugin,
+            CloudPlugin,
         ))
         .insert_resource(ClearColor(scene_colour(HORIZON_COLOR).into()))
         .add_systems(Startup, setup_scene)

@@ -16,12 +16,12 @@ use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
 
 // Sea level, where `fog.wgsl` turns from fog across the land to murk all round.
-fn water_level() -> ShaderDefVal {
+pub(crate) fn water_level() -> ShaderDefVal {
     ShaderDefVal::Int("WATER_LEVEL".into(), WATER_LEVEL as i32)
 }
 
 // Every stage needs every def its file's imports use, since each is built from the whole file.
-fn push_shader_defs(descriptor: &mut RenderPipelineDescriptor, defs: &[ShaderDefVal]) {
+pub(crate) fn push_shader_defs(descriptor: &mut RenderPipelineDescriptor, defs: &[ShaderDefVal]) {
     descriptor.vertex.shader_defs.extend_from_slice(defs);
     if let Some(fragment) = &mut descriptor.fragment {
         fragment.shader_defs.extend_from_slice(defs);
