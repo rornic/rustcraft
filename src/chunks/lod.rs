@@ -89,21 +89,11 @@ impl LodLayout {
         }
     }
 
-    /// Whether `level` is drawn as a smooth surface instead of blocks: only the farthest
-    /// level, and only when terrain is drawn far enough out.
-    pub fn smooth(self, level: u8) -> bool {
-        level > 0 && level == self.max_level && self.render_distance >= SMOOTH_RENDER_DISTANCE
-    }
-
     /// How far full-detail chunks reach: a level-1 node in range, plus its diagonal.
     pub fn full_detail_reach(self) -> u32 {
         (self.full_detail_distance + 2.0 * 3f32.sqrt()).ceil() as u32
     }
 }
-
-// From this render distance, in chunks, the farthest LOD level is drawn as a smooth surface:
-// its blocks would be too coarse to read as blocks anyway, and a surface is far cheaper.
-const SMOOTH_RENDER_DISTANCE: f32 = 256.0;
 
 // LOD meshes take well under a millisecond, so enough are kept in flight that the
 // once-per-frame refill isn't what limits how fast they load.
@@ -595,13 +585,12 @@ pub fn spawn_lods(
         }
 
         let regions = world.region_store.clone();
-        let smooth = lods.layout.smooth(key.level);
         let entity = commands
             .spawn((
                 LodNode { key },
                 GenerateLodMesh {
                     task: task_pool
-                        .spawn(async move { generate_lod_mesh(regions, key, smooth) }),
+                        .spawn(async move { generate_lod_mesh(regions, key) }),
                 },
                 lod_transform(key),
                 Visibility::Hidden,
@@ -898,17 +887,6 @@ mod tests {
         assert_eq!(2, LodLayout::new(16, 128, 4).max_level);
         assert_eq!(3, LodLayout::new(16, 257, 4).max_level);
         assert_eq!(128.0, layout(2).render_distance());
-    }
-
-    #[test]
-    fn test_only_the_farthest_level_of_a_far_view_is_smooth() {
-        // 128 chunks out: blocks all the way
-        let near = LodLayout::new(16, 128, 4);
-        assert!((0..=near.max_level).all(|level| !near.smooth(level)));
-        // 256 chunks out: just the last level
-        let far = LodLayout::new(16, 256, 4);
-        assert!(far.smooth(far.max_level));
-        assert!((0..far.max_level).all(|level| !far.smooth(level)));
     }
 
     #[test]
@@ -1244,7 +1222,7 @@ mod tests {
 
         let mut empty = 0;
         for &key in &nodes {
-            let meshed = generate_lod_mesh(regions.clone(), key, key.level >= 2).is_some();
+            let meshed = generate_lod_mesh(regions.clone(), key).is_some();
             if super::known_empty(key, &regions) {
                 assert!(!meshed, "{key:?} was taken as empty but has a mesh");
                 empty += 1;

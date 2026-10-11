@@ -103,7 +103,7 @@ fn fragment(
     // ambient occlusion and grass/leaf tint
     color = vec4<f32>(color.rgb * in.color.rgb, color.a);
 
-    // block meshes carry smoothed sky light; far smooth terrain is all under open sky
+    // block meshes carry smoothed sky light, all but those with no faces at all
     var sky = 1.0;
 #ifdef VERTEX_UVS_B
     sky = in.uv_b.x;
