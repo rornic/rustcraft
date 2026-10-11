@@ -4,6 +4,8 @@ use std::sync::{Arc, OnceLock, RwLock};
 use bevy::math::I64Vec2;
 
 use super::biome::BiomeId;
+use super::columns::{ColumnCache, ColumnGrid};
+use crate::chunks::lod::LodKey;
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 
@@ -69,6 +71,7 @@ pub struct RegionStore {
     // compute, so this lock is only ever held briefly (get-or-insert + LRU touch),
     // never across the region's noise sampling itself.
     lru: RwLock<RegionLru>,
+    columns: ColumnCache,
 }
 
 impl RegionStore {
@@ -76,11 +79,24 @@ impl RegionStore {
         Self {
             noise,
             lru: RwLock::new(RegionLru::new(RESIDENT_REGION_CAP)),
+            columns: ColumnCache::default(),
         }
     }
 
     pub fn noise(&self) -> &NoiseGenerator {
         &self.noise
+    }
+
+    /// The ground under a coarse LOD node's cells, see `columns::COARSE_CELL`. Blocks
+    /// while it's sampled, so only call from a task.
+    pub fn column_grid(&self, key: LodKey) -> Arc<ColumnGrid> {
+        self.columns.grid(&self.noise, key)
+    }
+
+    /// The lowest and highest ground under a coarse LOD node, if a node over the same
+    /// column has been sampled. Never blocks.
+    pub fn column_height_range(&self, key: LodKey) -> Option<(f32, f32)> {
+        self.columns.height_range(key)
     }
 
     pub fn with_resident_cap(self, cap: usize) -> Self {

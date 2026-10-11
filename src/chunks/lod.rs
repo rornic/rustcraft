@@ -24,6 +24,7 @@ use super::{
     chunk_loader::{Chunk, ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
     fade::{fade_out_and_despawn, set_shown, Fade},
     generate::{
+        columns::COARSE_CELL,
         generator::{generate_lod_mesh, ChunkMeshes},
         region_store::RegionStore,
         trees::{TREE_HEIGHT, TREE_REACH},
@@ -604,8 +605,8 @@ pub fn spawn_lods(
     }
 }
 
-// Whether `key` is known to have nothing to draw, going by regions already computed -
-// never computes one, so it can run on the main thread. That's when the terrain its mesh
+// Whether `key` is known to have nothing to draw, going by regions or coarse columns
+// already sampled - never samples one, so it can run on the main thread. That's when the terrain its mesh
 // would sample is all below it with only air or only water above, or all above it so it's
 // buried in rock. Only knows about generated terrain, since LOD meshes are built from it
 // alone - if they ever show player edits or caves, those must stop counting as empty here.
@@ -618,11 +619,17 @@ fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
     let margin = cell + 1 + TREE_REACH;
     let min_xz = I64Vec2::new(min.x, min.z) - margin;
     let max_xz = I64Vec2::new(min.x, min.z) + width - 1 + margin;
-    let Some((lowest, highest)) = regions.loaded_height_range(min_xz, max_xz) else {
+    let range = if cell >= COARSE_CELL {
+        regions.column_height_range(key)
+    } else {
+        regions.loaded_height_range(min_xz, max_xz)
+    };
+    let Some((lowest, highest)) = range else {
         return false;
     };
     let (bottom, top) = (min.y - cell, min.y + width + cell);
-    let above_terrain = bottom > highest.round() as i64 + 1 + TREE_HEIGHT;
+    // coarse nodes' canopies stand at least a cell tall
+    let above_terrain = bottom > highest.round() as i64 + 1 + TREE_HEIGHT.max(cell);
     let in_air = bottom > WATER_LEVEL;
     let under_water = top < WATER_LEVEL - 1;
     let buried = top < lowest.round() as i64 - 1;
@@ -1316,3 +1323,4 @@ mod tests {
             .chunk_visible(c)));
     }
 }
+

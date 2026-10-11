@@ -13,7 +13,8 @@ use super::light::{SkyLight, MAX_LIGHT};
 use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
-use super::trees::{grows_into, trees_near, TREE_HEIGHT};
+use super::columns::COARSE_CELL;
+use super::trees::{self, grows_into, trees_near, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -77,8 +78,58 @@ struct LodBlocks {
     cells: Vec<BlockType>,
 }
 
+// From afar, forests show as their canopy: leaves over this much of the ground for each
+// tree a cell grows, see `Biome::tree_density`, from these heights above it.
+const CANOPY_COVER: f64 = 1.6;
+const CANOPY: (i64, i64) = (5, 18);
+
 impl LodBlocks {
     fn sample(regions: &RegionStore, key: LodKey) -> Self {
+        if key.cell_size() >= COARSE_CELL {
+            Self::sample_coarse(regions, key)
+        } else {
+            Self::sample_regions(regions, key)
+        }
+    }
+
+    // From the noise at each cell's centre, with forests as clumps of leaves.
+    fn sample_coarse(regions: &RegionStore, key: LodKey) -> Self {
+        let size = CHUNK_SIZE as i32;
+        let padded = (size + 2) as usize;
+        let cell = key.cell_size();
+        let base = key.min_block();
+        let mut cells = vec![BlockType::Air; padded * padded * padded];
+        let grid = regions.column_grid(key);
+        let noise = regions.noise();
+
+        for cx in -1..=size {
+            for cz in -1..=size {
+                let height = grid.height(cx, cz).round() as i64;
+                let gradient = grid.gradient(cx, cz);
+                let biome = grid.biome(cx, cz);
+                let ground = column_block(noise.biomes(), biome, height - 1, height, gradient);
+                let world_x = base.x + cx as i64 * cell + cell / 2;
+                let world_z = base.z + cz as i64 * cell + cell / 2;
+                let chance = (trees::hash(noise.seed() as u64, world_x, world_z) & 0xffff) as f64 / 65536.0;
+                let wooded = ground == BlockType::Grass && chance < grid.trees(cx, cz) * CANOPY_COVER;
+                // at least one cell's worth, however coarse the cells
+                let canopy = height + CANOPY.0..height + CANOPY.1.max(cell);
+
+                for cy in -1..=size {
+                    let world_y = base.y + cy as i64 * cell + cell / 2;
+                    let mut block = column_block(noise.biomes(), biome, world_y, height, gradient);
+                    if wooded && block == BlockType::Air && canopy.contains(&world_y) {
+                        block = BlockType::Leaves;
+                    }
+                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = block;
+                }
+            }
+        }
+        Self { size, cells }
+    }
+
+    // From full-detail regions, with real trees.
+    fn sample_regions(regions: &RegionStore, key: LodKey) -> Self {
         let size = CHUNK_SIZE as i32;
         let padded = (size + 2) as usize;
         let cell = key.cell_size();
