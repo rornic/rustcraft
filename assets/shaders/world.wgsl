@@ -7,7 +7,7 @@
 @group(2) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, one per block type but air
-const ATLAS_CELLS: f32 = 5.0;
+const ATLAS_CELLS: f32 = 7.0;
 const TILE_INSET: f32 = 0.002;
 
 fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
@@ -58,6 +58,10 @@ fn fragment(
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);
     if threshold < material_fade.x || threshold >= material_fade.y {
+        discard;
+    }
+    // the holes in leaves: this shader replaces Bevy's, so must cut out alpha-masked texels itself
+    if color.a < 0.5 {
         discard;
     }
 

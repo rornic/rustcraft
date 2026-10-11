@@ -1,6 +1,7 @@
 use bevy::math::Vec3;
 
-use super::generator::{terrain_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_TOP};
+use super::biome::{grass_colour, leaf_colour, Climate};
+use super::generator::{column_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_TOP};
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use crate::block::BlockType;
@@ -15,14 +16,19 @@ const COLOUR_CELLS: i32 = CELLS + 2;
 const SKIRT_CELLS: f32 = 1.0;
 const SLOPE_SHADE: f32 = 0.7;
 const UNTEXTURED_UV: [f32; 2] = [-1.0, 0.0];
+// How much of the ground a given tree density hides under leaves, seen from afar.
+const CANOPY_COVER: f64 = 1.6;
 
-fn block_colour(block: BlockType) -> Vec3 {
+// Matches the mean of each block's texture, so far terrain is the colour of near terrain.
+fn block_colour(block: BlockType, climate: Climate) -> Vec3 {
     match block {
         BlockType::Stone => Vec3::new(0.118, 0.118, 0.118),
-        BlockType::Grass => Vec3::new(0.027, 0.132, 0.001),
+        BlockType::Grass => grass_colour(climate),
         BlockType::Sand => Vec3::new(0.478, 0.363, 0.183),
         BlockType::Water => Vec3::new(0.066, 0.101, 0.915),
         BlockType::Snow => Vec3::new(0.945, 0.992, 0.992),
+        BlockType::Log => Vec3::new(0.08, 0.045, 0.019),
+        BlockType::Leaves => leaf_colour(climate),
         BlockType::Air => Vec3::ZERO,
     }
 }
@@ -38,7 +44,8 @@ fn surface_y(height: f32) -> f32 {
 
 pub(super) struct Surface {
     corners: Vec<f32>,
-    blocks: Vec<BlockType>,
+    // the colour of the surface block in each cell
+    colours: Vec<Vec3>,
 }
 
 impl Surface {
@@ -55,22 +62,33 @@ impl Surface {
             }
         }
 
-        let mut blocks = Vec::with_capacity((COLOUR_CELLS * COLOUR_CELLS) as usize);
+        let noise = regions.noise();
+        let mut colours = Vec::with_capacity((COLOUR_CELLS * COLOUR_CELLS) as usize);
         for i in -1..=CELLS {
             for j in -1..=CELLS {
                 let world_x = base.x + i as i64 * cell + cell / 2;
                 let world_z = base.z + j as i64 * cell + cell / 2;
                 let height = heights.height(world_x, world_z).round() as i64;
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
-                blocks.push(terrain_block(
+                let block = column_block(
+                    noise.biomes(),
+                    heights.biome(world_x, world_z),
                     height.max(SOLID_FLOOR) - 1,
                     height,
                     gradient_x.abs() + gradient_z.abs(),
-                ));
+                );
+                let climate = noise.climate(world_x as f64, world_z as f64);
+                let mut colour = block_colour(block, climate);
+                if block == BlockType::Grass {
+                    // trees are too small to draw this far out, so forests show as their leaves
+                    let canopy = (heights.trees(world_x, world_z) * CANOPY_COVER).min(1.0) as f32;
+                    colour = colour.lerp(block_colour(BlockType::Leaves, climate), canopy);
+                }
+                colours.push(colour);
             }
         }
 
-        Self { corners, blocks }
+        Self { corners, colours }
     }
 
     // `i` and `j` run from -1 to CELLS + 1
@@ -87,15 +105,15 @@ impl Surface {
     }
 
     // `i` and `j` run from -1 to CELLS
-    fn block(&self, i: i32, j: i32) -> BlockType {
-        self.blocks[((i + 1) * COLOUR_CELLS + j + 1) as usize]
+    fn cell_colour(&self, i: i32, j: i32) -> Vec3 {
+        self.colours[((i + 1) * COLOUR_CELLS + j + 1) as usize]
     }
 
     fn corner_colour(&self, i: i32, j: i32) -> Vec3 {
-        (block_colour(self.block(i - 1, j - 1))
-            + block_colour(self.block(i, j - 1))
-            + block_colour(self.block(i - 1, j))
-            + block_colour(self.block(i, j)))
+        (self.cell_colour(i - 1, j - 1)
+            + self.cell_colour(i, j - 1)
+            + self.cell_colour(i - 1, j)
+            + self.cell_colour(i, j))
             / 4.0
     }
 }
@@ -258,13 +276,18 @@ mod tests {
         WATER_LEVEL,
     };
     use crate::block::BlockType;
+    use crate::chunks::generate::biome::Climate;
     use crate::chunks::lod::LodKey;
     use crate::util::primitives::cube;
+
+    fn grass() -> Vec3 {
+        block_colour(BlockType::Grass, Climate::default())
+    }
 
     fn flat(height: f32) -> Surface {
         Surface {
             corners: vec![surface_y(height); (CORNERS * CORNERS) as usize],
-            blocks: vec![BlockType::Grass; (COLOUR_CELLS * COLOUR_CELLS) as usize],
+            colours: vec![grass(); (COLOUR_CELLS * COLOUR_CELLS) as usize],
         }
     }
 
@@ -278,7 +301,7 @@ mod tests {
         }
         Surface {
             corners,
-            blocks: vec![BlockType::Grass; (COLOUR_CELLS * COLOUR_CELLS) as usize],
+            colours: vec![grass(); (COLOUR_CELLS * COLOUR_CELLS) as usize],
         }
     }
 
@@ -383,18 +406,19 @@ mod tests {
     #[test]
     fn test_colours_blend_between_cells() {
         let mut surface = flat(50.0);
+        let snow = block_colour(BlockType::Snow, Climate::default());
         // snow on every cell with i >= 8
         for i in -1..=CELLS {
             for j in -1..=CELLS {
                 if i >= 8 {
-                    surface.blocks[((i + 1) * COLOUR_CELLS + j + 1) as usize] = BlockType::Snow;
+                    surface.colours[((i + 1) * COLOUR_CELLS + j + 1) as usize] = snow;
                 }
             }
         }
-        let expected = (block_colour(BlockType::Grass) + block_colour(BlockType::Snow)) / 2.0;
+        let expected = (grass() + snow) / 2.0;
         // corners on the boundary between the two halves are half grass, half snow
         assert_eq!(expected, surface.corner_colour(8, 5));
-        assert_eq!(block_colour(BlockType::Grass), surface.corner_colour(7, 5));
+        assert_eq!(grass(), surface.corner_colour(7, 5));
     }
 
     #[test]

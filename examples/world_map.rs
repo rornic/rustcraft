@@ -4,12 +4,16 @@
 //   cargo run --release --example world_map -- --seed 42
 // Zoom in on an area with a smaller --scale (blocks per pixel):
 //   cargo run --release --example world_map -- --seed 42 --center 3000,-2000 --scale 2
+// Colour lowlands by biome, with grass tinted by climate as it's drawn in game:
+//   cargo run --release --example world_map -- --seed 42 --biomes
 
 use std::env;
 
+use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::WATER_LEVEL;
+use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
 
 struct Args {
@@ -18,6 +22,7 @@ struct Args {
     scale: f64,
     pixels: u32,
     out: String,
+    biomes: bool,
 }
 
 fn parse_args() -> Args {
@@ -27,10 +32,15 @@ fn parse_args() -> Args {
         scale: (WORLD_SIZE as f64 * 1.1 / 2048.0).ceil(),
         pixels: 2048,
         out: "world_map.png".to_string(),
+        biomes: false,
     };
 
     let mut argv = env::args().skip(1);
     while let Some(flag) = argv.next() {
+        if flag == "--biomes" {
+            args.biomes = true;
+            continue;
+        }
         let value = argv.next().unwrap_or_else(|| panic!("missing value for {flag}"));
         match flag.as_str() {
             "--seed" => args.seed = value.parse().expect("--seed must be a u32"),
@@ -47,13 +57,13 @@ fn parse_args() -> Args {
     args
 }
 
-fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<TerrainSample> {
+fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<(TerrainSample, Climate)> {
     let size = args.pixels as usize;
     let half = args.pixels as f64 / 2.0;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let rows_per_thread = size.div_ceil(threads);
 
-    let mut samples = vec![TerrainSample::default(); size * size];
+    let mut samples = vec![(TerrainSample::default(), Climate::default()); size * size];
     std::thread::scope(|scope| {
         for (chunk_index, rows) in samples.chunks_mut(rows_per_thread * size).enumerate() {
             scope.spawn(move || {
@@ -62,7 +72,7 @@ fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<TerrainSample> {
                     let col = i % size;
                     let x = args.center.0 + (col as f64 - half) * args.scale;
                     let z = args.center.1 + (row as f64 - half) * args.scale;
-                    *sample = noise.sample(x, z);
+                    *sample = (noise.sample(x, z), noise.climate(x, z));
                 }
             });
         }
@@ -100,9 +110,20 @@ fn height_colour(above_sea: f64) -> [f64; 3] {
     STOPS[STOPS.len() - 1].1
 }
 
-fn render(samples: &[TerrainSample], args: &Args) -> image::RgbImage {
+const SAND: [f64; 3] = [222.0, 196.0, 132.0];
+
+// Grass in this climate under trees this dense, as an sRGB map colour, as far LODs draw it.
+fn grass_map_colour(climate: Climate, trees: f64) -> [f64; 3] {
+    let canopy = (trees * 1.6).min(1.0) as f32;
+    let linear = grass_colour(climate).lerp(leaf_colour(climate), canopy);
+    let srgb = Srgba::from(LinearRgba::rgb(linear.x, linear.y, linear.z)).to_vec3();
+    (srgb.as_dvec3() * 255.0).into()
+}
+
+fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) -> image::RgbImage {
     let size = args.pixels;
-    let height_at = |x: u32, z: u32| samples[(z.min(size - 1) * size + x.min(size - 1)) as usize].height;
+    let at = |x: u32, z: u32| samples[(z.min(size - 1) * size + x.min(size - 1)) as usize];
+    let height_at = |x: u32, z: u32| at(x, z).0.height;
 
     let mut img = image::RgbImage::new(size, size);
     for z in 0..size {
@@ -110,6 +131,16 @@ fn render(samples: &[TerrainSample], args: &Args) -> image::RgbImage {
             let height = height_at(x, z);
             let above_sea = height - WATER_LEVEL as f64;
             let mut colour = height_colour(above_sea);
+            // up to where the height colours turn to rock
+            if args.biomes && (2.0..140.0).contains(&above_sea) {
+                let (sample, climate) = at(x, z);
+                let ground = match biomes.name(sample.biome) {
+                    Some("desert") => SAND,
+                    _ => grass_map_colour(climate, sample.trees),
+                };
+                let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
+                colour = lerp_rgb(ground, colour, rock);
+            }
 
             // Light from the north west, exaggerated so gentle slopes still read at map scale.
             if above_sea > 0.0 {
@@ -128,9 +159,17 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[((sorted.len() - 1) as f64 * p) as usize]
 }
 
-fn print_stats(samples: &[TerrainSample]) {
+fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
+    let samples: Vec<TerrainSample> = samples.iter().map(|s| s.0).collect();
     let land = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64).count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
+    for name in ["desert", "forest", "foothills"] {
+        let count = samples
+            .iter()
+            .filter(|s| s.height >= WATER_LEVEL as f64 && biomes.name(s.biome) == Some(name))
+            .count();
+        println!("{name}: {:.1}% of land", 100.0 * count as f64 / land.max(1) as f64);
+    }
 
     let mut heights: Vec<f64> = samples.iter().map(|s| s.height).collect();
     heights.sort_by(f64::total_cmp);
@@ -154,10 +193,10 @@ fn main() {
     let samples = sample_map(&noise, &args);
     println!("sampled {}x{} in {:.1?}", args.pixels, args.pixels, start.elapsed());
 
-    print_stats(&samples);
+    print_stats(&samples, noise.biomes());
     let spawn = noise.find_spawn();
     println!("spawn: x={} z={} height={:.1}", spawn.0, spawn.1, spawn.2);
 
-    render(&samples, &args).save(&args.out).expect("failed to save image");
+    render(&samples, noise.biomes(), &args).save(&args.out).expect("failed to save image");
     println!("wrote {}", args.out);
 }

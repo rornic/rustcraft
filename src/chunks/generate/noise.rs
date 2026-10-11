@@ -1,6 +1,7 @@
 use bevy::math::{FloatExt, I64Vec2};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use super::biome::{BaseColumn, BiomeId, Biomes, Climate};
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
@@ -47,10 +48,8 @@ const PLAINS_DETAIL: f64 = 6.0;
 const RUGGED_DETAIL: f64 = 18.0;
 const MOUNTAIN_DETAIL: f64 = 30.0;
 
-// Bumps a few blocks across, so the ground is never glassy smooth up close.
+// Crags a few blocks across on mountains. Foothills bring their own, see `biome::Foothills`.
 const TEXTURE_WAVELENGTH: f64 = 32.0;
-const PLAINS_TEXTURE: f64 = 5.0;
-const RUGGED_TEXTURE: f64 = 9.0;
 const MOUNTAIN_TEXTURE: f64 = 16.0;
 
 // Where the ocean ring around the world starts and ends, as a fraction of the half size.
@@ -60,6 +59,11 @@ const EDGE_FALLOFF_END: f64 = 0.97;
 // Below this continentalness the sea floor only gets plain detail noise.
 const OPEN_OCEAN: f64 = -0.25;
 const SEA_FLOOR_DETAIL: f64 = 10.0;
+
+// Temperature and humidity drift over many thousands of blocks, so a biome can fill much of a continent.
+const CLIMATE_WAVELENGTH: f64 = 12000.0;
+// Spreads the climate noise, which clusters around 0, out over the whole 0..1 range.
+const CLIMATE_CONTRAST: f64 = 1.6;
 
 // Continentalness to height above sea level: abyssal plain, continental slope, the
 // shelf around each coast, then the coast and inland.
@@ -80,14 +84,18 @@ const CONTINENT_SPLINE: [(f64, f64); 14] = [
     (0.5, 36.0),
 ];
 
-// A column's height, with how far inland it is (negative out to sea).
+// A column's height, with how far inland it is (negative out to sea), the biome owning it
+// and how thickly trees grow there.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct TerrainSample {
     pub continentalness: f64,
     pub height: f64,
+    pub biome: BiomeId,
+    pub trees: f64,
 }
 
 pub struct NoiseGenerator {
+    seed: u32,
     warp_x: Fbm<Perlin>,
     warp_z: Fbm<Perlin>,
     continents: Fbm<Perlin>,
@@ -97,6 +105,9 @@ pub struct NoiseGenerator {
     hilliness: Fbm<Perlin>,
     detail: Fbm<Perlin>,
     texture: Fbm<Perlin>,
+    temperature: Fbm<Perlin>,
+    humidity: Fbm<Perlin>,
+    biomes: Biomes,
 }
 
 impl NoiseGenerator {
@@ -110,6 +121,7 @@ impl NoiseGenerator {
                 .set_lacunarity(2.0)
         };
         Self {
+            seed,
             warp_x: fbm(0, WARP_WAVELENGTH, 3),
             warp_z: fbm(1, WARP_WAVELENGTH, 3),
             continents: fbm(2, CONTINENT_WAVELENGTH, 6),
@@ -121,6 +133,9 @@ impl NoiseGenerator {
             texture: fbm(8, TEXTURE_WAVELENGTH, 3),
             hills: fbm(6, HILL_WAVELENGTH, 4),
             hilliness: fbm(7, HILLINESS_WAVELENGTH, 2),
+            temperature: fbm(9, CLIMATE_WAVELENGTH, 4),
+            humidity: fbm(10, CLIMATE_WAVELENGTH, 4),
+            biomes: Biomes::new(seed),
         }
     }
 
@@ -129,7 +144,35 @@ impl NoiseGenerator {
         self.sample(pos.x as f64, pos.y as f64).height
     }
 
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
+    pub fn biomes(&self) -> &Biomes {
+        &self.biomes
+    }
+
+    // The base terrain, then whichever biomes the climate here calls for.
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
+        let (continentalness, ruggedness, height) = self.base_terrain(x, z);
+        let (height, biome, trees) = self.biomes.shape(&BaseColumn {
+            x,
+            z,
+            height,
+            continentalness,
+            ruggedness,
+            climate: self.climate(x, z),
+        });
+        TerrainSample {
+            continentalness,
+            height: height.max(0.0),
+            biome,
+            trees,
+        }
+    }
+
+    // Continentalness, ruggedness and height of the terrain every biome starts from.
+    fn base_terrain(&self, x: f64, z: f64) -> (f64, f64, f64) {
         let warp_x = self.warp_x.get([x, z]) * WARP_STRENGTH;
         let warp_z = self.warp_z.get([x, z]) * WARP_STRENGTH;
         let (wx, wz) = (x + warp_x, z + warp_z);
@@ -179,14 +222,22 @@ impl NoiseGenerator {
         let detail_amplitude = SEA_FLOOR_DETAIL.lerp(land_detail, sea_floor_blend) * shore_calm;
         let detail = self.detail.get([x, z]) * detail_amplitude;
 
-        let rugged = smoothstep(-0.3, 0.4, ruggedness);
-        let land_texture = PLAINS_TEXTURE.lerp(RUGGED_TEXTURE, rugged) + mountain_mask * MOUNTAIN_TEXTURE;
+        let land_texture = mountain_mask * MOUNTAIN_TEXTURE;
         // none right at the shore, or it raises specks of land out of the shallows
         let shore_fade = smoothstep(0.0, 0.06, continentalness.abs());
         let texture = self.texture.get([x, z]) * land_texture * sea_floor_blend * shore_fade;
 
         let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
-        TerrainSample { continentalness, height }
+        (continentalness, ruggedness, height)
+    }
+
+    // How hot and wet the column at (x, z) is.
+    pub fn climate(&self, x: f64, z: f64) -> Climate {
+        let spread = |n: f64| (n * CLIMATE_CONTRAST * 0.5 + 0.5).clamp(0.0, 1.0) as f32;
+        Climate {
+            temperature: spread(self.temperature.get([x, z])),
+            humidity: spread(self.humidity.get([x, z])),
+        }
     }
 
     // Ridged multifractal in 0..1: sharp crests where the noise crosses zero, with each
@@ -290,6 +341,27 @@ mod tests {
             let height = noise.get(I64Vec2::new(x, z));
             assert!(height < WATER_LEVEL as f64 - 30.0, "({x}, {z}) should be deep ocean, was {height}");
         }
+    }
+
+    #[test]
+    fn test_climate_varies_across_the_whole_range() {
+        let noise = NoiseGenerator::new(9);
+        let samples: Vec<Climate> = (-40..40)
+            .flat_map(|z| (-40..40).map(move |x| (x as f64 * 400.0, z as f64 * 400.0)))
+            .map(|(x, z)| noise.climate(x, z))
+            .collect();
+        for value in [|c: &Climate| c.temperature, |c: &Climate| c.humidity] {
+            let (low, high) = samples.iter().map(value).fold((1.0f32, 0.0f32), |(l, h), v| (l.min(v), h.max(v)));
+            assert!(low < 0.15 && high > 0.85, "climate only spans {low}..{high}");
+        }
+    }
+
+    #[test]
+    fn test_climate_changes_gradually() {
+        let noise = NoiseGenerator::new(9);
+        let (a, b) = (noise.climate(1000.0, 1000.0), noise.climate(1016.0, 1000.0));
+        assert!((a.temperature - b.temperature).abs() < 0.05);
+        assert!((a.humidity - b.humidity).abs() < 0.05);
     }
 
     #[test]

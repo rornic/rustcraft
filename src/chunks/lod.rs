@@ -26,6 +26,7 @@ use super::{
     generate::{
         generator::{generate_lod_mesh, ChunkMeshes},
         region_store::RegionStore,
+        trees::{TREE_HEIGHT, TREE_REACH},
         WATER_LEVEL,
     },
     material::{ChunkMaterial, WaterMaterial},
@@ -609,15 +610,16 @@ fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
     let min = key.min_block();
     let cell = key.cell_size();
     let width = key.width() * CHUNK_SIZE as i64;
-    // meshes sample a cell past the node's edges, and a block either side for slopes
-    let margin = cell + 1;
+    // meshes sample a cell past the node's edges, a block either side for slopes, and trees
+    // standing just outside can reach in
+    let margin = cell + 1 + TREE_REACH;
     let min_xz = I64Vec2::new(min.x, min.z) - margin;
     let max_xz = I64Vec2::new(min.x, min.z) + width - 1 + margin;
     let Some((lowest, highest)) = regions.loaded_height_range(min_xz, max_xz) else {
         return false;
     };
     let (bottom, top) = (min.y - cell, min.y + width + cell);
-    let above_terrain = bottom > highest.round() as i64 + 1;
+    let above_terrain = bottom > highest.round() as i64 + 1 + TREE_HEIGHT;
     let in_air = bottom > WATER_LEVEL;
     let under_water = top < WATER_LEVEL - 1;
     let buried = top < lowest.round() as i64 - 1;

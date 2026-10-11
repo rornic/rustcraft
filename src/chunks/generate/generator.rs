@@ -1,16 +1,19 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bevy::{
-    math::{IVec3, U16Vec3, Vec3},
+    math::{I64Vec2, IVec3, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
         render_asset::RenderAssetUsages,
     },
 };
 
+use super::biome::{grass_tint, BiomeId, Biomes};
+use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use super::smooth::{mesh_surface, Surface};
+use super::trees::{grows_into, trees_near, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -82,20 +85,37 @@ impl LodBlocks {
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut heights = regions.sampler();
+        let biomes = regions.noise().biomes();
+        let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
         for cx in -1..=size {
             for cz in -1..=size {
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
                 let column_height = heights.height(world_x, world_z).round() as i64;
+                (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
+                let biome = heights.biome(world_x, world_z);
 
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     cells[Self::index(size, IVec3::new(cx, cy, cz))] =
-                        terrain_block(world_y, column_height, combined_gradient);
+                        column_block(biomes, biome, world_y, column_height, combined_gradient);
                 }
+            }
+        }
+
+        let span = (size + 1) as i64 * cell;
+        if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
+            let min = I64Vec2::new(base.x, base.z) - cell;
+            for tree in trees_near(regions.noise(), &mut heights, min, min + span + cell) {
+                tree.plant(base, cell, (IVec3::splat(-1), IVec3::splat(size)), |coord, block| {
+                    let cell = &mut cells[Self::index(size, coord)];
+                    if grows_into(*cell, block) {
+                        *cell = block;
+                    }
+                });
             }
         }
 
@@ -184,6 +204,18 @@ pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient:
     } else {
         BlockType::Air
     }
+}
+
+// `terrain_block`, as the biome owning the column has it.
+pub(super) fn column_block(
+    biomes: &Biomes,
+    biome: BiomeId,
+    world_y: i64,
+    column_height: i64,
+    combined_gradient: f64,
+) -> BlockType {
+    let base = terrain_block(world_y, column_height, combined_gradient);
+    biomes.block(biome, base, world_y - WATER_LEVEL, combined_gradient)
 }
 
 // `neighbor_chunks` holds all 26 chunks in the 3x3x3 neighborhood (see `ChunkCoordinate::neighbors_26`),
@@ -310,6 +342,8 @@ pub fn generate_chunk(
 ) -> ChunkData {
     let mut chunk_data = ChunkData::default();
     let mut heights = regions.sampler();
+    let biomes = regions.noise().biomes();
+    let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
     for x in 0..chunk_data.size {
         for z in 0..chunk_data.size {
@@ -320,11 +354,13 @@ pub fn generate_chunk(
             );
 
             let column_height = heights.height(world_x, world_z).round() as i64;
+            (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
             let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
             let combined_gradient = gradient_x.abs() + gradient_z.abs();
+            let biome = heights.biome(world_x, world_z);
 
             for y in 0..chunk_data.size {
-                let block = terrain_block(world_y + y as i64, column_height, combined_gradient);
+                let block = column_block(biomes, biome, world_y + y as i64, column_height, combined_gradient);
                 if block != BlockType::Air {
                     chunk_data.set_block_at(U16Vec3::new(x, y, z), block);
                 }
@@ -332,7 +368,28 @@ pub fn generate_chunk(
         }
     }
 
+    let size = chunk_data.size as i64;
+    let origin = chunk_pos.0 * size;
+    if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
+        let min = I64Vec2::new(origin.x, origin.z);
+        for tree in trees_near(regions.noise(), &mut heights, min, min + size - 1) {
+            tree.plant(origin, 1, (IVec3::ZERO, IVec3::splat(size as i32 - 1)), |coord, block| {
+                let coord = coord.as_u16vec3();
+                if grows_into(chunk_data.get_block_at(coord), block) {
+                    chunk_data.set_block_at(coord, block);
+                }
+            });
+        }
+    }
+
     chunk_data
+}
+
+// Whether trees on ground between `lowest` and `highest` could reach into blocks `bottom..top`.
+// Trees stand on gentle ground, so neighbouring ground just outside is close in height.
+fn trees_may_reach(bottom: i64, top: i64, lowest: i64, highest: i64) -> bool {
+    const NEARBY_GROUND: i64 = 4;
+    top > lowest - NEARBY_GROUND && bottom < highest + NEARBY_GROUND + TREE_HEIGHT
 }
 
 // Accumulates one mesh's worth of vertex/index/color data - one instance for the
@@ -399,12 +456,13 @@ impl MeshBuffers {
         ring.extend((1..=h).rev().map(|j| (0, j)));
 
         let mut push = |i: f32, j: f32, uv: [f32; 2]| {
+            let position = quad.corner + quad.ta * i + quad.tb * j;
             self.vertices.push(Vertex {
-                position: (quad.corner + quad.ta * i + quad.tb * j).into(),
+                position: position.into(),
                 normal: quad.normal,
                 uv,
             });
-            self.colors.push(quad.color);
+            self.colors.push((quad.color)(position));
             self.vertices.len() as u32 - 1
         };
         let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
@@ -459,7 +517,7 @@ struct FanQuad<'a> {
     tb: Vec3,
     size: (usize, usize),
     normal: [f32; 3],
-    color: [f32; 4],
+    color: &'a dyn Fn(Vec3) -> [f32; 4],
     uv_at: &'a dyn Fn(usize, usize) -> [f32; 2],
     reversed: bool,
 }
@@ -502,15 +560,44 @@ fn vertex_water_depth(
     total as f32 / 4.0
 }
 
+// Tints grass by the climate it grows in. Climate drifts over thousands of blocks, so it's
+// sampled at the mesh's four corners and blended across it, rather than at every vertex.
+struct GrassTint {
+    // at the mesh's edges, so neighbouring meshes share their tints along each edge: (-x, -z), (+x, -z), (-x, +z), (+x, +z)
+    corners: [Vec3; 4],
+}
+
+impl GrassTint {
+    // `origin` is where the mesh's local origin is in the world, and `scale` how many blocks one local unit is.
+    fn new(noise: &NoiseGenerator, origin: Vec3, scale: f32) -> Self {
+        let size = CHUNK_SIZE as f32;
+        let corners = [(0.0, 0.0), (size, 0.0), (0.0, size), (size, size)].map(|(x, z)| {
+            let world = origin + Vec3::new(x - 0.5, 0.0, z - 0.5) * scale;
+            grass_tint(noise.climate(world.x as f64, world.z as f64))
+        });
+        Self { corners }
+    }
+
+    fn at(&self, local: Vec3) -> Vec3 {
+        let size = CHUNK_SIZE as f32;
+        let (u, v) = ((local.x + 0.5) / size, (local.z + 0.5) / size);
+        let [a, b, c, d] = self.corners;
+        a.lerp(b, u).lerp(c.lerp(d, u), v)
+    }
+}
+
 pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
+    coord: ChunkCoordinate,
+    noise: &NoiseGenerator,
 ) -> ChunkMeshes {
     let source = ChunkNeighbourhood {
         chunk: &chunk,
         neighbors: &adjacent_chunks,
     };
-    mesh_blocks(&source, 1, true)
+    let tint = GrassTint::new(noise, (coord.0 * CHUNK_SIZE as i64).as_vec3(), 1.0);
+    mesh_blocks(&source, 1, true, &tint)
 }
 
 // Ambient occlusion is barely visible on cells this many blocks across or more, but stops
@@ -526,7 +613,10 @@ pub fn generate_lod_mesh(
         mesh_surface(&Surface::sample(&regions, key), key)
     } else {
         let cell_size = key.cell_size();
-        mesh_blocks(&LodBlocks::sample(&regions, key), cell_size, cell_size <= AO_MAX_CELL_SIZE)
+        // matches `lod_transform`
+        let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
+        let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
+        mesh_blocks(&LodBlocks::sample(&regions, key), cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint)
     };
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
@@ -603,6 +693,7 @@ fn mesh_opaque_greedy(
     face_vertices: &[&[Vertex]; 6],
     buffers: &mut MeshBuffers,
     ambient_occlusion: bool,
+    grass_tint: &GrassTint,
 ) {
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
@@ -629,11 +720,13 @@ fn mesh_opaque_greedy(
                 for a in 0..size {
                     let coord = normal_unit * slice + ta * a + tb * b;
                     let block = source.block(coord);
+                    // faces show through leaves' holes, including other leaves'
                     let visible = !matches!(block, BlockType::Air | BlockType::Water)
-                        && matches!(source.block(coord + normal), BlockType::Air | BlockType::Water);
+                        && !source.block(coord + normal).is_opaque();
                     mask[(b * size + a) as usize] = visible.then(|| FaceCell {
                         block,
-                        ao: if ambient_occlusion {
+                        // unshaded leaves merge into big quads, which keeps the faces between them cheap
+                        ao: if ambient_occlusion && block != BlockType::Leaves {
                             std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position))
                         } else {
                             [1.0; 4]
@@ -667,10 +760,17 @@ fn mesh_opaque_greedy(
 
                     let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
                     let atlas_cell = (cell.block as usize - 1) as f32;
+                    let color = |ao: f32, position: Vec3| {
+                        // leaves share grass's tint, over a darker texture
+                        let tinted = matches!(cell.block, BlockType::Grass | BlockType::Leaves);
+                        let tint = if tinted { grass_tint.at(position) } else { Vec3::ONE };
+                        (tint * ao).extend(atlas_cell).to_array()
+                    };
                     if w == 1 && h == 1 {
-                        let positions = std::array::from_fn(|j| (Vec3::from(template[j].position) + origin).into());
+                        let positions: [Vec3; 4] = std::array::from_fn(|j| Vec3::from(template[j].position) + origin);
                         let uvs = std::array::from_fn(|j| template[j].uv);
-                        let colors = std::array::from_fn(|j| [cell.ao[j], cell.ao[j], cell.ao[j], atlas_cell]);
+                        let colors = std::array::from_fn(|j| color(cell.ao[j], positions[j]));
+                        let positions = positions.map(|p| p.to_array());
                         buffers.push_tiled_quad(positions, template[0].normal, uvs, colors);
                         continue;
                     }
@@ -693,7 +793,7 @@ fn mesh_opaque_greedy(
                         tb: tb.as_vec3(),
                         size: (w, h),
                         normal: template[0].normal,
-                        color: [cell.ao[0], cell.ao[0], cell.ao[0], atlas_cell],
+                        color: &|position| color(cell.ao[0], position),
                         uv_at: &uv_at,
                         reversed: !ccw_in_ab,
                     });
@@ -704,7 +804,7 @@ fn mesh_opaque_greedy(
 }
 
 // `cell_size` is how many blocks wide each cell of `source` is.
-fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: bool) -> ChunkMeshes {
+fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: bool, grass_tint: &GrassTint) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
 
@@ -753,7 +853,7 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: boo
         // Order matches `water_face_vertices` and `FACE_NORMAL_OFFSET`.
         let sides = FACE_NORMAL_OFFSET.map(|offset| source.block(block_coord + offset));
         for (i, side) in sides.iter().enumerate() {
-            if *side != BlockType::Air {
+            if !matches!(side, BlockType::Air | BlockType::Leaves) {
                 continue;
             }
 
@@ -799,6 +899,7 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: boo
         &face_vertices,
         &mut opaque,
         ambient_occlusion,
+        grass_tint,
     );
 
     let water_mesh = if water.vertices.is_empty() {
@@ -826,7 +927,7 @@ mod tests {
 
     use super::{
         generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
-        vertex_water_depth, water_depth, BlockSource, ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
+        vertex_water_depth, water_depth, BlockSource, ChunkMeshes, ChunkNeighbourhood, GrassTint, LodBlocks, AO_STRENGTH,
         WATER_LEVEL,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
@@ -946,6 +1047,69 @@ mod tests {
     }
 
     #[test]
+    fn test_desert_ground_is_sand_and_other_lowland_grass() {
+        use bevy::math::I64Vec2;
+
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(3))));
+        let lowland = |desert: bool| {
+            (-60..60)
+                .flat_map(|z| (-60..60).map(move |x| I64Vec2::new(x, z) * 128))
+                .find(|p| {
+                    let sample = regions.noise().sample(p.x as f64, p.y as f64);
+                    let above_sea = sample.height - WATER_LEVEL as f64;
+                    (regions.noise().biomes().name(sample.biome) == Some("desert")) == desert
+                        && (20.0..60.0).contains(&above_sea)
+                        && regions.sampler().gradient(p.x, p.y).0.abs() < 0.5
+                        && regions.sampler().gradient(p.x, p.y).1.abs() < 0.5
+                })
+                .expect("no lowland of that kind near the centre")
+        };
+        let surface = |p: I64Vec2| {
+            let top = regions.get_height(p.x, p.y).round() as i64 - 1;
+            let coord = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), top.div_euclid(16), p.y.div_euclid(16)));
+            let local = U16Vec3::new(p.x.rem_euclid(16) as u16, top.rem_euclid(16) as u16, p.y.rem_euclid(16) as u16);
+            generate_chunk(regions.clone(), coord).get_block_at(local)
+        };
+        assert_eq!(BlockType::Sand, surface(lowland(true)));
+        assert_eq!(BlockType::Grass, surface(lowland(false)));
+    }
+
+    #[test]
+    fn test_trees_across_chunk_borders_are_whole() {
+        use crate::chunks::generate::trees::trees_near;
+        use bevy::math::I64Vec2;
+
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let mut heights = regions.sampler();
+        let trees = trees_near(regions.noise(), &mut heights, I64Vec2::splat(-800), I64Vec2::splat(800));
+        let chunk_of = |p: I64Vec3| p.div_euclid(I64Vec3::splat(16));
+        let tree = trees
+            .iter()
+            .find(|t| {
+                let (low, high) = t.bounds();
+                chunk_of(low).x != chunk_of(high).x && chunk_of(low).z != chunk_of(high).z
+            })
+            .expect("no tree straddling a chunk corner");
+
+        let mut chunks = HashMap::new();
+        let (low, high) = tree.bounds();
+        let mut checked = 0;
+        tree.plant(low, 1, (IVec3::ZERO, (high - low).as_ivec3()), |cell, block| {
+            let p = low + cell.as_i64vec3();
+            let coord = chunk_of(p);
+            let chunk = chunks
+                .entry(coord)
+                .or_insert_with(|| generate_chunk(regions.clone(), ChunkCoordinate(coord)));
+            let local = (p - coord * 16).as_u16vec3();
+            let found = chunk.get_block_at(local);
+            // only another tree's log may stand in for this one's leaves
+            assert!(found == block || (block == BlockType::Leaves && found == BlockType::Log), "{block:?} at {p} is {found:?}");
+            checked += 1;
+        });
+        assert!(chunks.len() >= 2 && checked > 20, "{} blocks over {} chunks", checked, chunks.len());
+    }
+
+    #[test]
     fn test_terrain_block_floor_and_water() {
         // below the solid floor even a zero-height column is solid
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0));
@@ -1010,8 +1174,12 @@ mod tests {
         LodBlocks { size, cells }
     }
 
+    fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
+        generate_chunk_mesh(Arc::new(chunk), vec![None; 26], ChunkCoordinate(I64Vec3::ZERO), &NoiseGenerator::new(3))
+    }
+
     fn mesh_vertices(chunk: ChunkData) -> usize {
-        generate_chunk_mesh(Arc::new(chunk), vec![None; 26]).opaque.count_vertices()
+        mesh_chunk(chunk).opaque.count_vertices()
     }
 
     #[test]
@@ -1055,7 +1223,7 @@ mod tests {
 
     #[test]
     fn test_merged_quads_tile_their_uvs_and_carry_the_atlas_cell() {
-        let mesh = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let mesh = mesh_chunk(floor_chunk()).opaque;
         let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0) else {
             panic!("missing uvs");
         };
@@ -1092,15 +1260,15 @@ mod tests {
     fn test_merged_quads_keep_the_winding_of_single_faces() {
         let mut single = ChunkData::default();
         single.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
-        let single = generate_chunk_mesh(Arc::new(single), vec![None; 26]).opaque;
-        let merged = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let single = mesh_chunk(single).opaque;
+        let merged = mesh_chunk(floor_chunk()).opaque;
         let expected = top_face_triangles(&single)[0].signum();
         assert!(top_face_triangles(&merged).iter().all(|area| area.signum() == expected));
     }
 
     #[test]
     fn test_merged_quad_borders_share_vertices_with_unit_faces() {
-        let mesh = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let mesh = mesh_chunk(floor_chunk()).opaque;
         let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
             panic!("missing positions");
         };
@@ -1108,6 +1276,40 @@ mod tests {
             let edge = [step as f32 - 0.5, 0.5, -0.5];
             assert!(positions.contains(&edge), "no top-face vertex at {edge:?}");
         }
+    }
+
+    fn tints(mesh: &Mesh) -> Vec<Vec3> {
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            panic!("missing colors");
+        };
+        colors.iter().map(|c| Vec3::new(c[0], c[1], c[2])).collect()
+    }
+
+    #[test]
+    fn test_only_grass_is_tinted() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+        chunk.set_block_at(U16Vec3::new(10, 4, 10), BlockType::Grass);
+        let colours = tints(&mesh_chunk(chunk).opaque);
+        assert_eq!(24, colours.iter().filter(|c| **c == Vec3::ONE).count());
+        assert_eq!(24, colours.iter().filter(|c| **c != Vec3::ONE).count());
+    }
+
+    #[test]
+    fn test_grass_tint_matches_along_shared_edges() {
+        let noise = NoiseGenerator::new(3);
+        let chunk_tint = |x: i64, z: i64| GrassTint::new(&noise, Vec3::new(x as f32, 0.0, z as f32) * 16.0, 1.0);
+        let (here, east, south) = (chunk_tint(5, 5), chunk_tint(6, 5), chunk_tint(5, 6));
+        for step in 0..=16 {
+            let along = step as f32 - 0.5;
+            assert!(here.at(Vec3::new(15.5, 0.0, along)).abs_diff_eq(east.at(Vec3::new(-0.5, 0.0, along)), 1e-5));
+            assert!(here.at(Vec3::new(along, 0.0, 15.5)).abs_diff_eq(south.at(Vec3::new(along, 0.0, -0.5)), 1e-5));
+        }
+
+        // a LOD node four chunks across, its local units 4 blocks wide, starting at chunk (4, 4)
+        let node = GrassTint::new(&noise, Vec3::new(64.0, 0.0, 64.0) + Vec3::splat(1.5), 4.0);
+        assert!(node.at(Vec3::splat(-0.5)).abs_diff_eq(chunk_tint(4, 4).at(Vec3::splat(-0.5)), 1e-5));
+        assert!(node.at(Vec3::splat(15.5)).abs_diff_eq(chunk_tint(7, 7).at(Vec3::splat(15.5)), 1e-5));
     }
 
     #[test]
@@ -1210,7 +1412,7 @@ mod tests {
             vertices = 0;
             for &c in &meshed {
                 let neighbours = c.neighbors_26().iter().map(|n| data.get(n).cloned()).collect();
-                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours);
+                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise());
                 vertices += meshes.opaque.count_vertices();
             }
             best = best.min(start.elapsed());

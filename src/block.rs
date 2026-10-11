@@ -7,6 +7,8 @@ pub enum BlockType {
     Sand,
     Water,
     Snow,
+    Log,
+    Leaves,
 }
 
 impl Default for BlockType {
@@ -15,15 +17,21 @@ impl Default for BlockType {
     }
 }
 
-pub const BLOCK_COUNT: usize = 6;
+pub const BLOCK_COUNT: usize = 8;
 
 impl BlockType {
     pub fn occlusion_weight(&self) -> f32 {
         match self {
             BlockType::Air => 0.0,
             BlockType::Water => 0.4,
-            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow => 1.0,
+            BlockType::Leaves => 0.3,
+            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow | BlockType::Log => 1.0,
         }
+    }
+
+    // Whether the faces of blocks behind this one are hidden by it. Leaves have holes.
+    pub fn is_opaque(&self) -> bool {
+        !matches!(self, BlockType::Air | BlockType::Water | BlockType::Leaves)
     }
 }
 
@@ -42,6 +50,16 @@ mod tests {
         assert_eq!(1.0, BlockType::Grass.occlusion_weight());
         assert_eq!(1.0, BlockType::Sand.occlusion_weight());
         assert_eq!(1.0, BlockType::Snow.occlusion_weight());
+        assert_eq!(1.0, BlockType::Log.occlusion_weight());
+    }
+
+    #[test]
+    fn test_only_solid_blocks_are_opaque() {
+        assert!(BlockType::Stone.is_opaque());
+        assert!(BlockType::Log.is_opaque());
+        assert!(!BlockType::Leaves.is_opaque());
+        assert!(!BlockType::Water.is_opaque());
+        assert!(!BlockType::Air.is_opaque());
     }
 
     #[test]
