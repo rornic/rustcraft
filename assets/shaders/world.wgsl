@@ -7,7 +7,7 @@
 @group(2) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 // textures in blocks.png, one per block type but air
-const ATLAS_CELLS: f32 = 5.0;
+const ATLAS_CELLS: f32 = 7.0;
 const TILE_INSET: f32 = 0.002;
 
 fn dither_threshold(frag_coord: vec2<f32>) -> f32 {

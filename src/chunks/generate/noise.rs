@@ -84,15 +84,18 @@ const CONTINENT_SPLINE: [(f64, f64); 14] = [
     (0.5, 36.0),
 ];
 
-// A column's height, with how far inland it is (negative out to sea) and the biome owning it.
+// A column's height, with how far inland it is (negative out to sea), the biome owning it
+// and how thickly trees grow there.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct TerrainSample {
     pub continentalness: f64,
     pub height: f64,
     pub biome: BiomeId,
+    pub trees: f64,
 }
 
 pub struct NoiseGenerator {
+    seed: u32,
     warp_x: Fbm<Perlin>,
     warp_z: Fbm<Perlin>,
     continents: Fbm<Perlin>,
@@ -118,6 +121,7 @@ impl NoiseGenerator {
                 .set_lacunarity(2.0)
         };
         Self {
+            seed,
             warp_x: fbm(0, WARP_WAVELENGTH, 3),
             warp_z: fbm(1, WARP_WAVELENGTH, 3),
             continents: fbm(2, CONTINENT_WAVELENGTH, 6),
@@ -140,6 +144,10 @@ impl NoiseGenerator {
         self.sample(pos.x as f64, pos.y as f64).height
     }
 
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+
     pub fn biomes(&self) -> &Biomes {
         &self.biomes
     }
@@ -147,7 +155,7 @@ impl NoiseGenerator {
     // The base terrain, then whichever biomes the climate here calls for.
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
         let (continentalness, ruggedness, height) = self.base_terrain(x, z);
-        let (height, biome) = self.biomes.shape(&BaseColumn {
+        let (height, biome, trees) = self.biomes.shape(&BaseColumn {
             x,
             z,
             height,
@@ -159,6 +167,7 @@ impl NoiseGenerator {
             continentalness,
             height: height.max(0.0),
             biome,
+            trees,
         }
     }
 

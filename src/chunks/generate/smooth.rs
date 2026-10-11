@@ -1,6 +1,6 @@
 use bevy::math::Vec3;
 
-use super::biome::{grass_colour, Climate};
+use super::biome::{grass_colour, leaf_colour, Climate};
 use super::generator::{column_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_TOP};
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
@@ -16,6 +16,8 @@ const COLOUR_CELLS: i32 = CELLS + 2;
 const SKIRT_CELLS: f32 = 1.0;
 const SLOPE_SHADE: f32 = 0.7;
 const UNTEXTURED_UV: [f32; 2] = [-1.0, 0.0];
+// How much of the ground a given tree density hides under leaves, seen from afar.
+const CANOPY_COVER: f64 = 1.6;
 
 // Matches the mean of each block's texture, so far terrain is the colour of near terrain.
 fn block_colour(block: BlockType, climate: Climate) -> Vec3 {
@@ -25,6 +27,8 @@ fn block_colour(block: BlockType, climate: Climate) -> Vec3 {
         BlockType::Sand => Vec3::new(0.478, 0.363, 0.183),
         BlockType::Water => Vec3::new(0.066, 0.101, 0.915),
         BlockType::Snow => Vec3::new(0.945, 0.992, 0.992),
+        BlockType::Log => Vec3::new(0.08, 0.045, 0.019),
+        BlockType::Leaves => leaf_colour(climate),
         BlockType::Air => Vec3::ZERO,
     }
 }
@@ -74,7 +78,13 @@ impl Surface {
                     gradient_x.abs() + gradient_z.abs(),
                 );
                 let climate = noise.climate(world_x as f64, world_z as f64);
-                colours.push(block_colour(block, climate));
+                let mut colour = block_colour(block, climate);
+                if block == BlockType::Grass {
+                    // trees are too small to draw this far out, so forests show as their leaves
+                    let canopy = (heights.trees(world_x, world_z) * CANOPY_COVER).min(1.0) as f32;
+                    colour = colour.lerp(block_colour(BlockType::Leaves, climate), canopy);
+                }
+                colours.push(colour);
             }
         }
 

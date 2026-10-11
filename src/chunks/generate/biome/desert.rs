@@ -74,6 +74,10 @@ impl Biome for Desert {
         column.height + dune * room
     }
 
+    fn tree_density(&self) -> Option<f64> {
+        Some(0.0)
+    }
+
     fn block(&self, base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
         match base {
             BlockType::Grass => BlockType::Sand,

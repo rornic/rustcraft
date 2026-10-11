@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bevy::{
-    math::{IVec3, U16Vec3, Vec3},
+    math::{I64Vec2, IVec3, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
         render_asset::RenderAssetUsages,
@@ -13,6 +13,7 @@ use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use super::smooth::{mesh_surface, Surface};
+use super::trees::{grows_into, trees_near, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -85,12 +86,14 @@ impl LodBlocks {
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut heights = regions.sampler();
         let biomes = regions.noise().biomes();
+        let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
         for cx in -1..=size {
             for cz in -1..=size {
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
                 let column_height = heights.height(world_x, world_z).round() as i64;
+                (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
                 let biome = heights.biome(world_x, world_z);
@@ -100,6 +103,19 @@ impl LodBlocks {
                     cells[Self::index(size, IVec3::new(cx, cy, cz))] =
                         column_block(biomes, biome, world_y, column_height, combined_gradient);
                 }
+            }
+        }
+
+        let span = (size + 1) as i64 * cell;
+        if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
+            let min = I64Vec2::new(base.x, base.z) - cell;
+            for tree in trees_near(regions.noise(), &mut heights, min, min + span + cell) {
+                tree.plant(base, cell, (IVec3::splat(-1), IVec3::splat(size)), |coord, block| {
+                    let cell = &mut cells[Self::index(size, coord)];
+                    if grows_into(*cell, block) {
+                        *cell = block;
+                    }
+                });
             }
         }
 
@@ -327,6 +343,7 @@ pub fn generate_chunk(
     let mut chunk_data = ChunkData::default();
     let mut heights = regions.sampler();
     let biomes = regions.noise().biomes();
+    let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
     for x in 0..chunk_data.size {
         for z in 0..chunk_data.size {
@@ -337,6 +354,7 @@ pub fn generate_chunk(
             );
 
             let column_height = heights.height(world_x, world_z).round() as i64;
+            (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
             let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
             let combined_gradient = gradient_x.abs() + gradient_z.abs();
             let biome = heights.biome(world_x, world_z);
@@ -350,7 +368,28 @@ pub fn generate_chunk(
         }
     }
 
+    let size = chunk_data.size as i64;
+    let origin = chunk_pos.0 * size;
+    if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
+        let min = I64Vec2::new(origin.x, origin.z);
+        for tree in trees_near(regions.noise(), &mut heights, min, min + size - 1) {
+            tree.plant(origin, 1, (IVec3::ZERO, IVec3::splat(size as i32 - 1)), |coord, block| {
+                let coord = coord.as_u16vec3();
+                if grows_into(chunk_data.get_block_at(coord), block) {
+                    chunk_data.set_block_at(coord, block);
+                }
+            });
+        }
+    }
+
     chunk_data
+}
+
+// Whether trees on ground between `lowest` and `highest` could reach into blocks `bottom..top`.
+// Trees stand on gentle ground, so neighbouring ground just outside is close in height.
+fn trees_may_reach(bottom: i64, top: i64, lowest: i64, highest: i64) -> bool {
+    const NEARBY_GROUND: i64 = 4;
+    top > lowest - NEARBY_GROUND && bottom < highest + NEARBY_GROUND + TREE_HEIGHT
 }
 
 // Accumulates one mesh's worth of vertex/index/color data - one instance for the
@@ -720,7 +759,9 @@ fn mesh_opaque_greedy(
                     let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
                     let atlas_cell = (cell.block as usize - 1) as f32;
                     let color = |ao: f32, position: Vec3| {
-                        let tint = if cell.block == BlockType::Grass { grass_tint.at(position) } else { Vec3::ONE };
+                        // leaves share grass's tint, over a darker texture
+                        let tinted = matches!(cell.block, BlockType::Grass | BlockType::Leaves);
+                        let tint = if tinted { grass_tint.at(position) } else { Vec3::ONE };
                         (tint * ao).extend(atlas_cell).to_array()
                     };
                     if w == 1 && h == 1 {
@@ -1029,6 +1070,41 @@ mod tests {
         };
         assert_eq!(BlockType::Sand, surface(lowland(true)));
         assert_eq!(BlockType::Grass, surface(lowland(false)));
+    }
+
+    #[test]
+    fn test_trees_across_chunk_borders_are_whole() {
+        use crate::chunks::generate::trees::trees_near;
+        use bevy::math::I64Vec2;
+
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let mut heights = regions.sampler();
+        let trees = trees_near(regions.noise(), &mut heights, I64Vec2::splat(-800), I64Vec2::splat(800));
+        let chunk_of = |p: I64Vec3| p.div_euclid(I64Vec3::splat(16));
+        let tree = trees
+            .iter()
+            .find(|t| {
+                let (low, high) = t.bounds();
+                chunk_of(low).x != chunk_of(high).x && chunk_of(low).z != chunk_of(high).z
+            })
+            .expect("no tree straddling a chunk corner");
+
+        let mut chunks = HashMap::new();
+        let (low, high) = tree.bounds();
+        let mut checked = 0;
+        tree.plant(low, 1, (IVec3::ZERO, (high - low).as_ivec3()), |cell, block| {
+            let p = low + cell.as_i64vec3();
+            let coord = chunk_of(p);
+            let chunk = chunks
+                .entry(coord)
+                .or_insert_with(|| generate_chunk(regions.clone(), ChunkCoordinate(coord)));
+            let local = (p - coord * 16).as_u16vec3();
+            let found = chunk.get_block_at(local);
+            // only another tree's log may stand in for this one's leaves
+            assert!(found == block || (block == BlockType::Leaves && found == BlockType::Log), "{block:?} at {p} is {found:?}");
+            checked += 1;
+        });
+        assert!(chunks.len() >= 2 && checked > 20, "{} blocks over {} chunks", checked, chunks.len());
     }
 
     #[test]

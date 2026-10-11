@@ -13,7 +13,7 @@ use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::chunks::generate::biome::{grass_colour, Biomes, Climate};
+use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
 
 struct Args {
@@ -112,9 +112,10 @@ fn height_colour(above_sea: f64) -> [f64; 3] {
 
 const SAND: [f64; 3] = [222.0, 196.0, 132.0];
 
-// Grass in this climate, as an sRGB map colour.
-fn grass_map_colour(climate: Climate) -> [f64; 3] {
-    let linear = grass_colour(climate);
+// Grass in this climate under trees this dense, as an sRGB map colour, as far LODs draw it.
+fn grass_map_colour(climate: Climate, trees: f64) -> [f64; 3] {
+    let canopy = (trees * 1.6).min(1.0) as f32;
+    let linear = grass_colour(climate).lerp(leaf_colour(climate), canopy);
     let srgb = Srgba::from(LinearRgba::rgb(linear.x, linear.y, linear.z)).to_vec3();
     (srgb.as_dvec3() * 255.0).into()
 }
@@ -135,7 +136,7 @@ fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) ->
                 let (sample, climate) = at(x, z);
                 let ground = match biomes.name(sample.biome) {
                     Some("desert") => SAND,
-                    _ => grass_map_colour(climate),
+                    _ => grass_map_colour(climate, sample.trees),
                 };
                 let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
                 colour = lerp_rgb(ground, colour, rock);
@@ -162,7 +163,7 @@ fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
     let samples: Vec<TerrainSample> = samples.iter().map(|s| s.0).collect();
     let land = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64).count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
-    for name in ["desert", "foothills"] {
+    for name in ["desert", "forest", "foothills"] {
         let count = samples
             .iter()
             .filter(|s| s.height >= WATER_LEVEL as f64 && biomes.name(s.biome) == Some(name))

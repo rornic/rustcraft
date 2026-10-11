@@ -1,5 +1,6 @@
 mod desert;
 mod foothills;
+mod forest;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::Vec3;
@@ -7,6 +8,7 @@ use bevy::math::Vec3;
 use crate::block::BlockType;
 pub use desert::Desert;
 pub use foothills::Foothills;
+pub use forest::Forest;
 
 // How hot and how wet a column is, each 0..1. See `NoiseGenerator::climate`.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -51,6 +53,12 @@ pub trait Biome: Send + Sync {
         column.height
     }
 
+    // The chance, 0..1, of a tree on each spot one could grow, or None to leave the base
+    // terrain's. Trees only grow on grass.
+    fn tree_density(&self) -> Option<f64> {
+        None
+    }
+
     // The block to use where the base terrain would put `base`, `above_sea` blocks up, on
     // ground with the given gradient (see `terrain_block`).
     fn block(&self, base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
@@ -66,6 +74,9 @@ impl BiomeId {
     pub const BASE: BiomeId = BiomeId(0);
 }
 
+// The base terrain's scattering of lone trees, see `Biome::tree_density`.
+const BASE_TREE_DENSITY: f64 = 0.02;
+
 // Every biome that can take over from the base terrain.
 pub struct Biomes {
     biomes: Vec<Box<dyn Biome>>,
@@ -74,7 +85,11 @@ pub struct Biomes {
 impl Biomes {
     pub fn new(seed: u32) -> Self {
         // earlier biomes win ties for a column
-        Self::with(vec![Box::new(Desert::new(seed)), Box::new(Foothills::new(seed))])
+        Self::with(vec![
+            Box::new(Desert::new(seed)),
+            Box::new(Forest),
+            Box::new(Foothills::new(seed)),
+        ])
     }
 
     pub fn with(biomes: Vec<Box<dyn Biome>>) -> Self {
@@ -82,9 +97,10 @@ impl Biomes {
         Self { biomes }
     }
 
-    // The column's height and the biome owning it, starting from the base terrain.
-    pub fn shape(&self, column: &BaseColumn) -> (f64, BiomeId) {
+    // The column's height, the biome owning it and its tree density, starting from the base terrain.
+    pub fn shape(&self, column: &BaseColumn) -> (f64, BiomeId, f64) {
         let mut height = column.height;
+        let mut trees = BASE_TREE_DENSITY;
         let (mut owner, mut strongest) = (BiomeId::BASE, 0.5);
         for (i, biome) in self.biomes.iter().enumerate() {
             let strength = biome.strength(column);
@@ -92,11 +108,14 @@ impl Biomes {
                 continue;
             }
             height += (biome.height(column) - column.height) * strength;
+            if let Some(density) = biome.tree_density() {
+                trees += (density - BASE_TREE_DENSITY) * strength;
+            }
             if strength > strongest {
                 (owner, strongest) = (BiomeId(i as u8 + 1), strength);
             }
         }
-        (height, owner)
+        (height, owner, trees.clamp(0.0, 1.0))
     }
 
     // The biome's name, or None for the base terrain.
@@ -126,8 +145,10 @@ const GRASS_HOT_WET: [f32; 3] = [40.0, 130.0, 12.0];
 const GRASS_COLD_DRY: [f32; 3] = [140.0, 140.0, 60.0];
 const GRASS_COLD_WET: [f32; 3] = [30.0, 96.0, 24.0];
 
-// The mean linear value of the greyscale grass tile in blocks.png, which vertex colours tint.
+// The mean linear value of the greyscale grass and leaves tiles in blocks.png, which vertex
+// colours tint: leaves share grass's tint, and their darker tile makes them a deeper green.
 const GRASS_TEXTURE_MEAN: f32 = 0.5;
+const LEAF_TEXTURE_MEAN: f32 = 0.25;
 
 // Linear colour of grass in this climate.
 pub fn grass_colour(climate: Climate) -> Vec3 {
@@ -137,6 +158,11 @@ pub fn grass_colour(climate: Climate) -> Vec3 {
     let wet = srgb(GRASS_COLD_WET).lerp(srgb(GRASS_HOT_WET), t);
     let colour = dry.lerp(wet, h);
     LinearRgba::from(Srgba::rgb(colour.x, colour.y, colour.z)).to_vec3()
+}
+
+// Linear colour of leaves in this climate.
+pub fn leaf_colour(climate: Climate) -> Vec3 {
+    grass_tint(climate) * LEAF_TEXTURE_MEAN
 }
 
 // What to multiply the grass texture by to draw `grass_colour`.
@@ -182,7 +208,7 @@ mod tests {
     #[test]
     fn test_biome_height_blends_in_with_strength() {
         let biomes = Biomes::with(vec![Box::new(Raise(10.0))]);
-        assert_eq!((500.0, BiomeId::BASE), biomes.shape(&column(0.0)));
+        assert_eq!((500.0, BiomeId::BASE, BASE_TREE_DENSITY), biomes.shape(&column(0.0)));
         assert_eq!(502.5, biomes.shape(&column(0.25)).0);
         assert_eq!(510.0, biomes.shape(&column(1.0)).0);
     }
@@ -199,7 +225,7 @@ mod tests {
     fn test_strongest_biome_owns_the_column() {
         let biomes = Biomes::with(vec![Box::new(Raise(10.0)), Box::new(Desert::new(1))]);
         let hot_dry = BaseColumn { climate: Climate { temperature: 1.0, humidity: 0.0 }, ..column(1.0) };
-        let (_, owner) = biomes.shape(&hot_dry);
+        let (_, owner, _) = biomes.shape(&hot_dry);
         // both hold fully, so the first listed keeps it
         assert_eq!(BiomeId(1), owner);
         assert_eq!(Some("raise"), biomes.name(owner));

@@ -7,6 +7,8 @@ pub enum BlockType {
     Sand,
     Water,
     Snow,
+    Log,
+    Leaves,
 }
 
 impl Default for BlockType {
@@ -15,14 +17,19 @@ impl Default for BlockType {
     }
 }
 
-pub const BLOCK_COUNT: usize = 6;
+pub const BLOCK_COUNT: usize = 8;
 
 impl BlockType {
     pub fn occlusion_weight(&self) -> f32 {
         match self {
             BlockType::Air => 0.0,
             BlockType::Water => 0.4,
-            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow => 1.0,
+            BlockType::Stone
+            | BlockType::Grass
+            | BlockType::Sand
+            | BlockType::Snow
+            | BlockType::Log
+            | BlockType::Leaves => 1.0,
         }
     }
 }

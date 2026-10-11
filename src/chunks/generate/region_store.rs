@@ -157,6 +157,12 @@ impl HeightSampler<'_> {
         self.region(coord).biome_at(world_x - origin.x, world_z - origin.y)
     }
 
+    pub fn trees(&mut self, world_x: i64, world_z: i64) -> f64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord).trees_at(world_x - origin.x, world_z - origin.y)
+    }
+
     // Central-difference gradient over the heightmap, as the height change across two
     // blocks. Measured over SLOPE_SPAN blocks either side, so block-sized bumps don't
     // flip the surface between snow, stone and grass column by column.
