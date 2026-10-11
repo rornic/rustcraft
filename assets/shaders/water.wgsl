@@ -3,8 +3,8 @@
     mesh_view_bindings as view_bindings,
     mesh_functions,
     view_transformations::position_world_to_clip,
-    pbr_functions::apply_fog,
 }
+#import "shaders/fog.wgsl"::fogged
 
 @group(2) @binding(0) var<uniform> material_color: vec4<f32>;
 @group(2) @binding(1) var material_color_texture: texture_2d<f32>;
@@ -227,11 +227,9 @@ fn fragment(
     alpha = mix(alpha, 1.0, foam);
 #endif
 
-    // This shader fully replaces Bevy's standard PBR fragment stage, so fog isn't
-    // applied automatically the way it would be for StandardMaterial - apply it
-    // explicitly so distant water fades into the sky instead of popping in/out.
+    // so distant water fades into the sky instead of popping in and out
     let scene = scene_colour(color.rgb);
-    let fogged = apply_fog(view_bindings::fog, vec4<f32>(scene, alpha), world_position, view_position);
+    let shown = fogged(vec4<f32>(scene, alpha), world_position);
 
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);
@@ -240,6 +238,6 @@ fn fragment(
     }
 
     var output: FragmentOutput;
-    output.color = fogged;
+    output.color = shown;
     return output;
 }

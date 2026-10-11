@@ -3,12 +3,12 @@
     mesh_functions,
     mesh_view_bindings as view_bindings,
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
-    pbr_functions::apply_fog,
     shadows::fetch_directional_shadow,
     view_transformations::{position_world_to_clip, position_world_to_view},
 }
 #import "shaders/block_texture.wgsl"::{block_texel, material_fade}
 #import "shaders/foliage.wgsl"::swayed
+#import "shaders/fog.wgsl"::fogged
 
 // Light falling on a face from the open sky, cool against the warm sun: faces up get
 // the sky's blue, faces down only what the ground bounces back.
@@ -97,7 +97,6 @@ fn fragment(
 ) ->  FragmentOutput {
 
     let world_position = in.world_position.xyz;
-    let view_position = view_bindings::view.world_position.xyz;
     let normal = normalize(in.world_normal);
 
     var color = block_texel(in.uv, in.color.a);
@@ -113,10 +112,8 @@ fn fragment(
     let light = sunlight(in.world_position, normal, sky) + sky_ambient(sky, normal);
     color = vec4<f32>(color.rgb * light, color.a);
 
-    // This shader fully replaces Bevy's standard PBR fragment stage, so fog isn't
-    // applied automatically the way it would be for StandardMaterial - apply it
-    // explicitly so distant chunks fade into the sky instead of popping in/out.
-    color = apply_fog(view_bindings::fog, color, world_position, view_position);
+    // so distant chunks fade into the sky instead of popping in and out
+    color = fogged(color, world_position);
 
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);

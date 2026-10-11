@@ -13,6 +13,12 @@ use bevy::{
 };
 
 use crate::block::BlockType;
+use crate::chunks::generate::WATER_LEVEL;
+
+// Sea level, where `fog.wgsl` turns from fog across the land to murk all round.
+fn water_level() -> ShaderDefVal {
+    ShaderDefVal::Int("WATER_LEVEL".into(), WATER_LEVEL as i32)
+}
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct ChunkMaterial {
@@ -61,7 +67,7 @@ impl Material for ChunkMaterial {
         let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), BlockType::Leaves as u32 - 1);
         descriptor.vertex.shader_defs.push(leaf_cell.clone());
         if let Some(fragment) = &mut descriptor.fragment {
-            fragment.shader_defs.push(leaf_cell);
+            fragment.shader_defs.extend([leaf_cell, water_level()]);
         }
         Ok(())
     }
@@ -101,6 +107,9 @@ impl Material for WaterMaterial {
         // unlike ChunkMaterial, water has no back-face culling: the player can swim
         // underneath the lowered surface and must still see it rendered from below.
         descriptor.primitive.cull_mode = None;
+        if let Some(fragment) = &mut descriptor.fragment {
+            fragment.shader_defs.push(water_level());
+        }
         Ok(())
     }
 }
