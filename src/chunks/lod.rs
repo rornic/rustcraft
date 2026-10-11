@@ -39,8 +39,13 @@ use crate::world::World;
 pub struct LodLayout {
     /// Chunks within this many chunks of the camera are drawn at full detail.
     pub full_detail_distance: f32,
-    /// Each LOD level reaches this many times as far as the one before.
+    /// Each LOD level up to the set render distance reaches this many times as far as the one before.
     pub level_scale: f32,
+    // The levels that draw out to the set render distance. Any beyond, drawing further for a
+    // view from high up, each reach only twice as far as the one before: nodes double in
+    // width each level, so that adds about as many nodes a level, where `level_scale` times
+    // as far would add more each time.
+    scaled_levels: u8,
     pub max_level: u8,
     render_distance: f32,
 }
@@ -49,12 +54,28 @@ impl LodLayout {
     /// Uses the fewest LOD levels that draw terrain out to `render_distance` chunks.
     pub fn new(full_detail_distance: u32, render_distance: u32, level_scale: u32) -> Self {
         let full_detail_distance = full_detail_distance.max(1) as f32;
-        let mut layout = Self {
+        let layout = Self {
             full_detail_distance,
             // below 2, a level's nodes would be wider than the ring it draws
             level_scale: level_scale.max(2) as f32,
+            scaled_levels: u8::MAX,
             max_level: 0,
-            render_distance: (render_distance as f32).max(full_detail_distance),
+            render_distance: 0.0,
+        };
+        let layout = layout.with_render_distance(render_distance as f32);
+        Self {
+            scaled_levels: layout.max_level,
+            ..layout
+        }
+    }
+
+    /// This layout drawing out to `render_distance` chunks instead, adding or dropping levels
+    /// beyond the set render distance. Never draws less than full detail reaches.
+    pub fn with_render_distance(self, render_distance: f32) -> Self {
+        let mut layout = Self {
+            max_level: 0,
+            render_distance: render_distance.max(self.full_detail_distance),
+            ..self
         };
         while layout.reach(layout.max_level) < layout.render_distance {
             layout.max_level += 1;
@@ -69,7 +90,16 @@ impl LodLayout {
 
     /// How far, in chunks, `level` draws out to - level 0 being full detail.
     pub fn reach(self, level: u8) -> f32 {
-        self.full_detail_distance * self.level_scale.powi(level as i32)
+        let scaled = level.min(self.scaled_levels);
+        let doubled = level - scaled;
+        self.full_detail_distance * self.level_scale.powi(scaled as i32) * 2f32.powi(doubled as i32)
+    }
+
+    /// How far, in chunks, terrain is built from full-detail regions: LOD nodes with coarser
+    /// cells sample the noise themselves, see `columns::COARSE_CELL`.
+    pub fn region_reach(self) -> f32 {
+        let fine_levels = (0..=self.max_level).take_while(|&level| (1i64 << level) < COARSE_CELL);
+        self.reach(fine_levels.last().unwrap_or(0))
     }
 
     /// Whether `key` is drawn as its 8 children: it's within reach of the next level down.
@@ -346,6 +376,8 @@ pub struct GenerateLodMesh {
 
 #[derive(Resource)]
 pub struct LodLoader {
+    // as set, drawing out to the set render distance
+    set_layout: LodLayout,
     layout: LodLayout,
     band: LodBand,
     anchor: Option<ChunkCoordinate>,
@@ -364,6 +396,25 @@ pub struct LodLoader {
 }
 
 impl LodLoader {
+    pub fn layout(&self) -> LodLayout {
+        self.layout
+    }
+
+    /// Draws terrain out to `render_distance` chunks, or the set render distance if that's
+    /// further, selecting nodes afresh for it.
+    pub fn set_render_distance(&mut self, render_distance: f32) {
+        let layout = self.set_layout.with_render_distance(render_distance.max(self.set_layout.render_distance()));
+        if layout.render_distance() != self.layout.render_distance() {
+            self.layout = layout;
+            self.anchor = None;
+        }
+    }
+
+    /// The render distance as set, which `set_render_distance` never goes below.
+    pub fn set_render_distance_chunks(&self) -> f32 {
+        self.set_layout.render_distance()
+    }
+
     /// Whether a chunk outside full detail can be unloaded without leaving a hole.
     pub fn chunk_covered(&self, chunk: ChunkCoordinate, pending: &Query<(), With<GenerateLodMesh>>) -> bool {
         let Some(anchor) = self.anchor else {
@@ -389,6 +440,7 @@ impl LodLoader {
         water_material: Handle<WaterMaterial>,
     ) -> Self {
         Self {
+            set_layout: layout,
             layout,
             band: LodBand {
                 min_y: 0,
@@ -897,6 +949,26 @@ mod tests {
     }
 
     #[test]
+    fn test_levels_past_the_set_distance_reach_twice_as_far() {
+        let set = LodLayout::new(16, 256, 4);
+        let high = set.with_render_distance(2048.0);
+        assert_eq!(set.max_level + 3, high.max_level);
+        for level in 0..=set.max_level {
+            assert_eq!(set.reach(level), high.reach(level));
+        }
+        assert_eq!(512.0, high.reach(3));
+        assert_eq!(2048.0, high.reach(5));
+        // and back down again
+        assert_eq!(set.max_level, high.with_render_distance(256.0).max_level);
+    }
+
+    #[test]
+    fn test_regions_reach_only_as_far_as_fine_levels() {
+        assert_eq!(64.0, LodLayout::new(16, 256, 4).region_reach());
+        assert_eq!(16.0, LodLayout::new(16, 16, 4).region_reach());
+    }
+
+    #[test]
     fn test_last_level_starts_where_the_one_before_ends() {
         let layout = LodLayout::new(16, 256, 4);
         assert_eq!(64.0, layout.last_level_start());
@@ -1323,4 +1395,5 @@ mod tests {
             .chunk_visible(c)));
     }
 }
+
 

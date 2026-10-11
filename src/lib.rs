@@ -1,5 +1,6 @@
 pub mod block;
 pub mod chunks;
+pub mod horizon;
 pub mod player;
 pub mod settings;
 pub mod sky;

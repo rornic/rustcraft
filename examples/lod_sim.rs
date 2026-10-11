@@ -32,7 +32,7 @@ fn setup(
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     let renderer = &renderer.0;
-    let world = rustcraft::world::World::new(renderer.lod_layout().render_distance() as u32);
+    let world = rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32);
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);

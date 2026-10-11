@@ -22,21 +22,22 @@ pub struct World {
 }
 
 impl World {
-    /// `render_distance` is how far, in chunks, terrain will be drawn.
-    pub fn new(render_distance: u32) -> Self {
+    /// `region_distance` is how far, in chunks, terrain is built from full-detail regions,
+    /// see `LodLayout::region_reach`.
+    pub fn new(region_distance: u32) -> Self {
         let seed = rand::random();
         let height = WORLD_HEIGHT;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
         let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
         let chunks = ChunkOctree::default();
-        let render_distance_blocks = render_distance as i64 * chunks.chunk_size as i64;
+        let region_distance_blocks = region_distance as i64 * chunks.chunk_size as i64;
         Self {
             seed,
             height,
             chunks,
             region_store: Arc::new(
                 RegionStore::new(noise_generator)
-                    .with_resident_cap(resident_cap_for(render_distance_blocks)),
+                    .with_resident_cap(resident_cap_for(region_distance_blocks)),
             ),
             spawn: Vec3::new(spawn_x as f32, spawn_height as f32 + 20.0, spawn_z as f32),
         }

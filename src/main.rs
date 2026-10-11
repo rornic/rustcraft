@@ -9,6 +9,7 @@ use rustcraft::chunks::{
     material::{ChunkMaterial, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
+use rustcraft::horizon::update_horizon;
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 use rustcraft::sky::{gradient_skybox, sun, FOG_MAX_OPACITY, HORIZON_COLOR};
 use rustcraft::tonemap::{dry_color_grading, scene_colour, TONEMAPPING};
@@ -29,7 +30,7 @@ fn setup_scene(
         layout.max_level
     );
 
-    let game_world = rustcraft::world::World::new(render_distance);
+    let game_world = rustcraft::world::World::new(layout.region_reach() as u32);
     let world_height = game_world.height;
     info!("world seed is {}", game_world.seed());
     let spawn = game_world.spawn();
@@ -138,7 +139,7 @@ fn main() {
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,
-            (player_move, player_look, update_underwater_effects).chain(),
+            (player_move, player_look, update_horizon, update_underwater_effects).chain(),
         )
         .run();
 }
