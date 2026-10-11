@@ -16,20 +16,22 @@ const PEAK_EASE_START: f64 = 400.0;
 const SEED_STRIDE: u32 = 101;
 
 // Domain warp bends continents into peninsulas and bays instead of round blobs.
-const WARP_WAVELENGTH: f64 = 5000.0;
-const WARP_STRENGTH: f64 = 1800.0;
+const WARP_WAVELENGTH: f64 = 9000.0;
+const WARP_STRENGTH: f64 = 3000.0;
 
 // Continentalness: few octaves, so coastlines are long and smooth rather than archipelagos.
-const CONTINENT_WAVELENGTH: f64 = 9000.0;
+const CONTINENT_WAVELENGTH: f64 = 16000.0;
+// Steepens continentalness, which a long wavelength leaves shallow, so coasts stay as sharp.
+const CONTINENT_CONTRAST: f64 = 1.7;
 // Shifts continentalness down so most of the world is ocean.
-const OCEAN_BIAS: f64 = 0.08;
+const OCEAN_BIAS: f64 = 0.0;
 
 // Ruggedness decides where inland is calm plains and where it's mountain ranges.
 const RUGGEDNESS_WAVELENGTH: f64 = 7000.0;
 
 const RIDGE_WAVELENGTH: f64 = 1500.0;
-const RIDGE_OCTAVES: usize = 7;
-const RIDGE_WARP: f64 = 0.3;
+const RIDGE_OCTAVES: usize = 9;
+const RIDGE_WARP: f64 = 0.18;
 // A range is a broad uplifted massif with ridged peaks and valleys carved into it.
 const UPLIFT_HEIGHT: f64 = 190.0;
 const RIDGE_HEIGHT: f64 = 230.0;
@@ -40,6 +42,16 @@ const HILLINESS_WAVELENGTH: f64 = 2500.0;
 const HILL_HEIGHT: f64 = 45.0;
 
 const DETAIL_WAVELENGTH: f64 = 350.0;
+// How much detail lowlands, rugged country and mountain ranges get.
+const PLAINS_DETAIL: f64 = 6.0;
+const RUGGED_DETAIL: f64 = 18.0;
+const MOUNTAIN_DETAIL: f64 = 30.0;
+
+// Bumps a few blocks across, so the ground is never glassy smooth up close.
+const TEXTURE_WAVELENGTH: f64 = 32.0;
+const PLAINS_TEXTURE: f64 = 5.0;
+const RUGGED_TEXTURE: f64 = 9.0;
+const MOUNTAIN_TEXTURE: f64 = 16.0;
 
 // Where the ocean ring around the world starts and ends, as a fraction of the half size.
 const EDGE_FALLOFF_START: f64 = 0.8;
@@ -79,6 +91,7 @@ pub struct NoiseGenerator {
     hills: Fbm<Perlin>,
     hilliness: Fbm<Perlin>,
     detail: Fbm<Perlin>,
+    texture: Fbm<Perlin>,
 }
 
 impl NoiseGenerator {
@@ -94,12 +107,13 @@ impl NoiseGenerator {
         Self {
             warp_x: fbm(0, WARP_WAVELENGTH, 3),
             warp_z: fbm(1, WARP_WAVELENGTH, 3),
-            continents: fbm(2, CONTINENT_WAVELENGTH, 5),
+            continents: fbm(2, CONTINENT_WAVELENGTH, 6),
             ruggedness: fbm(3, RUGGEDNESS_WAVELENGTH, 3),
             ridges: (0..RIDGE_OCTAVES as u32)
                 .map(|i| Perlin::new(field_seed(4).wrapping_add(i)))
                 .collect(),
             detail: fbm(5, DETAIL_WAVELENGTH, 5),
+            texture: fbm(8, TEXTURE_WAVELENGTH, 3),
             hills: fbm(6, HILL_WAVELENGTH, 4),
             hilliness: fbm(7, HILLINESS_WAVELENGTH, 2),
         }
@@ -116,7 +130,9 @@ impl NoiseGenerator {
         let (wx, wz) = (x + warp_x, z + warp_z);
 
         let edge = edge_falloff(wx, wz);
-        let continentalness = (self.continents.get([wx, wz]) - OCEAN_BIAS).lerp(-1.0, edge);
+        let continentalness = (self.continents.get([wx, wz]) * CONTINENT_CONTRAST - OCEAN_BIAS)
+            .clamp(-1.0, 1.0)
+            .lerp(-1.0, edge);
         // Ruggedness and hilliness only shape land and the shallows, so open ocean skips them.
         let ruggedness = if continentalness > OPEN_OCEAN {
             self.ruggedness.get([wx, wz])
@@ -127,7 +143,7 @@ impl NoiseGenerator {
         let base = spline(&CONTINENT_SPLINE, continentalness);
 
         let inland = smoothstep(0.02, 0.25, continentalness);
-        let mountain_mask = inland * smoothstep(-0.2, 0.25, ruggedness);
+        let mountain_mask = inland * smoothstep(0.0, 0.4, ruggedness);
         let mountains = if mountain_mask > 0.0 {
             // A full strength warp shears ridges into long streaks, so they get only a little.
             let ridge_x = x + warp_x * RIDGE_WARP;
@@ -152,12 +168,19 @@ impl NoiseGenerator {
 
         // Calm the detail near the shoreline, or it breaks the coast up into specks of land.
         let shore_calm = 0.2_f64.lerp(1.0, smoothstep(0.0, 0.1, continentalness.abs()));
-        let land_detail = 3.0_f64.lerp(12.0, smoothstep(-0.3, 0.4, ruggedness));
+        let land_detail = PLAINS_DETAIL.lerp(RUGGED_DETAIL, smoothstep(-0.3, 0.4, ruggedness))
+            + mountain_mask * MOUNTAIN_DETAIL;
         let sea_floor_blend = smoothstep(OPEN_OCEAN, OPEN_OCEAN + 0.1, continentalness);
         let detail_amplitude = SEA_FLOOR_DETAIL.lerp(land_detail, sea_floor_blend) * shore_calm;
         let detail = self.detail.get([x, z]) * detail_amplitude;
 
-        let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail).max(0.0);
+        let rugged = smoothstep(-0.3, 0.4, ruggedness);
+        let land_texture = PLAINS_TEXTURE.lerp(RUGGED_TEXTURE, rugged) + mountain_mask * MOUNTAIN_TEXTURE;
+        // none right at the shore, or it raises specks of land out of the shallows
+        let shore_fade = smoothstep(0.0, 0.06, continentalness.abs());
+        let texture = self.texture.get([x, z]) * land_texture * sea_floor_blend * shore_fade;
+
+        let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
         TerrainSample { continentalness, height }
     }
 
