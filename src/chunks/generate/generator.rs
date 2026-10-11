@@ -8,6 +8,8 @@ use bevy::{
     },
 };
 
+use super::biome::grass_tint;
+use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use super::smooth::{mesh_surface, Surface};
@@ -399,12 +401,13 @@ impl MeshBuffers {
         ring.extend((1..=h).rev().map(|j| (0, j)));
 
         let mut push = |i: f32, j: f32, uv: [f32; 2]| {
+            let position = quad.corner + quad.ta * i + quad.tb * j;
             self.vertices.push(Vertex {
-                position: (quad.corner + quad.ta * i + quad.tb * j).into(),
+                position: position.into(),
                 normal: quad.normal,
                 uv,
             });
-            self.colors.push(quad.color);
+            self.colors.push((quad.color)(position));
             self.vertices.len() as u32 - 1
         };
         let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
@@ -459,7 +462,7 @@ struct FanQuad<'a> {
     tb: Vec3,
     size: (usize, usize),
     normal: [f32; 3],
-    color: [f32; 4],
+    color: &'a dyn Fn(Vec3) -> [f32; 4],
     uv_at: &'a dyn Fn(usize, usize) -> [f32; 2],
     reversed: bool,
 }
@@ -502,15 +505,44 @@ fn vertex_water_depth(
     total as f32 / 4.0
 }
 
+// Tints grass by the climate it grows in. Climate drifts over thousands of blocks, so it's
+// sampled at the mesh's four corners and blended across it, rather than at every vertex.
+struct GrassTint {
+    // at the mesh's edges, so neighbouring meshes share their tints along each edge: (-x, -z), (+x, -z), (-x, +z), (+x, +z)
+    corners: [Vec3; 4],
+}
+
+impl GrassTint {
+    // `origin` is where the mesh's local origin is in the world, and `scale` how many blocks one local unit is.
+    fn new(noise: &NoiseGenerator, origin: Vec3, scale: f32) -> Self {
+        let size = CHUNK_SIZE as f32;
+        let corners = [(0.0, 0.0), (size, 0.0), (0.0, size), (size, size)].map(|(x, z)| {
+            let world = origin + Vec3::new(x - 0.5, 0.0, z - 0.5) * scale;
+            grass_tint(noise.climate(world.x as f64, world.z as f64))
+        });
+        Self { corners }
+    }
+
+    fn at(&self, local: Vec3) -> Vec3 {
+        let size = CHUNK_SIZE as f32;
+        let (u, v) = ((local.x + 0.5) / size, (local.z + 0.5) / size);
+        let [a, b, c, d] = self.corners;
+        a.lerp(b, u).lerp(c.lerp(d, u), v)
+    }
+}
+
 pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
+    coord: ChunkCoordinate,
+    noise: &NoiseGenerator,
 ) -> ChunkMeshes {
     let source = ChunkNeighbourhood {
         chunk: &chunk,
         neighbors: &adjacent_chunks,
     };
-    mesh_blocks(&source, 1, true)
+    let tint = GrassTint::new(noise, (coord.0 * CHUNK_SIZE as i64).as_vec3(), 1.0);
+    mesh_blocks(&source, 1, true, &tint)
 }
 
 // Ambient occlusion is barely visible on cells this many blocks across or more, but stops
@@ -526,7 +558,10 @@ pub fn generate_lod_mesh(
         mesh_surface(&Surface::sample(&regions, key), key)
     } else {
         let cell_size = key.cell_size();
-        mesh_blocks(&LodBlocks::sample(&regions, key), cell_size, cell_size <= AO_MAX_CELL_SIZE)
+        // matches `lod_transform`
+        let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
+        let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
+        mesh_blocks(&LodBlocks::sample(&regions, key), cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint)
     };
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
@@ -603,6 +638,7 @@ fn mesh_opaque_greedy(
     face_vertices: &[&[Vertex]; 6],
     buffers: &mut MeshBuffers,
     ambient_occlusion: bool,
+    grass_tint: &GrassTint,
 ) {
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
@@ -667,10 +703,15 @@ fn mesh_opaque_greedy(
 
                     let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
                     let atlas_cell = (cell.block as usize - 1) as f32;
+                    let color = |ao: f32, position: Vec3| {
+                        let tint = if cell.block == BlockType::Grass { grass_tint.at(position) } else { Vec3::ONE };
+                        (tint * ao).extend(atlas_cell).to_array()
+                    };
                     if w == 1 && h == 1 {
-                        let positions = std::array::from_fn(|j| (Vec3::from(template[j].position) + origin).into());
+                        let positions: [Vec3; 4] = std::array::from_fn(|j| Vec3::from(template[j].position) + origin);
                         let uvs = std::array::from_fn(|j| template[j].uv);
-                        let colors = std::array::from_fn(|j| [cell.ao[j], cell.ao[j], cell.ao[j], atlas_cell]);
+                        let colors = std::array::from_fn(|j| color(cell.ao[j], positions[j]));
+                        let positions = positions.map(|p| p.to_array());
                         buffers.push_tiled_quad(positions, template[0].normal, uvs, colors);
                         continue;
                     }
@@ -693,7 +734,7 @@ fn mesh_opaque_greedy(
                         tb: tb.as_vec3(),
                         size: (w, h),
                         normal: template[0].normal,
-                        color: [cell.ao[0], cell.ao[0], cell.ao[0], atlas_cell],
+                        color: &|position| color(cell.ao[0], position),
                         uv_at: &uv_at,
                         reversed: !ccw_in_ab,
                     });
@@ -704,7 +745,7 @@ fn mesh_opaque_greedy(
 }
 
 // `cell_size` is how many blocks wide each cell of `source` is.
-fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: bool) -> ChunkMeshes {
+fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: bool, grass_tint: &GrassTint) -> ChunkMeshes {
     let mut opaque = MeshBuffers::default();
     let mut water = MeshBuffers::default();
 
@@ -799,6 +840,7 @@ fn mesh_blocks(source: &impl BlockSource, cell_size: i64, ambient_occlusion: boo
         &face_vertices,
         &mut opaque,
         ambient_occlusion,
+        grass_tint,
     );
 
     let water_mesh = if water.vertices.is_empty() {
@@ -826,7 +868,7 @@ mod tests {
 
     use super::{
         generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
-        vertex_water_depth, water_depth, BlockSource, ChunkNeighbourhood, LodBlocks, AO_STRENGTH,
+        vertex_water_depth, water_depth, BlockSource, ChunkMeshes, ChunkNeighbourhood, GrassTint, LodBlocks, AO_STRENGTH,
         WATER_LEVEL,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
@@ -1010,8 +1052,12 @@ mod tests {
         LodBlocks { size, cells }
     }
 
+    fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
+        generate_chunk_mesh(Arc::new(chunk), vec![None; 26], ChunkCoordinate(I64Vec3::ZERO), &NoiseGenerator::new(3))
+    }
+
     fn mesh_vertices(chunk: ChunkData) -> usize {
-        generate_chunk_mesh(Arc::new(chunk), vec![None; 26]).opaque.count_vertices()
+        mesh_chunk(chunk).opaque.count_vertices()
     }
 
     #[test]
@@ -1055,7 +1101,7 @@ mod tests {
 
     #[test]
     fn test_merged_quads_tile_their_uvs_and_carry_the_atlas_cell() {
-        let mesh = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let mesh = mesh_chunk(floor_chunk()).opaque;
         let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0) else {
             panic!("missing uvs");
         };
@@ -1092,15 +1138,15 @@ mod tests {
     fn test_merged_quads_keep_the_winding_of_single_faces() {
         let mut single = ChunkData::default();
         single.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
-        let single = generate_chunk_mesh(Arc::new(single), vec![None; 26]).opaque;
-        let merged = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let single = mesh_chunk(single).opaque;
+        let merged = mesh_chunk(floor_chunk()).opaque;
         let expected = top_face_triangles(&single)[0].signum();
         assert!(top_face_triangles(&merged).iter().all(|area| area.signum() == expected));
     }
 
     #[test]
     fn test_merged_quad_borders_share_vertices_with_unit_faces() {
-        let mesh = generate_chunk_mesh(Arc::new(floor_chunk()), vec![None; 26]).opaque;
+        let mesh = mesh_chunk(floor_chunk()).opaque;
         let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
             panic!("missing positions");
         };
@@ -1108,6 +1154,40 @@ mod tests {
             let edge = [step as f32 - 0.5, 0.5, -0.5];
             assert!(positions.contains(&edge), "no top-face vertex at {edge:?}");
         }
+    }
+
+    fn tints(mesh: &Mesh) -> Vec<Vec3> {
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            panic!("missing colors");
+        };
+        colors.iter().map(|c| Vec3::new(c[0], c[1], c[2])).collect()
+    }
+
+    #[test]
+    fn test_only_grass_is_tinted() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+        chunk.set_block_at(U16Vec3::new(10, 4, 10), BlockType::Grass);
+        let colours = tints(&mesh_chunk(chunk).opaque);
+        assert_eq!(24, colours.iter().filter(|c| **c == Vec3::ONE).count());
+        assert_eq!(24, colours.iter().filter(|c| **c != Vec3::ONE).count());
+    }
+
+    #[test]
+    fn test_grass_tint_matches_along_shared_edges() {
+        let noise = NoiseGenerator::new(3);
+        let chunk_tint = |x: i64, z: i64| GrassTint::new(&noise, Vec3::new(x as f32, 0.0, z as f32) * 16.0, 1.0);
+        let (here, east, south) = (chunk_tint(5, 5), chunk_tint(6, 5), chunk_tint(5, 6));
+        for step in 0..=16 {
+            let along = step as f32 - 0.5;
+            assert!(here.at(Vec3::new(15.5, 0.0, along)).abs_diff_eq(east.at(Vec3::new(-0.5, 0.0, along)), 1e-5));
+            assert!(here.at(Vec3::new(along, 0.0, 15.5)).abs_diff_eq(south.at(Vec3::new(along, 0.0, -0.5)), 1e-5));
+        }
+
+        // a LOD node four chunks across, its local units 4 blocks wide, starting at chunk (4, 4)
+        let node = GrassTint::new(&noise, Vec3::new(64.0, 0.0, 64.0) + Vec3::splat(1.5), 4.0);
+        assert!(node.at(Vec3::splat(-0.5)).abs_diff_eq(chunk_tint(4, 4).at(Vec3::splat(-0.5)), 1e-5));
+        assert!(node.at(Vec3::splat(15.5)).abs_diff_eq(chunk_tint(7, 7).at(Vec3::splat(15.5)), 1e-5));
     }
 
     #[test]
@@ -1210,7 +1290,7 @@ mod tests {
             vertices = 0;
             for &c in &meshed {
                 let neighbours = c.neighbors_26().iter().map(|n| data.get(n).cloned()).collect();
-                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours);
+                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise());
                 vertices += meshes.opaque.count_vertices();
             }
             best = best.min(start.elapsed());

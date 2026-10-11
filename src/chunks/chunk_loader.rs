@@ -316,9 +316,10 @@ pub fn load_chunks(
                 if neighbours_ready {
                     if let Some(data) = world.get_chunk_data(gen_chunk_mesh.coord) {
                         let adjacent = world.adjacent_chunk_data(chunk.coord);
-                        gen_chunk_mesh.task = Some(
-                            task_pool.spawn(async move { generate_chunk_mesh(data, adjacent) }),
-                        );
+                        let (coord, regions) = (chunk.coord, world.region_store.clone());
+                        gen_chunk_mesh.task = Some(task_pool.spawn(async move {
+                            generate_chunk_mesh(data, adjacent, coord, regions.noise())
+                        }));
                     }
                 }
             }

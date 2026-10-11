@@ -1,6 +1,7 @@
 use bevy::math::{FloatExt, I64Vec2};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use super::biome::Climate;
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
@@ -61,6 +62,11 @@ const EDGE_FALLOFF_END: f64 = 0.97;
 const OPEN_OCEAN: f64 = -0.25;
 const SEA_FLOOR_DETAIL: f64 = 10.0;
 
+// Temperature and humidity drift over a few thousand blocks, so a climate spans many hills.
+const CLIMATE_WAVELENGTH: f64 = 4000.0;
+// Spreads the climate noise, which clusters around 0, out over the whole 0..1 range.
+const CLIMATE_CONTRAST: f64 = 1.6;
+
 // Continentalness to height above sea level: abyssal plain, continental slope, the
 // shelf around each coast, then the coast and inland.
 const CONTINENT_SPLINE: [(f64, f64); 14] = [
@@ -97,6 +103,8 @@ pub struct NoiseGenerator {
     hilliness: Fbm<Perlin>,
     detail: Fbm<Perlin>,
     texture: Fbm<Perlin>,
+    temperature: Fbm<Perlin>,
+    humidity: Fbm<Perlin>,
 }
 
 impl NoiseGenerator {
@@ -121,6 +129,8 @@ impl NoiseGenerator {
             texture: fbm(8, TEXTURE_WAVELENGTH, 3),
             hills: fbm(6, HILL_WAVELENGTH, 4),
             hilliness: fbm(7, HILLINESS_WAVELENGTH, 2),
+            temperature: fbm(9, CLIMATE_WAVELENGTH, 4),
+            humidity: fbm(10, CLIMATE_WAVELENGTH, 4),
         }
     }
 
@@ -187,6 +197,15 @@ impl NoiseGenerator {
 
         let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
         TerrainSample { continentalness, height }
+    }
+
+    // How hot and wet the column at (x, z) is.
+    pub fn climate(&self, x: f64, z: f64) -> Climate {
+        let spread = |n: f64| (n * CLIMATE_CONTRAST * 0.5 + 0.5).clamp(0.0, 1.0) as f32;
+        Climate {
+            temperature: spread(self.temperature.get([x, z])),
+            humidity: spread(self.humidity.get([x, z])),
+        }
     }
 
     // Ridged multifractal in 0..1: sharp crests where the noise crosses zero, with each
@@ -290,6 +309,27 @@ mod tests {
             let height = noise.get(I64Vec2::new(x, z));
             assert!(height < WATER_LEVEL as f64 - 30.0, "({x}, {z}) should be deep ocean, was {height}");
         }
+    }
+
+    #[test]
+    fn test_climate_varies_across_the_whole_range() {
+        let noise = NoiseGenerator::new(9);
+        let samples: Vec<Climate> = (-40..40)
+            .flat_map(|z| (-40..40).map(move |x| (x as f64 * 200.0, z as f64 * 200.0)))
+            .map(|(x, z)| noise.climate(x, z))
+            .collect();
+        for value in [|c: &Climate| c.temperature, |c: &Climate| c.humidity] {
+            let (low, high) = samples.iter().map(value).fold((1.0f32, 0.0f32), |(l, h), v| (l.min(v), h.max(v)));
+            assert!(low < 0.15 && high > 0.85, "climate only spans {low}..{high}");
+        }
+    }
+
+    #[test]
+    fn test_climate_changes_gradually() {
+        let noise = NoiseGenerator::new(9);
+        let (a, b) = (noise.climate(1000.0, 1000.0), noise.climate(1016.0, 1000.0));
+        assert!((a.temperature - b.temperature).abs() < 0.05);
+        assert!((a.humidity - b.humidity).abs() < 0.05);
     }
 
     #[test]

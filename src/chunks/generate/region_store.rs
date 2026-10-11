@@ -78,6 +78,10 @@ impl RegionStore {
         }
     }
 
+    pub fn noise(&self) -> &NoiseGenerator {
+        &self.noise
+    }
+
     pub fn with_resident_cap(self, cap: usize) -> Self {
         Self {
             lru: RwLock::new(RegionLru::new(cap)),
