@@ -4,8 +4,8 @@
 //   cargo run --release --example world_map -- --seed 42
 // Zoom in on an area with a smaller --scale (blocks per pixel):
 //   cargo run --release --example world_map -- --seed 42 --center 3000,-2000 --scale 2
-// Colour lowland grass by climate, as it's drawn in game:
-//   cargo run --release --example world_map -- --seed 42 --grass
+// Colour lowlands by biome, with grass tinted by climate as it's drawn in game:
+//   cargo run --release --example world_map -- --seed 42 --biomes
 
 use std::env;
 
@@ -13,7 +13,7 @@ use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::chunks::generate::biome::{grass_colour, Climate};
+use rustcraft::chunks::generate::biome::{grass_colour, BiomeId, Climate};
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
 
 struct Args {
@@ -22,7 +22,7 @@ struct Args {
     scale: f64,
     pixels: u32,
     out: String,
-    grass: bool,
+    biomes: bool,
 }
 
 fn parse_args() -> Args {
@@ -32,13 +32,13 @@ fn parse_args() -> Args {
         scale: (WORLD_SIZE as f64 * 1.1 / 2048.0).ceil(),
         pixels: 2048,
         out: "world_map.png".to_string(),
-        grass: false,
+        biomes: false,
     };
 
     let mut argv = env::args().skip(1);
     while let Some(flag) = argv.next() {
-        if flag == "--grass" {
-            args.grass = true;
+        if flag == "--biomes" {
+            args.biomes = true;
             continue;
         }
         let value = argv.next().unwrap_or_else(|| panic!("missing value for {flag}"));
@@ -110,6 +110,8 @@ fn height_colour(above_sea: f64) -> [f64; 3] {
     STOPS[STOPS.len() - 1].1
 }
 
+const SAND: [f64; 3] = [222.0, 196.0, 132.0];
+
 // Grass in this climate, as an sRGB map colour.
 fn grass_map_colour(climate: Climate) -> [f64; 3] {
     let linear = grass_colour(climate);
@@ -129,9 +131,11 @@ fn render(samples: &[(TerrainSample, Climate)], args: &Args) -> image::RgbImage 
             let above_sea = height - WATER_LEVEL as f64;
             let mut colour = height_colour(above_sea);
             // up to where the height colours turn to rock
-            if args.grass && (2.0..140.0).contains(&above_sea) {
+            if args.biomes && (2.0..140.0).contains(&above_sea) {
+                let (sample, climate) = at(x, z);
+                let ground = if sample.biome == BiomeId::BASE { grass_map_colour(climate) } else { SAND };
                 let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
-                colour = lerp_rgb(grass_map_colour(at(x, z).1), colour, rock);
+                colour = lerp_rgb(ground, colour, rock);
             }
 
             // Light from the north west, exaggerated so gentle slopes still read at map scale.
@@ -155,6 +159,8 @@ fn print_stats(samples: &[(TerrainSample, Climate)]) {
     let samples: Vec<TerrainSample> = samples.iter().map(|s| s.0).collect();
     let land = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64).count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
+    let desert = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64 && s.biome != BiomeId::BASE).count();
+    println!("desert: {:.1}% of land", 100.0 * desert as f64 / land.max(1) as f64);
 
     let mut heights: Vec<f64> = samples.iter().map(|s| s.height).collect();
     heights.sort_by(f64::total_cmp);

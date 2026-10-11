@@ -1,7 +1,7 @@
 use bevy::math::{FloatExt, I64Vec2};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
-use super::biome::Climate;
+use super::biome::{BaseColumn, BiomeId, Biomes, Climate};
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
@@ -86,11 +86,12 @@ const CONTINENT_SPLINE: [(f64, f64); 14] = [
     (0.5, 36.0),
 ];
 
-// A column's height, with how far inland it is (negative out to sea).
+// A column's height, with how far inland it is (negative out to sea) and the biome owning it.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct TerrainSample {
     pub continentalness: f64,
     pub height: f64,
+    pub biome: BiomeId,
 }
 
 pub struct NoiseGenerator {
@@ -105,6 +106,7 @@ pub struct NoiseGenerator {
     texture: Fbm<Perlin>,
     temperature: Fbm<Perlin>,
     humidity: Fbm<Perlin>,
+    biomes: Biomes,
 }
 
 impl NoiseGenerator {
@@ -131,6 +133,7 @@ impl NoiseGenerator {
             hilliness: fbm(7, HILLINESS_WAVELENGTH, 2),
             temperature: fbm(9, CLIMATE_WAVELENGTH, 4),
             humidity: fbm(10, CLIMATE_WAVELENGTH, 4),
+            biomes: Biomes::new(seed),
         }
     }
 
@@ -139,7 +142,29 @@ impl NoiseGenerator {
         self.sample(pos.x as f64, pos.y as f64).height
     }
 
+    pub fn biomes(&self) -> &Biomes {
+        &self.biomes
+    }
+
+    // The base terrain, then whichever biomes the climate here calls for.
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
+        let (continentalness, height) = self.base_terrain(x, z);
+        let (height, biome) = self.biomes.shape(&BaseColumn {
+            x,
+            z,
+            height,
+            continentalness,
+            climate: self.climate(x, z),
+        });
+        TerrainSample {
+            continentalness,
+            height: height.max(0.0),
+            biome,
+        }
+    }
+
+    // Continentalness and height of the terrain every biome starts from.
+    fn base_terrain(&self, x: f64, z: f64) -> (f64, f64) {
         let warp_x = self.warp_x.get([x, z]) * WARP_STRENGTH;
         let warp_z = self.warp_z.get([x, z]) * WARP_STRENGTH;
         let (wx, wz) = (x + warp_x, z + warp_z);
@@ -196,7 +221,7 @@ impl NoiseGenerator {
         let texture = self.texture.get([x, z]) * land_texture * sea_floor_blend * shore_fade;
 
         let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
-        TerrainSample { continentalness, height }
+        (continentalness, height)
     }
 
     // How hot and wet the column at (x, z) is.

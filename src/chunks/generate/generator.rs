@@ -8,7 +8,7 @@ use bevy::{
     },
 };
 
-use super::biome::grass_tint;
+use super::biome::{grass_tint, BiomeId, Biomes};
 use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
@@ -84,6 +84,7 @@ impl LodBlocks {
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut heights = regions.sampler();
+        let biomes = regions.noise().biomes();
 
         for cx in -1..=size {
             for cz in -1..=size {
@@ -92,11 +93,12 @@ impl LodBlocks {
                 let column_height = heights.height(world_x, world_z).round() as i64;
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
+                let biome = heights.biome(world_x, world_z);
 
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     cells[Self::index(size, IVec3::new(cx, cy, cz))] =
-                        terrain_block(world_y, column_height, combined_gradient);
+                        column_block(biomes, biome, world_y, column_height, combined_gradient);
                 }
             }
         }
@@ -186,6 +188,18 @@ pub(super) fn terrain_block(world_y: i64, column_height: i64, combined_gradient:
     } else {
         BlockType::Air
     }
+}
+
+// `terrain_block`, as the biome owning the column has it.
+pub(super) fn column_block(
+    biomes: &Biomes,
+    biome: BiomeId,
+    world_y: i64,
+    column_height: i64,
+    combined_gradient: f64,
+) -> BlockType {
+    let base = terrain_block(world_y, column_height, combined_gradient);
+    biomes.block(biome, base, world_y - WATER_LEVEL, combined_gradient)
 }
 
 // `neighbor_chunks` holds all 26 chunks in the 3x3x3 neighborhood (see `ChunkCoordinate::neighbors_26`),
@@ -312,6 +326,7 @@ pub fn generate_chunk(
 ) -> ChunkData {
     let mut chunk_data = ChunkData::default();
     let mut heights = regions.sampler();
+    let biomes = regions.noise().biomes();
 
     for x in 0..chunk_data.size {
         for z in 0..chunk_data.size {
@@ -324,9 +339,10 @@ pub fn generate_chunk(
             let column_height = heights.height(world_x, world_z).round() as i64;
             let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
             let combined_gradient = gradient_x.abs() + gradient_z.abs();
+            let biome = heights.biome(world_x, world_z);
 
             for y in 0..chunk_data.size {
-                let block = terrain_block(world_y + y as i64, column_height, combined_gradient);
+                let block = column_block(biomes, biome, world_y + y as i64, column_height, combined_gradient);
                 if block != BlockType::Air {
                     chunk_data.set_block_at(U16Vec3::new(x, y, z), block);
                 }
@@ -985,6 +1001,35 @@ mod tests {
         assert_eq!(deep, shallow);
         // averaged with the two dry columns on the +z side
         assert_eq!((5.0 + 2.0) / 4.0, deep);
+    }
+
+    #[test]
+    fn test_desert_ground_is_sand_and_other_lowland_grass() {
+        use crate::chunks::generate::biome::BiomeId;
+        use bevy::math::I64Vec2;
+
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(3))));
+        let lowland = |biome_is_base: bool| {
+            (-60..60)
+                .flat_map(|z| (-60..60).map(move |x| I64Vec2::new(x, z) * 128))
+                .find(|p| {
+                    let sample = regions.noise().sample(p.x as f64, p.y as f64);
+                    let above_sea = sample.height - WATER_LEVEL as f64;
+                    (sample.biome == BiomeId::BASE) == biome_is_base
+                        && (20.0..60.0).contains(&above_sea)
+                        && regions.sampler().gradient(p.x, p.y).0.abs() < 0.5
+                        && regions.sampler().gradient(p.x, p.y).1.abs() < 0.5
+                })
+                .expect("no lowland of that kind near the centre")
+        };
+        let surface = |p: I64Vec2| {
+            let top = regions.get_height(p.x, p.y).round() as i64 - 1;
+            let coord = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), top.div_euclid(16), p.y.div_euclid(16)));
+            let local = U16Vec3::new(p.x.rem_euclid(16) as u16, top.rem_euclid(16) as u16, p.y.rem_euclid(16) as u16);
+            generate_chunk(regions.clone(), coord).get_block_at(local)
+        };
+        assert_eq!(BlockType::Sand, surface(lowland(false)));
+        assert_eq!(BlockType::Grass, surface(lowland(true)));
     }
 
     #[test]

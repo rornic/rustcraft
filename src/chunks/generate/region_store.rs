@@ -3,6 +3,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use bevy::math::I64Vec2;
 
+use super::biome::BiomeId;
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 
@@ -148,6 +149,12 @@ impl HeightSampler<'_> {
         let origin = coord.origin();
         self.region(coord)
             .height_at(world_x - origin.x, world_z - origin.y) as f64
+    }
+
+    pub fn biome(&mut self, world_x: i64, world_z: i64) -> BiomeId {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord).biome_at(world_x - origin.x, world_z - origin.y)
     }
 
     // Central-difference gradient over the heightmap, as the height change across two

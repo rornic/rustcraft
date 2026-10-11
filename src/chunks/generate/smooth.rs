@@ -1,7 +1,7 @@
 use bevy::math::Vec3;
 
 use super::biome::{grass_colour, Climate};
-use super::generator::{terrain_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_TOP};
+use super::generator::{column_block, ChunkMeshes, MeshBuffers, SOLID_FLOOR, WATER_TOP};
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use crate::block::BlockType;
@@ -66,7 +66,9 @@ impl Surface {
                 let world_z = base.z + j as i64 * cell + cell / 2;
                 let height = heights.height(world_x, world_z).round() as i64;
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
-                let block = terrain_block(
+                let block = column_block(
+                    noise.biomes(),
+                    heights.biome(world_x, world_z),
                     height.max(SOLID_FLOOR) - 1,
                     height,
                     gradient_x.abs() + gradient_z.abs(),
