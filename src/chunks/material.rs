@@ -38,6 +38,12 @@ pub struct ChunkMaterial {
     // the dither window drawn, see `fade::FadeMaterials`
     #[uniform(3)]
     pub fade: Vec4,
+    // the clouds, to shade the land under them, see `clouds::CloudLayer`
+    #[texture(4)]
+    #[sampler(5)]
+    pub cloud_pattern: Handle<Image>,
+    #[uniform(6)]
+    pub cloud_layer: Vec4,
 }
 
 impl Material for ChunkMaterial {

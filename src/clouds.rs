@@ -2,12 +2,16 @@ use std::f64::consts::TAU;
 
 use bevy::{
     asset::{Asset, RenderAssetUsages},
+    image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
     pbr::{MaterialPipeline, MaterialPipelineKey, NotShadowCaster, NotShadowReceiver},
     prelude::*,
     reflect::TypePath,
     render::{
         mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology},
-        render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError},
+        render_resource::{
+            AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
+            TextureDimension, TextureFormat,
+        },
     },
 };
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
@@ -28,8 +32,12 @@ const CLOUD_CELLS: f64 = 10.0;
 // Copies of the pattern drawn out from the one over the camera, each way: enough to reach
 // the fog at the sea-level render distance.
 const COPIES: i32 = 2;
-// Which way and how fast clouds drift, in blocks a second.
-const WIND: Vec2 = Vec2::new(4.0, 1.5);
+// The pattern's width in blocks.
+const SPAN: f32 = PATTERN as f32 * CELL;
+// Which way and how fast clouds drift, in blocks a second: a whole number of patterns an
+// hour each way, so they carry on seamlessly when the shaders' clock, Bevy's `globals.time`,
+// wraps back to zero on the hour.
+const WIND: Vec2 = Vec2::new(SPAN * 5.0 / 3600.0, SPAN * 2.0 / 3600.0);
 // Slightly warm white, as sunlight leaves them.
 const CLOUD_COLOR: LinearRgba = LinearRgba::rgb(0.95, 0.95, 0.92);
 
@@ -68,6 +76,16 @@ impl Material for CloudMaterial {
         push_shader_defs(descriptor, &[water_level()]);
         Ok(())
     }
+}
+
+/// The cloud pattern, for the land's shader to cast clouds' shadows with, see
+/// `cloud_shadow.wgsl`. Spawned by `spawn_clouds`.
+#[derive(Resource, Clone)]
+pub struct CloudLayer {
+    /// The pattern, one texel a cell, cloud where it's 1.
+    pub pattern: Handle<Image>,
+    /// The middle of the layer's height, the pattern's width in blocks, and the wind.
+    pub layer: Vec4,
 }
 
 // One copy of the pattern, `offset` patterns from the one over the camera.
@@ -201,8 +219,44 @@ fn cloud_mesh(pattern: &[bool]) -> Mesh {
         .with_inserted_indices(Indices::U32(mesh.indices))
 }
 
-fn spawn_clouds(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<CloudMaterial>>) {
-    let mesh = meshes.add(cloud_mesh(&cloud_pattern(rand::random())));
+// The pattern as a texture that repeats, blended between cells so shadows' edges are soft.
+fn pattern_image(pattern: &[bool]) -> Image {
+    let n = PATTERN;
+    // u along x, v along z
+    let data = (0..n * n).map(|i| if pattern[(i % n) * n + i / n] { 255 } else { 0 }).collect();
+    let mut image = Image::new(
+        Extent3d {
+            width: n as u32,
+            height: n as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        ..default()
+    });
+    image
+}
+
+pub fn spawn_clouds(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<CloudMaterial>>,
+) {
+    let pattern = cloud_pattern(rand::random());
+    commands.insert_resource(CloudLayer {
+        pattern: images.add(pattern_image(&pattern)),
+        layer: Vec4::new(CLOUD_BASE + THICKNESS / 2.0, SPAN, WIND.x, WIND.y),
+    });
+    let mesh = meshes.add(cloud_mesh(&pattern));
     let material = materials.add(CloudMaterial { color: CLOUD_COLOR });
     for x in -COPIES..=COPIES {
         for z in -COPIES..=COPIES {
@@ -221,9 +275,8 @@ fn spawn_clouds(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ma
 /// Where the pattern copy `offset` copies from the one over `camera` starts, `elapsed`
 /// seconds into the wind.
 fn tile_origin(camera: Vec2, elapsed: f32, offset: IVec2) -> Vec2 {
-    let span = PATTERN as f32 * CELL;
-    let drift = (WIND * elapsed).rem_euclid(Vec2::splat(span));
-    ((camera - drift) / span).floor() * span + drift + offset.as_vec2() * span
+    let drift = (WIND * elapsed).rem_euclid(Vec2::splat(SPAN));
+    ((camera - drift) / SPAN).floor() * SPAN + drift + offset.as_vec2() * SPAN
 }
 
 fn drift_clouds(
@@ -236,7 +289,8 @@ fn drift_clouds(
     };
     let camera = camera.translation().xz();
     for (tile, mut transform) in &mut tiles {
-        let origin = tile_origin(camera, time.elapsed_secs(), tile.offset);
+        // the shaders' clock, so clouds and their shadows keep together
+        let origin = tile_origin(camera, time.elapsed_secs_wrapped(), tile.offset);
         transform.translation = Vec3::new(origin.x, CLOUD_BASE, origin.y);
     }
 }
@@ -281,8 +335,24 @@ mod tests {
     }
 
     #[test]
+    fn test_wind_carries_on_seamlessly_past_the_hour() {
+        let camera = Vec2::new(500.0, 900.0);
+        assert!(tile_origin(camera, 3600.0, IVec2::ZERO).abs_diff_eq(tile_origin(camera, 0.0, IVec2::ZERO), 0.05));
+    }
+
+    #[test]
+    fn test_image_puts_x_along_u() {
+        let mut pattern = vec![false; PATTERN * PATTERN];
+        pattern[3 * PATTERN + 200] = true;
+        let image = pattern_image(&pattern);
+        let data = image.data.as_slice();
+        assert_eq!(255, data[200 * PATTERN + 3]);
+        assert_eq!(1, data.iter().filter(|&&v| v > 0).count());
+    }
+
+    #[test]
     fn test_tiles_cover_the_camera_and_drift_with_the_wind() {
-        let span = PATTERN as f32 * CELL;
+        let span = SPAN;
         let camera = Vec2::new(10_000.0, -3_000.0);
         for elapsed in [0.0, 100.0, 5_000.0] {
             let origin = tile_origin(camera, elapsed, IVec2::ZERO);

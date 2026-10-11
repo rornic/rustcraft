@@ -49,6 +49,9 @@ fn setup(
         color: LinearRgba::WHITE,
         texture: None,
         fade: FULLY_VISIBLE,
+        // nothing's drawn, so no clouds
+        cloud_pattern: Default::default(),
+        cloud_layer: Default::default(),
     });
     let water = water_materials.add(WaterMaterial {
         color: LinearRgba::WHITE,

@@ -9,7 +9,7 @@ use rustcraft::chunks::{
     material::{ChunkMaterial, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
-use rustcraft::clouds::CloudPlugin;
+use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 use rustcraft::sky::{gradient_skybox, sun, FOG_MAX_OPACITY, HORIZON_COLOR};
@@ -21,6 +21,7 @@ fn setup_scene(
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    clouds: Res<CloudLayer>,
 ) {
     let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
@@ -97,6 +98,8 @@ fn setup_scene(
         color: LinearRgba::WHITE,
         texture: Some(asset_server.load::<Image>("textures/blocks.png")),
         fade: FULLY_VISIBLE,
+        cloud_pattern: clouds.pattern.clone(),
+        cloud_layer: clouds.layer,
     });
     let water_material_handle = water_materials.add(WaterMaterial {
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
@@ -138,7 +141,7 @@ fn main() {
             CloudPlugin,
         ))
         .insert_resource(ClearColor(scene_colour(HORIZON_COLOR).into()))
-        .add_systems(Startup, setup_scene)
+        .add_systems(Startup, setup_scene.after(spawn_clouds))
         .add_systems(
             Update,
             (player_move, player_look, update_horizon, update_underwater_effects).chain(),

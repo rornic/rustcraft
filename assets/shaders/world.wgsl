@@ -10,6 +10,8 @@
 #import "shaders/foliage.wgsl"::swayed
 #import "shaders/fog.wgsl"::fogged
 #import "shaders/lighting.wgsl"::{direct_sun, open_sky}
+#import "shaders/cloud_shadow.wgsl"::cloud_shadow
+#import "shaders/dither.wgsl"::dither_threshold
 // All that's left with no sky light at all, so caves aren't pitch black.
 const CAVE_AMBIENT: vec3<f32> = vec3<f32>(0.02, 0.02, 0.025);
 // Above 1, light falls away quickly at first under cover, then more slowly.
@@ -36,20 +38,14 @@ fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>) -> f32 {
     return mix(shadow, 1.0, smoothstep(reach * SHADOW_FADE_START, reach, -view_z));
 }
 
-// Sunlight reaching a face, shadowed.
+// Sunlight reaching a face, shadowed by the land and the clouds.
 fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, sky: f32) -> vec3<f32> {
     let light = direct_sun(normal) * smoothstep(0.0, SUN_SKY_GATE, sky);
     // faces it can't reach need no shadow lookups
     if all(light == vec3<f32>(0.0)) {
         return light;
     }
-    return light * sun_shadow(world_position, normal);
-}
-
-fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
-    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    let p = vec2<u32>(frag_coord) % 4u;
-    return (bayer[p.y * 4u + p.x] + 0.5) / 16.0;
+    return light * sun_shadow(world_position, normal) * cloud_shadow(world_position.xyz);
 }
 
 // Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves

@@ -5,6 +5,7 @@
     view_transformations::position_world_to_clip,
 }
 #import "shaders/fog.wgsl"::fogged
+#import "shaders/dither.wgsl"::dither_threshold
 
 @group(2) @binding(0) var<uniform> material_color: vec4<f32>;
 @group(2) @binding(1) var material_color_texture: texture_2d<f32>;
@@ -12,11 +13,6 @@
 
 @group(2) @binding(3) var<uniform> material_fade: vec4<f32>;
 
-fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
-    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    let p = vec2<u32>(frag_coord) % 4u;
-    return (bayer[p.y * 4u + p.x] + 0.5) / 16.0;
-}
 
 const TROPICAL_TINT: vec3<f32> = vec3<f32>(0.0, 0.85, 0.9);
 const TROPICAL_PUSH: f32 = 0.4;
