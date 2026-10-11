@@ -28,6 +28,8 @@ pub struct BaseColumn {
     pub x: f64,
     pub z: f64,
     pub height: f64,
+    // the part of `height` that's bumps a few blocks across, for biomes that want smoother ground
+    pub bumps: f64,
     pub continentalness: f64,
     pub climate: Climate,
 }
@@ -156,6 +158,7 @@ mod tests {
             x: 0.0,
             z: 0.0,
             height: 500.0,
+            bumps: 0.0,
             continentalness: 0.3,
             climate: Climate { temperature, humidity: 0.5 },
         }

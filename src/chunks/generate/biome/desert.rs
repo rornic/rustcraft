@@ -8,12 +8,19 @@ use crate::chunks::generate::WATER_LEVEL;
 const HOT: (f64, f64) = (0.55, 0.65);
 const DRY: (f64, f64) = (0.45, 0.35);
 
-// Dunes run in long crests: shorter across the wind than along it.
-const DUNE_WAVELENGTH_ACROSS: f64 = 48.0;
-const DUNE_WAVELENGTH_ALONG: f64 = 140.0;
-const DUNE_HEIGHT: f64 = 9.0;
+// Rows of dunes driven by a wind along +x: a long gentle slope up to each crest, and a
+// steep face falling away behind it.
+const DUNE_SPACING: f64 = 90.0;
+const DUNE_HEIGHT: f64 = 18.0;
+// The share of each dune that's the gentle windward slope.
+const WINDWARD: f64 = 0.75;
+// How far, in dunes, the rows bend, and over what distance, so crests wander instead of running dead straight.
+const CREST_BEND: f64 = 0.8;
+const CREST_BEND_WAVELENGTH: f64 = 400.0;
 // Where dunes stand tall and where they lie low, so the sand isn't one even sea of crests.
-const DUNE_FIELD_WAVELENGTH: f64 = 600.0;
+const DUNE_FIELD_WAVELENGTH: f64 = 700.0;
+// How much of the base terrain's bumps the wind smooths away.
+const SMOOTHING: f64 = 0.9;
 // Dunes build up inland from the beach and give way to rock on high ground.
 const DUNE_SHORE: (f64, f64) = (2.0, 14.0);
 const DUNE_HIGH_GROUND: (f64, f64) = (70.0, 140.0);
@@ -23,22 +30,27 @@ const SEED_OFFSET: u32 = 2000;
 
 // Sand over the lowlands, piled into dunes. Rock and snow on the heights are left as they are.
 pub struct Desert {
-    dunes: Perlin,
+    crest_bend: Perlin,
     dune_field: Perlin,
 }
 
 impl Desert {
     pub fn new(seed: u32) -> Self {
         Self {
-            dunes: Perlin::new(seed.wrapping_add(SEED_OFFSET)),
+            crest_bend: Perlin::new(seed.wrapping_add(SEED_OFFSET)),
             dune_field: Perlin::new(seed.wrapping_add(SEED_OFFSET + 1)),
         }
     }
 
-    // 0..1, sharp crests and broad hollows
+    // 0..1 along the rows of dunes, 1 on each crest
     fn dune(&self, x: f64, z: f64) -> f64 {
-        let crest = 1.0 - self.dunes.get([x / DUNE_WAVELENGTH_ACROSS, z / DUNE_WAVELENGTH_ALONG]).abs();
-        crest * crest
+        let bend = self.crest_bend.get([x / CREST_BEND_WAVELENGTH, z / CREST_BEND_WAVELENGTH]) * CREST_BEND;
+        let t = (x / DUNE_SPACING + bend).rem_euclid(1.0);
+        if t < WINDWARD {
+            smoothstep(0.0, WINDWARD, t)
+        } else {
+            smoothstep(1.0, WINDWARD, t)
+        }
     }
 }
 
@@ -54,8 +66,9 @@ impl Biome for Desert {
         if room <= 0.0 {
             return column.height;
         }
-        let field = 0.5 + 0.5 * self.dune_field.get([column.x / DUNE_FIELD_WAVELENGTH, column.z / DUNE_FIELD_WAVELENGTH]);
-        column.height + self.dune(column.x, column.z) * DUNE_HEIGHT * (0.3 + 0.7 * field) * room
+        let field = smoothstep(-0.5, 0.3, self.dune_field.get([column.x / DUNE_FIELD_WAVELENGTH, column.z / DUNE_FIELD_WAVELENGTH]));
+        let dune = self.dune(column.x, column.z) * DUNE_HEIGHT * (0.4 + 0.6 * field);
+        column.height + (dune - column.bumps * SMOOTHING) * room
     }
 
     fn block(&self, base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
@@ -97,6 +110,7 @@ mod tests {
             x,
             z: 0.0,
             height: WATER_LEVEL as f64 + above_sea,
+            bumps: 0.0,
             continentalness: 0.3,
             climate: climate(1.0, 0.0),
         }
@@ -110,7 +124,18 @@ mod tests {
         };
         assert_eq!(0.0, rise(1.0));
         assert_eq!(0.0, rise(200.0));
-        assert!(rise(30.0) > DUNE_HEIGHT * 0.5, "dunes only rose {}", rise(30.0));
+        assert!(rise(30.0) > DUNE_HEIGHT * 0.8, "dunes only rose {}", rise(30.0));
         assert!(rise(30.0) <= DUNE_HEIGHT);
+    }
+
+    #[test]
+    fn test_dunes_rise_gently_and_fall_steeply() {
+        let desert = Desert::new(1);
+        let (mut up, mut down) = (0.0f64, 0.0f64);
+        for x in 0..2000 {
+            let step = desert.dune(x as f64 + 1.0, 0.0) - desert.dune(x as f64, 0.0);
+            (up, down) = (up.max(step), down.min(step));
+        }
+        assert!(-down > up * 2.0, "steepest rise {up}, steepest fall {down}");
     }
 }

@@ -62,8 +62,8 @@ const EDGE_FALLOFF_END: f64 = 0.97;
 const OPEN_OCEAN: f64 = -0.25;
 const SEA_FLOOR_DETAIL: f64 = 10.0;
 
-// Temperature and humidity drift over a few thousand blocks, so a climate spans many hills.
-const CLIMATE_WAVELENGTH: f64 = 4000.0;
+// Temperature and humidity drift over many thousands of blocks, so a biome can fill much of a continent.
+const CLIMATE_WAVELENGTH: f64 = 12000.0;
 // Spreads the climate noise, which clusters around 0, out over the whole 0..1 range.
 const CLIMATE_CONTRAST: f64 = 1.6;
 
@@ -148,11 +148,12 @@ impl NoiseGenerator {
 
     // The base terrain, then whichever biomes the climate here calls for.
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
-        let (continentalness, height) = self.base_terrain(x, z);
+        let (continentalness, height, bumps) = self.base_terrain(x, z);
         let (height, biome) = self.biomes.shape(&BaseColumn {
             x,
             z,
             height,
+            bumps,
             continentalness,
             climate: self.climate(x, z),
         });
@@ -163,8 +164,9 @@ impl NoiseGenerator {
         }
     }
 
-    // Continentalness and height of the terrain every biome starts from.
-    fn base_terrain(&self, x: f64, z: f64) -> (f64, f64) {
+    // Continentalness and height of the terrain every biome starts from, and how much of that
+    // height is block-scale bumps.
+    fn base_terrain(&self, x: f64, z: f64) -> (f64, f64, f64) {
         let warp_x = self.warp_x.get([x, z]) * WARP_STRENGTH;
         let warp_z = self.warp_z.get([x, z]) * WARP_STRENGTH;
         let (wx, wz) = (x + warp_x, z + warp_z);
@@ -221,7 +223,7 @@ impl NoiseGenerator {
         let texture = self.texture.get([x, z]) * land_texture * sea_floor_blend * shore_fade;
 
         let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
-        (continentalness, height)
+        (continentalness, height, texture)
     }
 
     // How hot and wet the column at (x, z) is.
@@ -340,7 +342,7 @@ mod tests {
     fn test_climate_varies_across_the_whole_range() {
         let noise = NoiseGenerator::new(9);
         let samples: Vec<Climate> = (-40..40)
-            .flat_map(|z| (-40..40).map(move |x| (x as f64 * 200.0, z as f64 * 200.0)))
+            .flat_map(|z| (-40..40).map(move |x| (x as f64 * 400.0, z as f64 * 400.0)))
             .map(|(x, z)| noise.climate(x, z))
             .collect();
         for value in [|c: &Climate| c.temperature, |c: &Climate| c.humidity] {
