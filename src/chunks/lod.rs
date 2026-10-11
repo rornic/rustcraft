@@ -81,6 +81,14 @@ impl LodLayout {
         self.splits(LodKey::containing(chunk, 1), anchor)
     }
 
+    /// How far out, in chunks, the farthest LOD level starts: halfway out with no LOD levels.
+    pub fn last_level_start(self) -> f32 {
+        match self.max_level {
+            0 => self.render_distance / 2.0,
+            level => self.reach(level - 1),
+        }
+    }
+
     /// Whether `level` is drawn as a smooth surface instead of blocks: only the farthest
     /// level, and only when terrain is drawn far enough out.
     pub fn smooth(self, level: u8) -> bool {
@@ -901,6 +909,13 @@ mod tests {
         let far = LodLayout::new(16, 256, 4);
         assert!(far.smooth(far.max_level));
         assert!((0..far.max_level).all(|level| !far.smooth(level)));
+    }
+
+    #[test]
+    fn test_last_level_starts_where_the_one_before_ends() {
+        let layout = LodLayout::new(16, 256, 4);
+        assert_eq!(64.0, layout.last_level_start());
+        assert_eq!(32.0, LodLayout::new(64, 64, 4).last_level_start());
     }
 
     #[test]

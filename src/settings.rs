@@ -22,8 +22,6 @@ pub struct RendererSettings {
     pub lod_level_scale: u32,
     /// How long swapping between LOD levels takes to cross-fade, in seconds.
     pub lod_fade_seconds: f32,
-    /// How far out fog starts, as a fraction of the render distance, where it's fully opaque.
-    pub fog_start_fraction: f32,
 }
 
 impl Settings {
@@ -49,7 +47,6 @@ impl Default for RendererSettings {
             full_detail_distance: 32,
             lod_level_scale: 4,
             lod_fade_seconds: 1.5,
-            fog_start_fraction: 0.5,
         }
     }
 }
