@@ -1,9 +1,8 @@
 use rustcraft::settings::Settings;
 
+use bevy::core_pipeline::bloom::Bloom;
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
-use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::prelude::*;
-use bevy::render::view::ColorGrading;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
     insert_terrain_resources,
@@ -11,7 +10,8 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
-use rustcraft::sky::{gradient_skybox, FOG_MAX_OPACITY, HORIZON_COLOR};
+use rustcraft::sky::{gradient_skybox, sun, FOG_MAX_OPACITY, HORIZON_COLOR};
+use rustcraft::tonemap::{dry_color_grading, scene_colour, TONEMAPPING};
 
 fn setup_scene(
     mut commands: Commands,
@@ -55,16 +55,17 @@ fn setup_scene(
                 far: fog_distance + world_height as f32,
                 ..default()
             }),
-            // Depth of field needs HDR enabled on the camera.
+            // Depth of field, bloom and sunlight brighter than white all need HDR.
             Camera { hdr: true, ..default() },
-            // Camera3d requires Tonemapping, defaulting to TonyMcMapface - it
-            // deliberately desaturates brights, which dulled this game's flatter,
-            // saturated palette. None bypasses tonemapping, matching how colors
-            // looked before HDR was enabled for depth of field.
-            Tonemapping::None,
+            TONEMAPPING,
+            // Just a soft glow around the brightest sunlit faces and sky.
+            Bloom {
+                intensity: 0.05,
+                ..Bloom::NATURAL
+            },
             Msaa::Off,
             DistanceFog {
-                color: HORIZON_COLOR.with_alpha(FOG_MAX_OPACITY),
+                color: scene_colour(HORIZON_COLOR).with_alpha(FOG_MAX_OPACITY).into(),
                 falloff: FogFalloff::Linear {
                     start: fog_distance * renderer.fog_start_fraction.clamp(0.0, 0.99),
                     end: fog_distance,
@@ -80,10 +81,11 @@ fn setup_scene(
                 aperture_f_stops: 1.4,
                 ..default()
             },
-            ColorGrading::default(),
+            dry_color_grading(),
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
+    commands.spawn(sun(fog_distance));
 
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
@@ -121,10 +123,14 @@ fn main() {
                     ..default()
                 }),
             MaterialPlugin::<ChunkMaterial>::default(),
-            MaterialPlugin::<WaterMaterial>::default(),
+            // light passes through water, so it casts no shadow
+            MaterialPlugin::<WaterMaterial> {
+                shadows_enabled: false,
+                ..default()
+            },
             TerrainPlugin,
         ))
-        .insert_resource(ClearColor(HORIZON_COLOR))
+        .insert_resource(ClearColor(scene_colour(HORIZON_COLOR).into()))
         .add_systems(Startup, setup_scene)
         .add_systems(
             Update,

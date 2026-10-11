@@ -2,25 +2,70 @@ use bevy::{
     asset::{Assets, RenderAssetUsages},
     color::{Color, ColorToPacked, LinearRgba, Mix},
     core_pipeline::Skybox,
+    ecs::bundle::Bundle,
     image::Image,
     math::{Quat, Vec3},
+    pbr::{CascadeShadowConfigBuilder, DirectionalLight},
     render::{
         camera::Exposure,
         render_resource::{
             Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
         },
     },
+    transform::components::Transform,
 };
 
-/// The sky at the horizon, also used for fog so distant terrain fades into it.
+use crate::tonemap::scene_colour;
+
+/// The sky at the horizon as it looks on screen, also used for fog so distant terrain
+/// fades into it. Draw it with `scene_colour`, which undoes tonemapping.
 pub const HORIZON_COLOR: Color = Color::srgb(165.0 / 255.0, 200.0 / 255.0, 235.0 / 255.0);
 /// How opaque fog gets at its far end.
 pub const FOG_MAX_OPACITY: f32 = 0.8;
-/// The sky straight overhead.
+/// The sky straight overhead, as it looks on screen.
 pub const ZENITH_COLOR: Color = Color::srgb(60.0 / 255.0, 110.0 / 255.0, 200.0 / 255.0);
 
 // Texels per cubemap face side. The gradient is smooth, so this can be small.
 const FACE_SIZE: u32 = 128;
+// A light sky's scene colour can need to go past 1 to look right once tonemapped, beyond
+// what an 8-bit texture holds, so it stores them scaled down by this and the skybox scales
+// them back up.
+const SKY_TEXTURE_RANGE: f32 = 2.0;
+
+/// Which way the sun is from the ground: high enough to light the world well, low
+/// enough that hills and trees cast long shadows.
+pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
+/// Warm, to stand out against the cool light from the sky.
+pub const SUN_COLOR: Color = Color::srgb(1.0, 0.9, 0.75);
+// How bright sunlight is in the world shader, where the camera's exposure cancels out.
+const SUN_BRIGHTNESS: f32 = 1.3;
+// How far shadows reach, in blocks. Every cascade draws all the terrain in its slice
+// again, so this stays near the player, well short of the render distance.
+const SHADOW_DISTANCE: f32 = 160.0;
+// Bevy's default is four cascades: three is one pass over the terrain fewer, and still
+// keeps shadows sharp up close.
+const SHADOW_CASCADES: usize = 3;
+const FIRST_CASCADE_DISTANCE: f32 = 20.0;
+
+/// The sun, with shadows out to `SHADOW_DISTANCE` or `view_distance` if nearer.
+pub fn sun(view_distance: f32) -> impl Bundle {
+    (
+        DirectionalLight {
+            color: SUN_COLOR,
+            illuminance: SUN_BRIGHTNESS / Exposure::default().exposure(),
+            shadows_enabled: true,
+            ..Default::default()
+        },
+        Transform::default().looking_to(-SUN_DIRECTION, Vec3::Y),
+        CascadeShadowConfigBuilder {
+            num_cascades: SHADOW_CASCADES,
+            first_cascade_far_bound: FIRST_CASCADE_DISTANCE,
+            maximum_distance: SHADOW_DISTANCE.min(view_distance),
+            ..Default::default()
+        }
+        .build(),
+    )
+}
 
 /// A skybox shading from `HORIZON_COLOR` at the horizon to `ZENITH_COLOR` overhead.
 pub fn gradient_skybox(images: &mut Assets<Image>) -> Skybox {
@@ -29,7 +74,8 @@ pub fn gradient_skybox(images: &mut Assets<Image>) -> Skybox {
         for y in 0..FACE_SIZE {
             for x in 0..FACE_SIZE {
                 let colour = sky_colour(face_direction(face, x, y, FACE_SIZE));
-                data.extend_from_slice(&Color::from(colour).to_srgba().to_u8_array());
+                let stored = scene_colour(colour.into()) * (1.0 / SKY_TEXTURE_RANGE);
+                data.extend_from_slice(&Color::from(stored).to_srgba().to_u8_array());
             }
         }
     }
@@ -53,13 +99,14 @@ pub fn gradient_skybox(images: &mut Assets<Image>) -> Skybox {
 
     Skybox {
         image: images.add(image),
-        // cancels out camera exposure, which the terrain shaders don't use
-        brightness: 1.0 / Exposure::default().exposure(),
+        // cancels out camera exposure, which the terrain shaders also cancel
+        brightness: SKY_TEXTURE_RANGE / Exposure::default().exposure(),
         rotation: Quat::IDENTITY,
     }
 }
 
-// The square root keeps the paler band close to the horizon, like a real sky.
+// The sky as it looks on screen. The square root keeps the paler band close to the
+// horizon, like a real sky.
 fn sky_colour(direction: Vec3) -> LinearRgba {
     let height = direction.normalize().y.clamp(0.0, 1.0).sqrt();
     LinearRgba::from(HORIZON_COLOR).mix(&LinearRgba::from(ZENITH_COLOR), height)

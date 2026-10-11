@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use bevy::{
     core_pipeline::{
         dof::{DepthOfField, DepthOfFieldMode},
@@ -20,7 +22,7 @@ use bevy::{
     time::Time,
 };
 
-use crate::{block::BlockType, world::World};
+use crate::{block::BlockType, tonemap::scene_colour, world::World};
 
 #[derive(Bundle, Default)]
 pub struct PlayerBundle {
@@ -147,7 +149,7 @@ pub fn update_underwater_effects(
         ),
         With<Camera>,
     >,
-    mut dry_defaults: Local<Option<(DistanceFog, DepthOfField, Color, Option<Skybox>)>>,
+    mut dry_defaults: Local<Option<(DistanceFog, DepthOfField, ColorGrading, Color, Option<Skybox>)>>,
 ) {
     let (camera, parent, camera_transform, mut fog, mut dof, mut color_grading, skybox) =
         camera_query.get_single_mut().expect("camera does not exist");
@@ -162,14 +164,21 @@ pub fn update_underwater_effects(
 
     if world.get_block_at(block_coord) == BlockType::Water {
         if dry_defaults.is_none() {
-            *dry_defaults = Some((fog.clone(), *dof, clear_color.0, skybox.cloned()));
+            *dry_defaults = Some((
+                fog.clone(),
+                *dof,
+                color_grading.clone(),
+                clear_color.0,
+                skybox.cloned(),
+            ));
             // the skybox isn't fogged, so it's taken off to show the underwater colour
             commands.entity(camera).remove::<Skybox>();
         }
         // Matches ClearColor to the fog color, same trick setup_scene uses above water (its
         // ClearColor equals the dry fog's color) - otherwise empty/unloaded space shows the old
         // background color straight through, breaking the underwater illusion.
-        let underwater_color = Color::srgb_u8(20, 90, 130);
+        static UNDERWATER_COLOR: LazyLock<Color> = LazyLock::new(|| scene_colour(Color::srgb_u8(20, 90, 130)).into());
+        let underwater_color = *UNDERWATER_COLOR;
         *fog = DistanceFog {
             color: underwater_color,
             falloff: FogFalloff::Linear {
@@ -187,10 +196,12 @@ pub fn update_underwater_effects(
         color_grading.global.temperature = -0.4;
         color_grading.global.post_saturation = 0.85;
         clear_color.0 = underwater_color;
-    } else if let Some((dry_fog, dry_dof, dry_clear_color, dry_skybox)) = dry_defaults.take() {
+    } else if let Some((dry_fog, dry_dof, dry_color_grading, dry_clear_color, dry_skybox)) =
+        dry_defaults.take()
+    {
         *fog = dry_fog;
         *dof = dry_dof;
-        *color_grading = ColorGrading::default();
+        *color_grading = dry_color_grading;
         clear_color.0 = dry_clear_color;
         if let Some(skybox) = dry_skybox {
             commands.entity(camera).insert(skybox);

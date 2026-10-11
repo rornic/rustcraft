@@ -157,18 +157,14 @@ impl ChunkData {
 
     // Replaces the old `blocks().iter()` contract (the underlying map never stored Air):
     // yields every non-air block's coordinate and type, in no particular order.
-    pub fn iter_non_air(&self) -> impl Iterator<Item = (U16Vec3, BlockType)> {
-        let mut result = Vec::new();
+    pub fn iter_non_air(&self) -> impl Iterator<Item = (U16Vec3, BlockType)> + '_ {
         let mut start = 0usize;
-        for run in &self.runs {
-            if run.block != BlockType::Air {
-                for i in start..start + run.length as usize {
-                    result.push((self.coord_from_index(i), run.block));
-                }
-            }
+        self.runs.iter().flat_map(move |run| {
+            let first = start;
             start += run.length as usize;
-        }
-        result.into_iter()
+            let cells = if run.block == BlockType::Air { first..first } else { first..start };
+            cells.map(move |i| (self.coord_from_index(i), run.block))
+        })
     }
 
     pub fn get_block_at(&self, block_coord: U16Vec3) -> BlockType {

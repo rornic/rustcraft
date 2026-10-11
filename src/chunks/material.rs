@@ -6,10 +6,13 @@ use bevy::{
     render::{
         mesh::MeshVertexBufferLayoutRef,
         render_resource::{
-            AsBindGroup, Face, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
+            AsBindGroup, Face, RenderPipelineDescriptor, ShaderDefVal, ShaderRef,
+            SpecializedMeshPipelineError,
         },
     },
 };
+
+use crate::block::BlockType;
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct ChunkMaterial {
@@ -24,8 +27,23 @@ pub struct ChunkMaterial {
 }
 
 impl Material for ChunkMaterial {
+    // sways leaves in the wind
+    fn vertex_shader() -> ShaderRef {
+        "shaders/world.wgsl".into()
+    }
+
     fn fragment_shader() -> ShaderRef {
         "shaders/world.wgsl".into()
+    }
+
+    // sways leaves just as the main pass does, so they keep to their shadows
+    fn prepass_vertex_shader() -> ShaderRef {
+        "shaders/world_prepass.wgsl".into()
+    }
+
+    // cuts the holes in leaves out of their shadows too
+    fn prepass_fragment_shader() -> ShaderRef {
+        "shaders/world_prepass.wgsl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
@@ -39,6 +57,12 @@ impl Material for ChunkMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = Some(Face::Front);
+        // the main and shadow passes both sway leaves, see `foliage.wgsl`
+        let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), BlockType::Leaves as u32 - 1);
+        descriptor.vertex.shader_defs.push(leaf_cell.clone());
+        if let Some(fragment) = &mut descriptor.fragment {
+            fragment.shader_defs.push(leaf_cell);
+        }
         Ok(())
     }
 }
