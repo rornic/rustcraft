@@ -14,7 +14,7 @@ use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use super::columns::COARSE_CELL;
-use super::trees::{self, grows_into, trees_near, TREE_HEIGHT};
+use super::trees::{grows_into, trees_near, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -82,7 +82,7 @@ impl BlockSource for ChunkNeighbourhood<'_> {
     }
 }
 
-const SKIRT_CELLS: i32 = 2;
+const SKIRT_CELLS: i32 = 1;
 
 struct LodBlocks {
     size: i32,
@@ -98,9 +98,11 @@ struct LodBlocks {
 }
 
 // From afar, forests show as their canopy: leaves over this much of the ground for each
-// tree a cell grows, see `Biome::tree_density`, from these heights above it.
+// tree a cell grows, see `Biome::tree_density`. Cells with less than `CANOPY_MIN_COVER` of it
+// draw no trees, and the rest a solid canopy this high above the ground.
 const CANOPY_COVER: f64 = 1.6;
-const CANOPY: (i64, i64) = (5, 18);
+const CANOPY_MIN_COVER: f64 = 0.5;
+const CANOPY_HEIGHT: i64 = 20;
 
 impl LodBlocks {
     fn sample(regions: &RegionStore, key: LodKey) -> Self {
@@ -131,19 +133,19 @@ impl LodBlocks {
                 let world_z = base.z + cz as i64 * cell + cell / 2;
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
                 let ground = column_block(noise.biomes(), biome, height - 1, height, gradient, temperature);
-                let chance = (trees::hash(noise.seed() as u64, world_x, world_z) & 0xffff) as f64 / 65536.0;
-                let wooded = ground == BlockType::Grass && chance < grid.trees(cx, cz) * CANOPY_COVER;
-                // at least one cell's worth, however coarse the cells
-                let canopy = height + CANOPY.0..height + CANOPY.1.max(cell);
+                let wooded = ground == BlockType::Grass && grid.trees(cx, cz) * CANOPY_COVER >= CANOPY_MIN_COVER;
+                let canopy_top = height + CANOPY_HEIGHT;
 
-                tops[Self::column(size, cx, cz)] = ground_top(height);
+                tops[Self::column(size, cx, cz)] = if wooded { canopy_top } else { ground_top(height) };
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     let mut block = column_block(noise.biomes(), biome, world_y, height, gradient, temperature);
                     if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
                         block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient, temperature);
                     }
-                    if wooded && block == BlockType::Air && canopy.contains(&world_y) {
+                    // the canopy fills the column up to its top, which `find_surface_top` trims to its real height
+                    let bottom = base.y + cy as i64 * cell;
+                    if wooded && bottom < canopy_top && (block == BlockType::Air || bottom + cell >= canopy_top) {
                         block = BlockType::Leaves;
                     }
                     cells[Self::index(size, IVec3::new(cx, cy, cz))] = block;
@@ -243,7 +245,7 @@ impl LodBlocks {
         }
         let ground = matches!(
             self.raw(coord),
-            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow
+            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow | BlockType::Leaves
         );
         let beside_water = [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
             .iter()
@@ -1071,7 +1073,12 @@ fn mesh_opaque_greedy(
                     // lit by the air over it, and is too thin to shade smoothly
                     let step = span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
                     let smooth = smooth && !step;
-                    let lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
+                    let mut lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
+                    // a skirt wall past the mesh's edge faces a buried cell, see `LodBlocks::block`, so takes its light from the air above
+                    if !inside && normal.y == 0 {
+                        let air = (0..=SKIRT_CELLS).find(|&dy| !is_solid(source.terrain(lit_from + IVec3::Y * dy)));
+                        lit_from += IVec3::Y * air.unwrap_or(0);
+                    }
                     mask[(b * size + a) as usize] = span.map(|span| FaceCell {
                         span,
                         block,
@@ -2042,11 +2049,11 @@ mod tests {
     #[test]
     fn test_lod_border_exposes_surface_cells_as_skirt() {
         let lod = flat_lod(8);
-        // the border's top two solid cells read as open, so the edge draws a wall
+        // the border's top solid cell reads as open, so the edge draws a wall
         assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 7, 4)));
-        assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 6, 16)));
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 7, 16)));
         // deeper border cells and every interior cell read as they are
-        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 5, 4)));
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 6, 4)));
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
         // below the node isn't a horizontal border, so no skirt
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));

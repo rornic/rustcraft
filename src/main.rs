@@ -2,11 +2,12 @@ use rustcraft::settings::Settings;
 
 use bevy::core_pipeline::bloom::Bloom;
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::core_pipeline::smaa::{Smaa, SmaaPreset};
 use bevy::prelude::*;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
     insert_terrain_resources,
-    material::{ChunkMaterial, WaterMaterial},
+    material::{block_atlas, ChunkMaterial, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
@@ -17,7 +18,6 @@ use rustcraft::tonemap::{dry_color_grading, scene_colour, TONEMAPPING};
 
 fn setup_scene(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -66,7 +66,9 @@ fn setup_scene(
                 intensity: 0.05,
                 ..Bloom::NATURAL
             },
+            // SMAA instead, for the thin faces and one-block steps that shimmer at a distance
             Msaa::Off,
+            Smaa { preset: SmaaPreset::High },
             DistanceFog {
                 color: scene_colour(HORIZON_COLOR).with_alpha(FOG_MAX_OPACITY).into(),
                 falloff: FogFalloff::Linear {
@@ -77,26 +79,24 @@ fn setup_scene(
                 },
                 ..default()
             },
-            // Keeps nearby gameplay (within ~1.5 chunks) sharp and softens
-            // everything farther out - Gaussian over Bokeh since render distance is
-            // already large and Bokeh is the pricier of the two modes.
+            // In focus 8 blocks out, blurred ~1px at 16 blocks and ~2px from 150 on, so LOD seams soften. Gaussian is cheaper than Bokeh.
             DepthOfField {
                 mode: DepthOfFieldMode::Gaussian,
-                focal_distance: 24.0,
-                aperture_f_stops: 1.4,
+                focal_distance: 8.0,
+                aperture_f_stops: 2.2,
                 ..default()
             },
             dry_color_grading(),
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
-    // shadows reach as far as full-detail terrain, beyond which LODs take over
-    let shadow_distance = (layout.full_detail_distance * 16.0).min(fog_distance);
-    commands.spawn(sun(shadow_distance));
+    let shadow_distance = (renderer.shadow_distance as f32 * 16.0).min(fog_distance);
+    commands.spawn(sun(shadow_distance, renderer.shadow_cascades));
 
+    let atlas = images.add(block_atlas("assets/textures/blocks.png"));
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
-        texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        texture: Some(atlas.clone()),
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
@@ -104,7 +104,7 @@ fn setup_scene(
     });
     let water_material_handle = water_materials.add(WaterMaterial {
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
-        texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        texture: Some(atlas),
         fade: FULLY_VISIBLE,
     });
     insert_terrain_resources(
