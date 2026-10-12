@@ -39,8 +39,14 @@ fn vertex(vertex: prepass_io::Vertex) -> prepass_io::VertexOutput {
     return out;
 }
 
-// Only leaves have holes, so only they pay for a texture sample.
+// Only leaves have holes, so only they pay for a texture sample. Untextured LOD cells
+// draw leaves solid, so cast solid shadows too.
 fn cut_leaf_holes(in: prepass_io::VertexOutput) {
+#ifdef VERTEX_UVS_B
+    if in.uv_b.y > 0.5 {
+        return;
+    }
+#endif
     if is_leaf(in.color.a) && block_alpha(in.uv, in.color.a) < 0.5 {
         discard;
     }

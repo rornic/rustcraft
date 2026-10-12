@@ -6,7 +6,7 @@
     shadows::fetch_directional_shadow,
     view_transformations::{position_world_to_clip, position_world_to_view},
 }
-#import "shaders/block_texture.wgsl"::{block_texel, material_fade}
+#import "shaders/block_texture.wgsl"::{block_mean, block_texel, material_fade}
 #import "shaders/foliage.wgsl"::swayed
 #import "shaders/fog.wgsl"::fogged
 #import "shaders/lighting.wgsl"::{direct_sun, open_sky}
@@ -85,6 +85,13 @@ fn fragment(
     let normal = normalize(in.world_normal);
 
     var color = block_texel(in.uv, in.color.a);
+#ifdef VERTEX_UVS_B
+    // coarse LOD cells, where a stretched texture would read as one giant block. Leaves
+    // come out solid, and their shadows match, see `world_prepass.wgsl`.
+    if in.uv_b.y > 0.5 {
+        color = block_mean(in.color.a);
+    }
+#endif
     // ambient occlusion and grass/leaf tint
     color = vec4<f32>(color.rgb * in.color.rgb, color.a);
 

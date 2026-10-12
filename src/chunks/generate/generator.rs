@@ -487,6 +487,8 @@ struct MeshBuffers {
     colors: Vec<[f32; 4]>,
     // sky light per vertex, for block faces only, see `world.wgsl`
     lights: Vec<f32>,
+    // whether faces draw their block's mean colour instead of its texture, see `world.wgsl`
+    untextured: bool,
 }
 
 impl MeshBuffers {
@@ -601,7 +603,8 @@ impl MeshBuffers {
         );
         if !self.lights.is_empty() {
             assert_eq!(self.lights.len(), self.vertices.len(), "only some vertices carry light");
-            let lights = self.lights.into_iter().map(|l| [l, 0.0]).collect();
+            let untextured = if self.untextured { 1.0 } else { 0.0 };
+            let lights = self.lights.into_iter().map(|l| [l, untextured]).collect();
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(lights));
         }
         mesh
@@ -697,7 +700,7 @@ pub fn generate_chunk_mesh(
     let tint = GrassTint::new(noise, (coord.0 * CHUNK_SIZE as i64).as_vec3(), 1.0);
     // worked out only once there's a face to light: buried and empty chunks have none
     let light = LazyCell::new(|| neighbourhood_light(&chunk, &adjacent_chunks, coord));
-    mesh_blocks(&source, 1, true, &tint, &light)
+    mesh_blocks(&source, 1, true, true, &tint, &light)
 }
 
 // Light falling into the top of a box whose highest block is at `top`, in boxes of `cell`
@@ -745,6 +748,10 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
 // their faces merging, so coarser block LODs leave it out.
 const AO_MAX_CELL_SIZE: i64 = 2;
 
+// A block texture stretched over a cell wider than this reads as one giant block, so
+// coarser block LODs draw each block's mean colour instead.
+const TEXTURE_MAX_CELL_SIZE: i64 = 1;
+
 pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
     let cell_size = key.cell_size();
     // matches `lod_transform`
@@ -757,7 +764,14 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
         let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
         SkyLight::new(IVec3::splat(-1), IVec3::splat(blocks.size + 2), sky_above(top, cell_size), opacity)
     });
-    let meshes = mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, &tint, &light);
+    let meshes = mesh_blocks(
+        &blocks,
+        cell_size,
+        cell_size <= AO_MAX_CELL_SIZE,
+        cell_size <= TEXTURE_MAX_CELL_SIZE,
+        &tint,
+        &light,
+    );
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
     }
@@ -971,10 +985,14 @@ fn mesh_blocks(
     source: &impl BlockSource,
     cell_size: i64,
     ambient_occlusion: bool,
+    textured: bool,
     grass_tint: &GrassTint,
     light: &impl Deref<Target = SkyLight>,
 ) -> ChunkMeshes {
-    let mut opaque = MeshBuffers::default();
+    let mut opaque = MeshBuffers {
+        untextured: !textured,
+        ..Default::default()
+    };
     let mut water = MeshBuffers::default();
 
     let cube_vertices = crate::util::primitives::cube();
@@ -1556,6 +1574,34 @@ mod tests {
         assert!(!lights.is_empty());
         let dark: Vec<_> = lights.iter().filter(|(_, l)| *l < 1.0).collect();
         assert!(dark.is_empty(), "shaded under open sky: {dark:?}");
+    }
+
+    // whether each vertex draws its block's mean colour instead of its texture, see `world.wgsl`
+    fn untextured_flags(mesh: &Mesh) -> Vec<f32> {
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+            panic!("missing light");
+        };
+        lights.iter().map(|l| l[1]).collect()
+    }
+
+    #[test]
+    fn test_chunks_are_textured() {
+        let flags = untextured_flags(&mesh_chunk(floor_chunk()).opaque);
+        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 0.0));
+    }
+
+    #[test]
+    fn test_coarse_lods_are_untextured() {
+        use bevy::math::I64Vec2;
+
+        let noise = Arc::new(NoiseGenerator::new(42));
+        let height = noise.get(I64Vec2::ZERO) as i64;
+        let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
+        let regions = Arc::new(RegionStore::new(noise));
+        let key = crate::chunks::lod::LodKey::containing(chunk, 1);
+        assert!(key.cell_size() > super::TEXTURE_MAX_CELL_SIZE);
+        let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
+        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 1.0));
     }
 
     #[test]
