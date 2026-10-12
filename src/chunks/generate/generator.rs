@@ -985,6 +985,11 @@ fn mesh_opaque_greedy(
                     // unshaded leaves merge into big quads, which keeps the faces between them cheap,
                     // so they and coarse LODs take one light level a face instead of smooth light
                     let smooth = ambient_occlusion && block != BlockType::Leaves;
+                    // a step above lowered ground faces into that ground's cell, which is dark: it's
+                    // lit by the air over it, and is too thin to shade smoothly
+                    let step = normal.y == 0 && source.block(coord + normal).is_opaque();
+                    let smooth = smooth && !step;
+                    let lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
                     mask[(b * size + a) as usize] = span.map(|span| FaceCell {
                         span,
                         block,
@@ -996,7 +1001,7 @@ fn mesh_opaque_greedy(
                         light: if smooth {
                             std::array::from_fn(|j| vertex_light(source, light, coord, i, template[j].position))
                         } else {
-                            [face_light(light.level(coord + normal)); 4]
+                            [face_light(light.level(lit_from)); 4]
                         },
                     });
                 }
@@ -1464,22 +1469,23 @@ mod tests {
         LodBlocks { size, cells, tops, base_y: 0, cell: 1 }
     }
 
-    // Grass two cells of 4 blocks deep, its ground 6 blocks high for x < 8 and 7 blocks beyond:
-    // both inside the second cell, so its top is lowered.
+    // Grass two cells of 4 blocks deep, its ground 6 blocks up the node for x < 8 and 7 blocks
+    // beyond: both inside the second cell, so its top is lowered. Above the sea, under open sky.
     fn sloped_lod() -> LodBlocks {
+        let base_y = WATER_LEVEL + 64;
         let size = 16;
         let padded = (size + 2) as usize;
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
         for x in -1..=size {
             for z in -1..=size {
-                tops[LodBlocks::column(size, x, z)] = if x < 8 { 6 } else { 7 };
+                tops[LodBlocks::column(size, x, z)] = base_y + if x < 8 { 6 } else { 7 };
                 for y in -1..=1 {
                     cells[LodBlocks::index(size, IVec3::new(x, y, z))] = BlockType::Grass;
                 }
             }
         }
-        LodBlocks { size, cells, tops, base_y: 0, cell: 4 }
+        LodBlocks { size, cells, tops, base_y, cell: 4 }
     }
 
     // `lod`'s opaque mesh, lit as `generate_lod_mesh` lights it
@@ -1548,6 +1554,26 @@ mod tests {
         for (_, vs) in step {
             assert!(vs.iter().all(|v| v[1] == 1.0 || v[1] == 1.25), "step at {vs:?}");
         }
+    }
+
+    #[test]
+    fn test_lod_steps_are_lit_by_the_air_above_the_lower_ground() {
+        let mesh = mesh_lod(&sloped_lod());
+        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            panic!("missing positions");
+        };
+        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            panic!("missing normals");
+        };
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+            panic!("missing light");
+        };
+        let step: Vec<f32> = (0..positions.len())
+            .filter(|&i| normals[i] == [-1.0, 0.0, 0.0] && positions[i][0] == 7.5 && positions[i][1] >= 1.0)
+            .map(|i| lights[i][0])
+            .collect();
+        assert!(!step.is_empty());
+        assert!(step.iter().all(|&l| l == 1.0), "steps under open sky lit {step:?}");
     }
 
     fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
