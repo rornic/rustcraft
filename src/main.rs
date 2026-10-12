@@ -77,13 +77,11 @@ fn setup_scene(
                 },
                 ..default()
             },
-            // Keeps nearby gameplay (within ~1.5 chunks) sharp and softens
-            // everything farther out - Gaussian over Bokeh since render distance is
-            // already large and Bokeh is the pricier of the two modes.
+            // In focus 8 blocks out, blurred ~1px at 16 blocks and ~2px from 150 on, so LOD seams soften. Gaussian is cheaper than Bokeh.
             DepthOfField {
                 mode: DepthOfFieldMode::Gaussian,
-                focal_distance: 24.0,
-                aperture_f_stops: 1.4,
+                focal_distance: 8.0,
+                aperture_f_stops: 2.2,
                 ..default()
             },
             dry_color_grading(),
