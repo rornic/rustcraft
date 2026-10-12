@@ -11,6 +11,7 @@
 #import "shaders/fog.wgsl"::fogged
 #import "shaders/lighting.wgsl"::{direct_sun, open_sky}
 #import "shaders/cloud_shadow.wgsl"::cloud_shadow
+#import "shaders/lod_patch.wgsl"::patch_tint
 #import "shaders/dither.wgsl"::dither_threshold
 // All that's left with no sky light at all, so caves aren't pitch black.
 const CAVE_AMBIENT: vec3<f32> = vec3<f32>(0.02, 0.02, 0.025);
@@ -89,7 +90,8 @@ fn fragment(
     // coarse LOD cells, where a stretched texture would read as one giant block. Leaves
     // come out solid, and their shadows match, see `world_prepass.wgsl`.
     if in.uv_b.y > 0.5 {
-        color = block_mean(in.color.a);
+        let mean = block_mean(in.color.a);
+        color = vec4<f32>(mean.rgb * patch_tint(world_position), mean.a);
     }
 #endif
 #ifdef SOLID_LEAVES
