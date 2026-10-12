@@ -21,12 +21,12 @@ use crate::chunks::material::{push_shader_defs, water_level};
 /// Height of the clouds' undersides: above most land, so only the tallest peaks reach them.
 pub const CLOUD_BASE: f32 = 720.0;
 // Clouds are blocks this wide and tall.
-const CELL: f32 = 12.0;
-const THICKNESS: f32 = 4.0;
+const CELL: f32 = 20.0;
+const THICKNESS: f32 = 8.0;
 // Cells across the pattern, which repeats seamlessly.
 const PATTERN: usize = 256;
 // How much of the sky is cloud.
-const COVER: f64 = 0.35;
+const COVER: f64 = 0.2;
 // Roughly how many cells across a cloud is.
 const CLOUD_CELLS: f64 = 10.0;
 // Copies of the pattern drawn out from the one over the camera, each way: enough to reach
@@ -67,6 +67,10 @@ impl Material for CloudMaterial {
         "shaders/clouds.wgsl".into()
     }
 
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
+    }
+
     fn specialize(
         _pipeline: &MaterialPipeline<Self>,
         descriptor: &mut RenderPipelineDescriptor,
@@ -97,7 +101,7 @@ struct CloudTile {
 /// Which cells of the pattern are cloud, `PATTERN` x `PATTERN`, row-major [x][z]. Sampled
 /// round a torus in 4D noise, so it wraps at its edges without a seam.
 fn cloud_pattern(seed: u32) -> Vec<bool> {
-    let noise = Fbm::<Perlin>::new(seed).set_octaves(4);
+    let noise = Fbm::<Perlin>::new(seed).set_octaves(3);
     let radius = PATTERN as f64 / (TAU * CLOUD_CELLS);
     let around = |cell: usize| {
         let angle = TAU * cell as f64 / PATTERN as f64;
