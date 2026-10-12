@@ -51,6 +51,12 @@ trait BlockSource {
     fn terrain(&self, coord: IVec3) -> BlockType {
         self.block(coord)
     }
+
+    /// Where the ground really tops out in a LOD surface cell, in mesh units, when that's
+    /// below the top of the cell. See `LodBlocks::surface_top`.
+    fn surface_top(&self, _coord: IVec3) -> Option<f32> {
+        None
+    }
 }
 
 struct ChunkNeighbourhood<'a> {
@@ -76,6 +82,11 @@ const SKIRT_CELLS: i32 = 2;
 struct LodBlocks {
     size: i32,
     cells: Vec<BlockType>,
+    // the ground's height in blocks under each padded column, ground being below it
+    tops: Vec<i64>,
+    // the node's lowest block and cell size, to place `tops` among the cells
+    base_y: i64,
+    cell: i64,
 }
 
 // From afar, forests show as their canopy: leaves over this much of the ground for each
@@ -99,6 +110,7 @@ impl LodBlocks {
         let cell = key.cell_size();
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
+        let mut tops = vec![0; padded * padded];
         let grid = regions.column_grid(key);
         let noise = regions.noise();
 
@@ -115,9 +127,13 @@ impl LodBlocks {
                 // at least one cell's worth, however coarse the cells
                 let canopy = height + CANOPY.0..height + CANOPY.1.max(cell);
 
+                tops[Self::column(size, cx, cz)] = ground_top(height);
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     let mut block = column_block(noise.biomes(), biome, world_y, height, gradient);
+                    if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
+                        block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient);
+                    }
                     if wooded && block == BlockType::Air && canopy.contains(&world_y) {
                         block = BlockType::Leaves;
                     }
@@ -125,7 +141,7 @@ impl LodBlocks {
                 }
             }
         }
-        Self { size, cells }
+        Self { size, cells, tops, base_y: base.y, cell }
     }
 
     // From full-detail regions, with real trees.
@@ -135,6 +151,7 @@ impl LodBlocks {
         let cell = key.cell_size();
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
+        let mut tops = vec![0; padded * padded];
         let mut heights = regions.sampler();
         let biomes = regions.noise().biomes();
         let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
@@ -149,10 +166,15 @@ impl LodBlocks {
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
                 let biome = heights.biome(world_x, world_z);
 
+                let top = ground_top(column_height);
+                tops[Self::column(size, cx, cz)] = top;
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
-                    cells[Self::index(size, IVec3::new(cx, cy, cz))] =
-                        column_block(biomes, biome, world_y, column_height, combined_gradient);
+                    let mut block = column_block(biomes, biome, world_y, column_height, combined_gradient);
+                    if block == BlockType::Air && base.y + cy as i64 * cell < top {
+                        block = column_block(biomes, biome, top - 1, column_height, combined_gradient);
+                    }
+                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = block;
                 }
             }
         }
@@ -170,7 +192,36 @@ impl LodBlocks {
             }
         }
 
-        Self { size, cells }
+        Self { size, cells, tops, base_y: base.y, cell }
+    }
+
+    fn column(size: i32, cx: i32, cz: i32) -> usize {
+        let padded = size + 2;
+        ((cx + 1) * padded + cz + 1) as usize
+    }
+
+    // The cell holding the ground's surface is solid however little of it the ground fills,
+    // and its top drawn at the ground's real height instead, so slopes step a block at a
+    // time however coarse the cells. Only under open air: under water or leaves, and beside
+    // water, the whole cell is drawn, since they fill the cell above from its bottom.
+    fn surface_top(&self, coord: IVec3) -> Option<f32> {
+        let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
+        let top = self.tops[Self::column(self.size, coord.x, coord.z)];
+        let bottom = self.base_y + coord.y as i64 * self.cell;
+        if !(bottom < top && top < bottom + self.cell) {
+            return None;
+        }
+        let ground = matches!(
+            self.raw(coord),
+            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow
+        );
+        let beside_water = [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
+            .iter()
+            .any(|&side| self.raw(coord + side) == BlockType::Water);
+        if !ground || beside_water || self.raw(coord + IVec3::Y) != BlockType::Air {
+            return None;
+        }
+        Some((top - self.base_y) as f32 / self.cell as f32 - 0.5)
     }
 
     fn index(size: i32, coord: IVec3) -> usize {
@@ -188,6 +239,10 @@ impl LodBlocks {
 impl BlockSource for LodBlocks {
     fn terrain(&self, coord: IVec3) -> BlockType {
         self.raw(coord)
+    }
+
+    fn surface_top(&self, coord: IVec3) -> Option<f32> {
+        LodBlocks::surface_top(self, coord)
     }
 
     fn block(&self, coord: IVec3) -> BlockType {
@@ -236,8 +291,13 @@ fn snow_holding_slope(above_sea: i64) -> f64 {
     1.5 + 3.0 * t
 }
 
+// The height, in blocks, the ground of a column `column_height` high is solid up to.
+fn ground_top(column_height: i64) -> i64 {
+    column_height.max(SOLID_FLOOR)
+}
+
 fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
-    if world_y < column_height.max(SOLID_FLOOR) {
+    if world_y < ground_top(column_height) {
         let above_sea = world_y - WATER_LEVEL;
         if above_sea >= SNOW_LINE && combined_gradient <= snow_holding_slope(above_sea) {
             BlockType::Snow
@@ -830,6 +890,10 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
     fn non_air(&self) -> Vec<(IVec3, BlockType)> {
         self.source.non_air()
     }
+
+    fn surface_top(&self, coord: IVec3) -> Option<f32> {
+        self.source.surface_top(coord)
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -838,6 +902,8 @@ struct FaceCell {
     ao: [f32; 4],
     // sky light at each corner, 0..1
     light: [f32; 4],
+    // where the face starts and ends up the mesh, if not the whole cell, see `face_span`
+    span: Option<[f32; 2]>,
 }
 
 impl FaceCell {
@@ -852,7 +918,32 @@ impl FaceCell {
             && other.flat()
             && self.ao[0] == other.ao[0]
             && self.light[0] == other.light[0]
+            && self.span == other.span
     }
+}
+
+// Whether a face of `block` at `coord` shows, and if so how much of it up the mesh's y axis,
+// with LOD surface cells topped out at the ground's real height (see `LodBlocks::surface_top`):
+// `Some(None)` for the whole face.
+fn face_span(source: &impl BlockSource, coord: IVec3, normal: IVec3, block: BlockType) -> Option<Option<[f32; 2]>> {
+    if matches!(block, BlockType::Air | BlockType::Water) {
+        return None;
+    }
+    let neighbour = coord + normal;
+    let covered = source.block(neighbour).is_opaque();
+    let top = source.surface_top(coord);
+    if normal.y != 0 {
+        // a lowered top still faces the air, and bottoms are never lowered
+        return (!covered).then(|| top.filter(|_| normal.y > 0).map(|t| [t, t]));
+    }
+    let bottom = coord.y as f32 - 0.5;
+    // a lowered neighbour leaves this side bare above the ground's real height
+    let floor = if covered { source.surface_top(neighbour)? } else { bottom };
+    let ceiling = top.unwrap_or(bottom + 1.0);
+    if ceiling <= floor {
+        return None;
+    }
+    Some((top.is_some() || covered).then_some([floor, ceiling]))
 }
 
 // Merges runs of identical, flat-shaded opaque faces into single quads, one face direction slice at a time.
@@ -890,12 +981,12 @@ fn mesh_opaque_greedy(
                     let coord = normal_unit * slice + ta * a + tb * b;
                     let block = source.block(coord);
                     // faces show through leaves' holes, including other leaves'
-                    let visible = !matches!(block, BlockType::Air | BlockType::Water)
-                        && !source.block(coord + normal).is_opaque();
+                    let span = face_span(source, coord, normal, block);
                     // unshaded leaves merge into big quads, which keeps the faces between them cheap,
                     // so they and coarse LODs take one light level a face instead of smooth light
                     let smooth = ambient_occlusion && block != BlockType::Leaves;
-                    mask[(b * size + a) as usize] = visible.then(|| FaceCell {
+                    mask[(b * size + a) as usize] = span.map(|span| FaceCell {
+                        span,
                         block,
                         ao: if smooth {
                             std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position))
@@ -918,7 +1009,8 @@ fn mesh_opaque_greedy(
                     };
 
                     let (mut w, mut h) = (1, 1);
-                    if cell.flat() {
+                    // a trimmed side's edges sit off the cell grid its neighbours' vertices are on
+                    if cell.flat() && (cell.span.is_none() || normal.y > 0) {
                         while a0 + w < n && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_with(&o)) {
                             w += 1;
                         }
@@ -943,7 +1035,13 @@ fn mesh_opaque_greedy(
                         (tint * ao).extend(atlas_cell).to_array()
                     };
                     if w == 1 && h == 1 {
-                        let positions: [Vec3; 4] = std::array::from_fn(|j| Vec3::from(template[j].position) + origin);
+                        let positions: [Vec3; 4] = std::array::from_fn(|j| {
+                            let mut position = Vec3::from(template[j].position) + origin;
+                            if let Some([floor, ceiling]) = cell.span {
+                                position.y = if template[j].position[1] > 0.0 { ceiling } else { floor };
+                            }
+                            position
+                        });
                         let uvs = std::array::from_fn(|j| template[j].uv);
                         let colors = std::array::from_fn(|j| color(cell.ao[j], positions[j]));
                         let positions = positions.map(|p| p.to_array());
@@ -955,6 +1053,9 @@ fn mesh_opaque_greedy(
                     corner[a_axis] -= 0.5;
                     corner[b_axis] -= 0.5;
                     corner[normal_axis] += template[0].position[normal_axis];
+                    if let Some([_, ceiling]) = cell.span {
+                        corner.y = ceiling;
+                    }
                     let extent = [w as f32, h as f32];
                     let uv_at = |i: usize, j: usize| {
                         let along = [i as f32, j as f32];
@@ -1359,7 +1460,94 @@ mod tests {
                 }
             }
         }
-        LodBlocks { size, cells }
+        let tops = vec![surface_y as i64; padded * padded];
+        LodBlocks { size, cells, tops, base_y: 0, cell: 1 }
+    }
+
+    // Grass two cells of 4 blocks deep, its ground 6 blocks high for x < 8 and 7 blocks beyond:
+    // both inside the second cell, so its top is lowered.
+    fn sloped_lod() -> LodBlocks {
+        let size = 16;
+        let padded = (size + 2) as usize;
+        let mut cells = vec![BlockType::Air; padded * padded * padded];
+        let mut tops = vec![0; padded * padded];
+        for x in -1..=size {
+            for z in -1..=size {
+                tops[LodBlocks::column(size, x, z)] = if x < 8 { 6 } else { 7 };
+                for y in -1..=1 {
+                    cells[LodBlocks::index(size, IVec3::new(x, y, z))] = BlockType::Grass;
+                }
+            }
+        }
+        LodBlocks { size, cells, tops, base_y: 0, cell: 4 }
+    }
+
+    // `lod`'s opaque mesh, lit as `generate_lod_mesh` lights it
+    fn mesh_lod(lod: &LodBlocks) -> Mesh {
+        let top = lod.base_y + (lod.size as i64 + 1) * lod.cell;
+        let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
+        let light = Box::new(super::SkyLight::new(IVec3::splat(-1), IVec3::splat(lod.size + 2), super::sky_above(top, lod.cell), opacity));
+        let tint = GrassTint::new(&NoiseGenerator::new(3), Vec3::ZERO, lod.cell as f32);
+        super::mesh_blocks(lod, lod.cell, false, false, &tint, &light).opaque
+    }
+
+    // each face's normal and its vertices' positions
+    fn faces(mesh: &Mesh) -> Vec<([f32; 3], Vec<[f32; 3]>)> {
+        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            panic!("missing positions");
+        };
+        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            panic!("missing normals");
+        };
+        let mut faces: Vec<([f32; 3], Vec<[f32; 3]>)> = Vec::new();
+        for (p, n) in positions.iter().zip(normals) {
+            match faces.iter_mut().find(|(normal, vs)| normal == n && vs.len() < 4) {
+                Some((_, vs)) => vs.push(*p),
+                None => faces.push((*n, vec![*p])),
+            }
+        }
+        faces
+    }
+
+    #[test]
+    fn test_lod_surface_tops_out_at_the_grounds_height() {
+        let lod = sloped_lod();
+        // (6 - 0) / 4 - 0.5 and (7 - 0) / 4 - 0.5, in cell units centred on the cells
+        assert_eq!(Some(1.0), lod.surface_top(IVec3::new(2, 1, 2)));
+        assert_eq!(Some(1.25), lod.surface_top(IVec3::new(10, 1, 2)));
+        assert_eq!(None, lod.surface_top(IVec3::new(2, 0, 2)));
+    }
+
+    #[test]
+    fn test_lod_surface_under_water_fills_its_cell() {
+        let mut lod = sloped_lod();
+        lod.cells[LodBlocks::index(16, IVec3::new(2, 2, 2))] = BlockType::Water;
+        assert_eq!(None, lod.surface_top(IVec3::new(2, 1, 2)));
+        // nor does one beside water, which would show a gap under the water's side
+        lod.cells[LodBlocks::index(16, IVec3::new(6, 1, 2))] = BlockType::Water;
+        assert_eq!(None, lod.surface_top(IVec3::new(5, 1, 2)));
+        assert_eq!(Some(1.0), lod.surface_top(IVec3::new(4, 1, 2)));
+    }
+
+    #[test]
+    fn test_lod_tops_are_drawn_at_the_grounds_height_with_a_step_between() {
+        let faces = faces(&mesh_lod(&sloped_lod()));
+        let tops: Vec<f32> = faces
+            .iter()
+            .filter(|(n, _)| *n == [0.0, 1.0, 0.0])
+            .flat_map(|(_, vs)| vs.iter().map(|v| v[1]))
+            .collect();
+        assert!(tops.contains(&1.0) && tops.contains(&1.25));
+        assert!(tops.iter().all(|&y| y == 1.0 || y == 1.25), "tops at {tops:?}");
+        // the higher ground's side, facing the lower, covers just the step between them
+        let step: Vec<_> = faces
+            .iter()
+            .filter(|(n, vs)| *n == [-1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 7.5))
+            .collect();
+        assert!(!step.is_empty());
+        for (_, vs) in step {
+            assert!(vs.iter().all(|v| v[1] == 1.0 || v[1] == 1.25), "step at {vs:?}");
+        }
     }
 
     fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
