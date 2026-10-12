@@ -57,6 +57,11 @@ trait BlockSource {
     fn surface_top(&self, _coord: IVec3) -> Option<f32> {
         None
     }
+
+    /// Whether any cell has a `surface_top`, so meshing can skip asking when none do.
+    fn has_surface_tops(&self) -> bool {
+        false
+    }
 }
 
 struct ChunkNeighbourhood<'a> {
@@ -89,6 +94,7 @@ struct LodBlocks {
     cell: i64,
     // `surface_top` for each padded cell, worked out once since meshing asks for every face
     surface_tops: Vec<Option<f32>>,
+    any_surface_tops: bool,
 }
 
 // From afar, forests show as their canopy: leaves over this much of the ground for each
@@ -198,7 +204,7 @@ impl LodBlocks {
     }
 
     fn new(size: i32, cells: Vec<BlockType>, tops: Vec<i64>, base_y: i64, cell: i64) -> Self {
-        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new() };
+        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false };
         blocks.surface_tops = vec![None; blocks.cells.len()];
         for x in -1..=size {
             for z in -1..=size {
@@ -208,6 +214,7 @@ impl LodBlocks {
                 }
             }
         }
+        blocks.any_surface_tops = blocks.surface_tops.iter().any(Option::is_some);
         blocks
     }
 
@@ -263,6 +270,10 @@ impl BlockSource for LodBlocks {
 
     fn surface_top(&self, coord: IVec3) -> Option<f32> {
         LodBlocks::surface_top(self, coord)
+    }
+
+    fn has_surface_tops(&self) -> bool {
+        self.any_surface_tops
     }
 
     fn block(&self, coord: IVec3) -> BlockType {
@@ -914,6 +925,10 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
     fn surface_top(&self, coord: IVec3) -> Option<f32> {
         self.source.surface_top(coord)
     }
+
+    fn has_surface_tops(&self) -> bool {
+        self.source.has_surface_tops()
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -951,14 +966,18 @@ fn face_span(source: &impl BlockSource, coord: IVec3, normal: IVec3, block: Bloc
     }
     let neighbour = coord + normal;
     let covered = source.block(neighbour).is_opaque();
-    let top = source.surface_top(coord);
-    if normal.y != 0 {
-        // a lowered top still faces the air, and bottoms are never lowered
-        return (!covered).then(|| top.filter(|_| normal.y > 0).map(|t| [t, t]));
+    // every face is asked about, and most are hidden, so those leave before any lookups
+    if !source.has_surface_tops() || normal.y < 0 {
+        return (!covered).then_some(None);
+    }
+    if normal.y > 0 {
+        // a lowered top still faces the air
+        return (!covered).then(|| source.surface_top(coord).map(|t| [t, t]));
     }
     let bottom = coord.y as f32 - 0.5;
     // a lowered neighbour leaves this side bare above the ground's real height
     let floor = if covered { source.surface_top(neighbour)? } else { bottom };
+    let top = source.surface_top(coord);
     let ceiling = top.unwrap_or(bottom + 1.0);
     if ceiling <= floor {
         return None;
@@ -1007,7 +1026,7 @@ fn mesh_opaque_greedy(
                     let smooth = ambient_occlusion && block != BlockType::Leaves;
                     // a step above lowered ground faces into that ground's cell, which is dark: it's
                     // lit by the air over it, and is too thin to shade smoothly
-                    let step = normal.y == 0 && source.block(coord + normal).is_opaque();
+                    let step = span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
                     let smooth = smooth && !step;
                     let lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
                     mask[(b * size + a) as usize] = span.map(|span| FaceCell {
