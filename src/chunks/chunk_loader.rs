@@ -282,6 +282,11 @@ pub fn load_chunks(
                 // in advance how many will fit, and a completed task's mesh can't be
                 // polled a second time next frame if we deferred using it here.
                 if let Some(chunk_meshes) = futures::check_ready(task) {
+                    // buried chunks mesh to nothing, and are left without a mesh or a draw
+                    if !chunk_meshes.has_geometry() {
+                        commands.entity(entity).remove::<GenerateChunkMesh>();
+                        continue;
+                    }
                     let (t, aabb) = chunk_components(chunk.coord);
                     // hidden until refresh_lod_visibility fades it in, so it never
                     // flashes up over the LOD node it's replacing

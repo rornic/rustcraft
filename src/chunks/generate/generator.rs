@@ -748,6 +748,13 @@ pub struct ChunkMeshes {
     pub water: Option<Mesh>,
 }
 
+impl ChunkMeshes {
+    /// Whether there's anything to draw: buried chunks mesh to nothing.
+    pub fn has_geometry(&self) -> bool {
+        self.opaque.count_vertices() > 0 || self.water.is_some()
+    }
+}
+
 // Counts contiguous Water blocks straight down from `block_coord`, within this
 // chunk only (so it's a cheap, purely-local lookup the async mesh task can do
 // without `World` access - see the plan's note on why depth doesn't cross chunk
@@ -2083,6 +2090,30 @@ mod tests {
             lod.block(IVec3::new(-1, 3, 4)),
             lod.block(IVec3::new(-3, 3, 4))
         );
+    }
+
+    #[test]
+    fn test_buried_chunk_has_no_geometry() {
+        let mut stone = ChunkData::default();
+        for (x, y, z) in (0..16).flat_map(|x| (0..16).flat_map(move |y| (0..16).map(move |z| (x, y, z)))) {
+            stone.set_block_at(U16Vec3::new(x, y, z), BlockType::Stone);
+        }
+        let stone = Arc::new(stone);
+        let meshes = generate_chunk_mesh(
+            stone.clone(),
+            vec![Some(stone); 26],
+            ChunkCoordinate(I64Vec3::ZERO),
+            test_regions().noise(),
+            false,
+        );
+        assert!(!meshes.has_geometry());
+    }
+
+    #[test]
+    fn test_chunk_with_a_block_has_geometry() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
+        assert!(mesh_chunk(chunk).has_geometry());
     }
 
     #[test]
