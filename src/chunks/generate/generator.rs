@@ -14,7 +14,7 @@ use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use super::columns::COARSE_CELL;
-use super::trees::{self, grows_into, trees_near, TREE_HEIGHT};
+use super::trees::{grows_into, trees_near, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -98,9 +98,11 @@ struct LodBlocks {
 }
 
 // From afar, forests show as their canopy: leaves over this much of the ground for each
-// tree a cell grows, see `Biome::tree_density`, from these heights above it.
+// tree a cell grows, see `Biome::tree_density`. Cells with less than `CANOPY_MIN_COVER` of it
+// draw no trees, and the rest a solid canopy this high above the ground.
 const CANOPY_COVER: f64 = 1.6;
-const CANOPY: (i64, i64) = (5, 18);
+const CANOPY_MIN_COVER: f64 = 0.5;
+const CANOPY_HEIGHT: i64 = 20;
 
 impl LodBlocks {
     fn sample(regions: &RegionStore, key: LodKey) -> Self {
@@ -131,19 +133,19 @@ impl LodBlocks {
                 let world_z = base.z + cz as i64 * cell + cell / 2;
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
                 let ground = column_block(noise.biomes(), biome, height - 1, height, gradient, temperature);
-                let chance = (trees::hash(noise.seed() as u64, world_x, world_z) & 0xffff) as f64 / 65536.0;
-                let wooded = ground == BlockType::Grass && chance < grid.trees(cx, cz) * CANOPY_COVER;
-                // at least one cell's worth, however coarse the cells
-                let canopy = height + CANOPY.0..height + CANOPY.1.max(cell);
+                let wooded = ground == BlockType::Grass && grid.trees(cx, cz) * CANOPY_COVER >= CANOPY_MIN_COVER;
+                let canopy_top = height + CANOPY_HEIGHT;
 
-                tops[Self::column(size, cx, cz)] = ground_top(height);
+                tops[Self::column(size, cx, cz)] = if wooded { canopy_top } else { ground_top(height) };
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     let mut block = column_block(noise.biomes(), biome, world_y, height, gradient, temperature);
                     if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
                         block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient, temperature);
                     }
-                    if wooded && block == BlockType::Air && canopy.contains(&world_y) {
+                    // the canopy fills the column up to its top, which `find_surface_top` trims to its real height
+                    let bottom = base.y + cy as i64 * cell;
+                    if wooded && bottom < canopy_top && (block == BlockType::Air || bottom + cell >= canopy_top) {
                         block = BlockType::Leaves;
                     }
                     cells[Self::index(size, IVec3::new(cx, cy, cz))] = block;
@@ -243,7 +245,7 @@ impl LodBlocks {
         }
         let ground = matches!(
             self.raw(coord),
-            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow
+            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow | BlockType::Leaves
         );
         let beside_water = [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
             .iter()
