@@ -14,7 +14,7 @@ use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use super::columns::COARSE_CELL;
-use super::trees::{grows_into, trees_near, TREE_HEIGHT};
+use super::trees::{self, grows_into, trees_near, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -62,6 +62,11 @@ trait BlockSource {
     fn has_surface_tops(&self) -> bool {
         false
     }
+
+    /// How much light a leaf at a mesh position gets under its canopy, 0..1.
+    fn canopy_shade(&self, _position: Vec3) -> f32 {
+        1.0
+    }
 }
 
 struct ChunkNeighbourhood<'a> {
@@ -95,14 +100,20 @@ struct LodBlocks {
     // `surface_top` for each padded cell, worked out once since meshing asks for every face
     surface_tops: Vec<Option<f32>>,
     any_surface_tops: bool,
+    // the top of each padded column's canopy in blocks, `i64::MIN` where it has none, or empty with no canopies at all
+    canopy_tops: Vec<i64>,
 }
 
 // From afar, forests show as their canopy: leaves over this much of the ground for each
 // tree a cell grows, see `Biome::tree_density`. Cells with less than `CANOPY_MIN_COVER` of it
-// draw no trees, and the rest a solid canopy this high above the ground.
+// draw no trees, and the rest a solid canopy above the ground, as high as `CANOPY_HEIGHTS`
+// says from one pair of cells to the next, so crowns are lumpy instead of a flat sheet.
 const CANOPY_COVER: f64 = 1.6;
 const CANOPY_MIN_COVER: f64 = 0.5;
-const CANOPY_HEIGHT: i64 = 20;
+const CANOPY_HEIGHTS: (i64, i64) = (12, 28);
+// Leaves at the foot of a canopy are this much darker than at its top, over this many blocks.
+const CANOPY_SHADE: f32 = 0.45;
+const CANOPY_SHADE_SPAN: f32 = 20.0;
 
 impl LodBlocks {
     fn sample(regions: &RegionStore, key: LodKey) -> Self {
@@ -121,6 +132,7 @@ impl LodBlocks {
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
+        let mut canopy_tops = vec![i64::MIN; padded * padded];
         let grid = regions.column_grid(key);
         let noise = regions.noise();
 
@@ -134,9 +146,15 @@ impl LodBlocks {
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
                 let ground = column_block(noise.biomes(), biome, height - 1, height, gradient, temperature);
                 let wooded = ground == BlockType::Grass && grid.trees(cx, cz) * CANOPY_COVER >= CANOPY_MIN_COVER;
-                let canopy_top = height + CANOPY_HEIGHT;
+                // each pair of cells shares a height, whichever node they fall in
+                let (pair_x, pair_z) = (base.x + cx.div_euclid(2) as i64 * 2 * cell, base.z + cz.div_euclid(2) as i64 * 2 * cell);
+                let crown = trees::hash(noise.seed() as u64, pair_x, pair_z) % (CANOPY_HEIGHTS.1 - CANOPY_HEIGHTS.0 + 1) as u64;
+                let canopy_top = height + CANOPY_HEIGHTS.0 + crown as i64;
 
                 tops[Self::column(size, cx, cz)] = if wooded { canopy_top } else { ground_top(height) };
+                if wooded {
+                    canopy_tops[Self::column(size, cx, cz)] = canopy_top;
+                }
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     let mut block = column_block(noise.biomes(), biome, world_y, height, gradient, temperature);
@@ -152,7 +170,7 @@ impl LodBlocks {
                 }
             }
         }
-        Self::new(size, cells, tops, base.y, cell)
+        Self::new(size, cells, tops, base.y, cell).with_canopy_tops(canopy_tops)
     }
 
     // From full-detail regions, with real trees.
@@ -208,8 +226,13 @@ impl LodBlocks {
         Self::new(size, cells, tops, base.y, cell)
     }
 
+    fn with_canopy_tops(mut self, canopy_tops: Vec<i64>) -> Self {
+        self.canopy_tops = canopy_tops;
+        self
+    }
+
     fn new(size: i32, cells: Vec<BlockType>, tops: Vec<i64>, base_y: i64, cell: i64) -> Self {
-        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false };
+        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false, canopy_tops: Vec::new() };
         blocks.surface_tops = vec![None; blocks.cells.len()];
         for x in -1..=size {
             for z in -1..=size {
@@ -279,6 +302,20 @@ impl BlockSource for LodBlocks {
 
     fn has_surface_tops(&self) -> bool {
         self.any_surface_tops
+    }
+
+    fn canopy_shade(&self, position: Vec3) -> f32 {
+        if self.canopy_tops.is_empty() {
+            return 1.0;
+        }
+        // a vertex on a cell's edge reads the column on its far side, close enough for a gradient
+        let column = |c: f32| ((c + 0.5).floor() as i32).clamp(-1, self.size);
+        let top = self.canopy_tops[Self::column(self.size, column(position.x), column(position.z))];
+        if top == i64::MIN {
+            return 1.0;
+        }
+        let y = self.base_y as f32 + (position.y + 0.5) * self.cell as f32;
+        1.0 - CANOPY_SHADE * ((top as f32 - y) / CANOPY_SHADE_SPAN).clamp(0.0, 1.0)
     }
 
     fn block(&self, coord: IVec3) -> BlockType {
@@ -968,6 +1005,10 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
     fn has_surface_tops(&self) -> bool {
         self.source.has_surface_tops()
     }
+
+    fn canopy_shade(&self, position: Vec3) -> f32 {
+        self.source.canopy_shade(position)
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -1137,7 +1178,8 @@ fn mesh_opaque_greedy(
                         // leaves share grass's tint, over a darker texture
                         let tinted = matches!(cell.block, BlockType::Grass | BlockType::Leaves);
                         let tint = if tinted { grass_tint.at(position) } else { Vec3::ONE };
-                        (tint * ao).extend(atlas_cell).to_array()
+                        let shade = if cell.block == BlockType::Leaves { source.canopy_shade(position) } else { 1.0 };
+                        (tint * ao * shade).extend(atlas_cell).to_array()
                     };
                     if w == 1 && h == 1 {
                         let positions: [Vec3; 4] = std::array::from_fn(|j| {
@@ -2114,6 +2156,27 @@ mod tests {
         let mut chunk = ChunkData::default();
         chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
         assert!(mesh_chunk(chunk).has_geometry());
+    }
+
+    #[test]
+    fn test_canopy_shade_darkens_toward_the_ground() {
+        let padded = 18 * 18;
+        let lod = flat_lod(8).with_canopy_tops(vec![40; padded]);
+        let at = |y: f32| lod.canopy_shade(Vec3::new(4.0, y, 4.0));
+        // a leaf at the canopy's top is unshaded, and the foot of a canopy is the darkest
+        assert_eq!(1.0, at(39.5));
+        assert!((at(19.5) - (1.0 - super::CANOPY_SHADE)).abs() < 1e-5);
+        assert!(at(30.0) < at(35.0) && at(35.0) < at(39.5));
+        // below the span it stops getting darker
+        assert_eq!(at(19.5), at(9.5));
+    }
+
+    #[test]
+    fn test_canopy_shade_leaves_bare_columns_and_other_lods_alone() {
+        let padded = 18 * 18;
+        let bare = flat_lod(8).with_canopy_tops(vec![i64::MIN; padded]);
+        assert_eq!(1.0, bare.canopy_shade(Vec3::new(4.0, 2.0, 4.0)));
+        assert_eq!(1.0, flat_lod(8).canopy_shade(Vec3::new(4.0, 2.0, 4.0)));
     }
 
     #[test]
