@@ -87,6 +87,8 @@ struct LodBlocks {
     // the node's lowest block and cell size, to place `tops` among the cells
     base_y: i64,
     cell: i64,
+    // `surface_top` for each padded cell, worked out once since meshing asks for every face
+    surface_tops: Vec<Option<f32>>,
 }
 
 // From afar, forests show as their canopy: leaves over this much of the ground for each
@@ -141,7 +143,7 @@ impl LodBlocks {
                 }
             }
         }
-        Self { size, cells, tops, base_y: base.y, cell }
+        Self::new(size, cells, tops, base.y, cell)
     }
 
     // From full-detail regions, with real trees.
@@ -192,7 +194,26 @@ impl LodBlocks {
             }
         }
 
-        Self { size, cells, tops, base_y: base.y, cell }
+        Self::new(size, cells, tops, base.y, cell)
+    }
+
+    fn new(size: i32, cells: Vec<BlockType>, tops: Vec<i64>, base_y: i64, cell: i64) -> Self {
+        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new() };
+        blocks.surface_tops = vec![None; blocks.cells.len()];
+        for x in -1..=size {
+            for z in -1..=size {
+                for y in -1..=size {
+                    let coord = IVec3::new(x, y, z);
+                    blocks.surface_tops[Self::index(size, coord)] = blocks.find_surface_top(coord);
+                }
+            }
+        }
+        blocks
+    }
+
+    fn surface_top(&self, coord: IVec3) -> Option<f32> {
+        let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
+        self.surface_tops[Self::index(self.size, coord)]
     }
 
     fn column(size: i32, cx: i32, cz: i32) -> usize {
@@ -204,8 +225,7 @@ impl LodBlocks {
     // and its top drawn at the ground's real height instead, so slopes step a block at a
     // time however coarse the cells. Only under open air: under water or leaves, and beside
     // water, the whole cell is drawn, since they fill the cell above from its bottom.
-    fn surface_top(&self, coord: IVec3) -> Option<f32> {
-        let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
+    fn find_surface_top(&self, coord: IVec3) -> Option<f32> {
         let top = self.tops[Self::column(self.size, coord.x, coord.z)];
         let bottom = self.base_y + coord.y as i64 * self.cell;
         if !(bottom < top && top < bottom + self.cell) {
@@ -1014,12 +1034,16 @@ fn mesh_opaque_greedy(
                     };
 
                     let (mut w, mut h) = (1, 1);
-                    // a trimmed side's edges sit off the cell grid its neighbours' vertices are on
-                    if cell.flat() && (cell.span.is_none() || normal.y > 0) {
-                        while a0 + w < n && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_with(&o)) {
+                    // a trimmed side's top and bottom sit off the cell grid, so it merges only
+                    // along the ground's contour, where its neighbours share those heights
+                    let trimmed_side = cell.span.is_some() && normal.y == 0;
+                    let (grow_a, grow_b) = (!trimmed_side || a_axis != 1, !trimmed_side || b_axis != 1);
+                    if cell.flat() {
+                        while grow_a && a0 + w < n && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_with(&o)) {
                             w += 1;
                         }
-                        while b0 + h < n
+                        while grow_b
+                            && b0 + h < n
                             && (a0..a0 + w).all(|a| mask[(b0 + h) * n + a].is_some_and(|o| cell.merges_with(&o)))
                         {
                             h += 1;
@@ -1058,8 +1082,16 @@ fn mesh_opaque_greedy(
                     corner[a_axis] -= 0.5;
                     corner[b_axis] -= 0.5;
                     corner[normal_axis] += template[0].position[normal_axis];
-                    if let Some([_, ceiling]) = cell.span {
-                        corner.y = ceiling;
+                    let (mut ta_step, mut tb_step) = (ta.as_vec3(), tb.as_vec3());
+                    match cell.span {
+                        Some([_, ceiling]) if normal.y > 0 => corner.y = ceiling,
+                        Some([floor, ceiling]) => {
+                            corner.y = floor;
+                            // the side's one step up spans just its trimmed height
+                            let up = if a_axis == 1 { &mut ta_step } else { &mut tb_step };
+                            up.y *= ceiling - floor;
+                        }
+                        None => {}
                     }
                     let extent = [w as f32, h as f32];
                     let uv_at = |i: usize, j: usize| {
@@ -1071,8 +1103,8 @@ fn mesh_opaque_greedy(
                     };
                     buffers.push_fan_quad(FanQuad {
                         corner,
-                        ta: ta.as_vec3(),
-                        tb: tb.as_vec3(),
+                        ta: ta_step,
+                        tb: tb_step,
                         size: (w, h),
                         normal: template[0].normal,
                         color: &|position| color(cell.ao[0], position),
@@ -1466,7 +1498,7 @@ mod tests {
             }
         }
         let tops = vec![surface_y as i64; padded * padded];
-        LodBlocks { size, cells, tops, base_y: 0, cell: 1 }
+        LodBlocks::new(size, cells, tops, 0, 1)
     }
 
     // Grass two cells of 4 blocks deep, its ground 6 blocks up the node for x < 8 and 7 blocks
@@ -1485,7 +1517,7 @@ mod tests {
                 }
             }
         }
-        LodBlocks { size, cells, tops, base_y, cell: 4 }
+        LodBlocks::new(size, cells, tops, base_y, 4)
     }
 
     // `lod`'s opaque mesh, lit as `generate_lod_mesh` lights it
@@ -1526,11 +1558,12 @@ mod tests {
 
     #[test]
     fn test_lod_surface_under_water_fills_its_cell() {
-        let mut lod = sloped_lod();
-        lod.cells[LodBlocks::index(16, IVec3::new(2, 2, 2))] = BlockType::Water;
-        assert_eq!(None, lod.surface_top(IVec3::new(2, 1, 2)));
+        let LodBlocks { size, mut cells, tops, base_y, cell, .. } = sloped_lod();
+        cells[LodBlocks::index(16, IVec3::new(2, 2, 2))] = BlockType::Water;
         // nor does one beside water, which would show a gap under the water's side
-        lod.cells[LodBlocks::index(16, IVec3::new(6, 1, 2))] = BlockType::Water;
+        cells[LodBlocks::index(16, IVec3::new(6, 1, 2))] = BlockType::Water;
+        let lod = LodBlocks::new(size, cells, tops, base_y, cell);
+        assert_eq!(None, lod.surface_top(IVec3::new(2, 1, 2)));
         assert_eq!(None, lod.surface_top(IVec3::new(5, 1, 2)));
         assert_eq!(Some(1.0), lod.surface_top(IVec3::new(4, 1, 2)));
     }
@@ -1551,6 +1584,9 @@ mod tests {
             .filter(|(n, vs)| *n == [-1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 7.5))
             .collect();
         assert!(!step.is_empty());
+        // one face along the whole contour, not one for each of its 16 cells
+        let vertices: usize = step.iter().map(|(_, vs)| vs.len()).sum();
+        assert!(vertices < 16 * 4, "{vertices} vertices along the step");
         for (_, vs) in step {
             assert!(vs.iter().all(|v| v[1] == 1.0 || v[1] == 1.25), "step at {vs:?}");
         }
