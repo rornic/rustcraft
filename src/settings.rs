@@ -24,6 +24,10 @@ pub struct RendererSettings {
     pub lod_level_scale: u32,
     /// How long swapping between LOD levels takes to cross-fade, in seconds.
     pub lod_fade_seconds: f32,
+    /// How far the sun casts shadows, in chunks.
+    pub shadow_distance: u32,
+    /// Shadow map cascades, each drawing the terrain in its slice again.
+    pub shadow_cascades: usize,
 }
 
 /// Switches for testing what the renderer spends its time on, all off by default.
@@ -60,6 +64,8 @@ impl Default for RendererSettings {
             full_detail_distance: 32,
             lod_level_scale: 4,
             lod_fade_seconds: 1.5,
+            shadow_distance: 32,
+            shadow_cascades: 3,
         }
     }
 }

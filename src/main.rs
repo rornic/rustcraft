@@ -90,9 +90,8 @@ fn setup_scene(
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
-    // shadows reach as far as full-detail terrain, beyond which LODs take over
-    let shadow_distance = (layout.full_detail_distance * 16.0).min(fog_distance);
-    commands.spawn(sun(shadow_distance));
+    let shadow_distance = (renderer.shadow_distance as f32 * 16.0).min(fog_distance);
+    commands.spawn(sun(shadow_distance, renderer.shadow_cascades));
 
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
