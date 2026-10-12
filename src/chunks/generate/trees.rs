@@ -230,7 +230,7 @@ fn tree_in_cell(noise: &NoiseGenerator, heights: &mut HeightSampler, cx: i64, cz
     if gradient > MAX_GRADIENT {
         return None;
     }
-    let ground = column_block(noise.biomes(), heights.biome(x, z), height - 1, height, gradient);
+    let ground = column_block(noise.biomes(), heights.biome(x, z), height - 1, height, gradient, noise.temperature(x as f64, z as f64));
     if ground != BlockType::Grass {
         return None;
     }

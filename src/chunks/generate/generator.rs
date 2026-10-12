@@ -127,9 +127,10 @@ impl LodBlocks {
                 let height = grid.height(cx, cz).round() as i64;
                 let gradient = grid.gradient(cx, cz);
                 let biome = grid.biome(cx, cz);
-                let ground = column_block(noise.biomes(), biome, height - 1, height, gradient);
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
+                let temperature = noise.temperature(world_x as f64, world_z as f64);
+                let ground = column_block(noise.biomes(), biome, height - 1, height, gradient, temperature);
                 let chance = (trees::hash(noise.seed() as u64, world_x, world_z) & 0xffff) as f64 / 65536.0;
                 let wooded = ground == BlockType::Grass && chance < grid.trees(cx, cz) * CANOPY_COVER;
                 // at least one cell's worth, however coarse the cells
@@ -138,9 +139,9 @@ impl LodBlocks {
                 tops[Self::column(size, cx, cz)] = ground_top(height);
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
-                    let mut block = column_block(noise.biomes(), biome, world_y, height, gradient);
+                    let mut block = column_block(noise.biomes(), biome, world_y, height, gradient, temperature);
                     if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
-                        block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient);
+                        block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient, temperature);
                     }
                     if wooded && block == BlockType::Air && canopy.contains(&world_y) {
                         block = BlockType::Leaves;
@@ -161,7 +162,8 @@ impl LodBlocks {
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
         let mut heights = regions.sampler();
-        let biomes = regions.noise().biomes();
+        let noise = regions.noise();
+        let biomes = noise.biomes();
         let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
         for cx in -1..=size {
@@ -173,14 +175,15 @@ impl LodBlocks {
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
                 let biome = heights.biome(world_x, world_z);
+                let temperature = noise.temperature(world_x as f64, world_z as f64);
 
                 let top = ground_top(column_height);
                 tops[Self::column(size, cx, cz)] = top;
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
-                    let mut block = column_block(biomes, biome, world_y, column_height, combined_gradient);
+                    let mut block = column_block(biomes, biome, world_y, column_height, combined_gradient, temperature);
                     if block == BlockType::Air && base.y + cy as i64 * cell < top {
-                        block = column_block(biomes, biome, top - 1, column_height, combined_gradient);
+                        block = column_block(biomes, biome, top - 1, column_height, combined_gradient, temperature);
                     }
                     cells[Self::index(size, IVec3::new(cx, cy, cz))] = block;
                 }
@@ -312,13 +315,27 @@ fn is_solid(block: BlockType) -> bool {
     block.occlusion_weight() == 1.0
 }
 
-// Height above the sea where snow starts to settle.
+// Height above the sea where snow starts to settle in a temperate climate (temperature 0.5).
 const SNOW_LINE: i64 = 220;
+// How many blocks the snow line climbs per unit of temperature.
+const SNOW_LINE_PER_DEGREE: f64 = 800.0;
+// At or above this temperature it's too hot for snow, and the heights are bare rock.
+const SNOW_MAX_TEMPERATURE: f32 = 0.62;
+// Below this temperature even the grass is under a layer of snow.
+const SNOWY_GRASS_TEMPERATURE: f32 = 0.15;
+
+// The lowest the snow line gets, so even the coldest lowlands are grass under their snow.
+const COLDEST_SNOW_LINE: i64 = 60;
+
+// Height above the sea where snow starts to settle, lower in the cold.
+fn snow_line(temperature: f32) -> i64 {
+    (SNOW_LINE as f64 + (temperature as f64 - 0.5) * SNOW_LINE_PER_DEGREE).max(COLDEST_SNOW_LINE as f64) as i64
+}
 
 // The steepest ground snow settles on, `above_sea` blocks up: only gentle ground at the snow
 // line, steeper the higher it gets, until only cliffs are left bare.
-fn snow_holding_slope(above_sea: i64) -> f64 {
-    let t = ((above_sea - SNOW_LINE) as f64 / 120.0).clamp(0.0, 1.0);
+fn snow_holding_slope(above_sea: i64, snow_line: i64) -> f64 {
+    let t = ((above_sea - snow_line) as f64 / 120.0).clamp(0.0, 1.0);
     1.5 + 3.0 * t
 }
 
@@ -327,17 +344,24 @@ fn ground_top(column_height: i64) -> i64 {
     column_height.max(SOLID_FLOOR)
 }
 
-fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64) -> BlockType {
+fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64, temperature: f32) -> BlockType {
     if world_y < ground_top(column_height) {
         let above_sea = world_y - WATER_LEVEL;
-        if above_sea >= SNOW_LINE && combined_gradient <= snow_holding_slope(above_sea) {
+        let line = snow_line(temperature);
+        let snows = temperature < SNOW_MAX_TEMPERATURE;
+        if snows && above_sea >= line && combined_gradient <= snow_holding_slope(above_sea, line) {
             BlockType::Snow
-        } else if above_sea >= 120 && combined_gradient >= 2.0
+        } else if !snows && above_sea >= SNOW_LINE
+            || above_sea >= 120 && combined_gradient >= 2.0
             || (above_sea >= 2 && combined_gradient >= 3.5)
         {
             BlockType::Stone
         } else if above_sea >= 2 {
-            BlockType::Grass
+            if temperature < SNOWY_GRASS_TEMPERATURE && world_y == column_height - 1 {
+                BlockType::Snow
+            } else {
+                BlockType::Grass
+            }
         } else {
             BlockType::Sand
         }
@@ -355,8 +379,9 @@ pub(super) fn column_block(
     world_y: i64,
     column_height: i64,
     combined_gradient: f64,
+    temperature: f32,
 ) -> BlockType {
-    let base = terrain_block(world_y, column_height, combined_gradient);
+    let base = terrain_block(world_y, column_height, combined_gradient, temperature);
     biomes.block(biome, base, world_y - WATER_LEVEL, combined_gradient)
 }
 
@@ -518,7 +543,8 @@ pub fn generate_chunk(
 ) -> ChunkData {
     let mut chunk_data = ChunkData::default();
     let mut heights = regions.sampler();
-    let biomes = regions.noise().biomes();
+    let noise = regions.noise();
+        let biomes = noise.biomes();
     let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
     for x in 0..chunk_data.size {
@@ -534,9 +560,10 @@ pub fn generate_chunk(
             let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
             let combined_gradient = gradient_x.abs() + gradient_z.abs();
             let biome = heights.biome(world_x, world_z);
+            let temperature = noise.temperature(world_x as f64, world_z as f64);
 
             for y in 0..chunk_data.size {
-                let block = column_block(biomes, biome, world_y + y as i64, column_height, combined_gradient);
+                let block = column_block(biomes, biome, world_y + y as i64, column_height, combined_gradient, temperature);
                 if block != BlockType::Air {
                     chunk_data.set_block_at(U16Vec3::new(x, y, z), block);
                 }
@@ -1476,17 +1503,17 @@ mod tests {
     #[test]
     fn test_terrain_block_floor_and_water() {
         // below the solid floor even a zero-height column is solid
-        assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0));
-        assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0));
-        assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0));
-        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0));
+        assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0, 0.5));
+        assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0, 0.5));
+        assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0, 0.5));
+        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0, 0.5));
     }
 
     #[test]
     fn test_snow_settles_on_steeper_ground_higher_up() {
         let at = |above_sea: i64, slope: f64| {
             let y = WATER_LEVEL + above_sea;
-            terrain_block(y, y + 1, slope)
+            terrain_block(y, y + 1, slope, 0.5)
         };
         assert_ne!(BlockType::Snow, at(200, 0.0));
         assert_eq!(BlockType::Snow, at(230, 1.0));
@@ -1494,6 +1521,29 @@ mod tests {
         assert_eq!(BlockType::Snow, at(360, 3.0));
         // cliffs stay bare however high they are
         assert_ne!(BlockType::Snow, at(400, 6.0));
+    }
+
+    #[test]
+    fn test_snow_line_drops_in_the_cold_and_hot_ground_is_bare() {
+        let at = |above_sea: i64, temperature: f32| {
+            let y = WATER_LEVEL + above_sea;
+            terrain_block(y, y + 1, 0.0, temperature)
+        };
+        assert_ne!(BlockType::Snow, at(100, 0.5));
+        assert_eq!(BlockType::Snow, at(100, 0.35));
+        assert_eq!(BlockType::Snow, at(300, 0.5));
+        // too hot for snow however high, so the peaks are rock
+        assert_eq!(BlockType::Stone, at(300, 0.8));
+        assert_eq!(BlockType::Grass, at(100, 0.8));
+    }
+
+    #[test]
+    fn test_only_the_top_of_frozen_grass_is_snow() {
+        let at = |y: i64, temperature: f32| terrain_block(y, WATER_LEVEL + 20, 0.0, temperature);
+        let top = WATER_LEVEL + 19;
+        assert_eq!(BlockType::Snow, at(top, 0.05));
+        assert_eq!(BlockType::Grass, at(top, 0.3));
+        assert_eq!(BlockType::Grass, at(top - 1, 0.05));
     }
 
     fn test_regions() -> Arc<RegionStore> {
