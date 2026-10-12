@@ -783,6 +783,7 @@ pub fn generate_chunk_mesh(
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
     coord: ChunkCoordinate,
     noise: &NoiseGenerator,
+    solid_leaves: bool,
 ) -> ChunkMeshes {
     let source = ChunkNeighbourhood {
         chunk: &chunk,
@@ -791,7 +792,8 @@ pub fn generate_chunk_mesh(
     let tint = GrassTint::new(noise, (coord.0 * CHUNK_SIZE as i64).as_vec3(), 1.0);
     // worked out only once there's a face to light: buried and empty chunks have none
     let light = LazyCell::new(|| neighbourhood_light(&chunk, &adjacent_chunks, coord));
-    mesh_blocks(&source, 1, true, true, &tint, &light)
+    // leaves drawn solid hide the leaves behind them, see `DebugSettings::solid_leaves`
+    mesh_blocks(&source, 1, true, true, solid_leaves, &tint, &light)
 }
 
 // Light falling into the top of a box whose highest block is at `top`, in boxes of `cell`
@@ -855,14 +857,9 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
         let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
         SkyLight::new(IVec3::splat(-1), IVec3::splat(blocks.size + 2), sky_above(top, cell_size), opacity)
     });
-    let meshes = mesh_blocks(
-        &blocks,
-        cell_size,
-        cell_size <= AO_MAX_CELL_SIZE,
-        cell_size <= TEXTURE_MAX_CELL_SIZE,
-        &tint,
-        &light,
-    );
+    let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
+    // untextured leaves are drawn solid, so hide the leaves behind them
+    let meshes = mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, textured, !textured, &tint, &light);
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
     }
@@ -901,9 +898,15 @@ struct GridView<'a, S: BlockSource> {
     source: &'a S,
 }
 
+impl<S: BlockSource> GridView<'_, S> {
+    fn contains(&self, coord: IVec3) -> bool {
+        coord.min_element() >= 0 && coord.max_element() < self.size
+    }
+}
+
 impl<S: BlockSource> BlockSource for GridView<'_, S> {
     fn block(&self, coord: IVec3) -> BlockType {
-        if coord.min_element() >= 0 && coord.max_element() < self.size {
+        if self.contains(coord) {
             self.blocks[grid_index(self.size, coord)]
         } else {
             self.source.block(coord)
@@ -911,7 +914,7 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
     }
 
     fn terrain(&self, coord: IVec3) -> BlockType {
-        if coord.min_element() >= 0 && coord.max_element() < self.size {
+        if self.contains(coord) {
             self.blocks[grid_index(self.size, coord)]
         } else {
             self.source.terrain(coord)
@@ -959,13 +962,22 @@ impl FaceCell {
 
 // Whether a face of `block` at `coord` shows, and if so how much of it up the mesh's y axis,
 // with LOD surface cells topped out at the ground's real height (see `LodBlocks::surface_top`):
-// `Some(None)` for the whole face.
-fn face_span(source: &impl BlockSource, coord: IVec3, normal: IVec3, block: BlockType) -> Option<Option<[f32; 2]>> {
+// `Some(None)` for the whole face. Faces show through leaves' holes, other leaves' too, unless
+// `leaves_cover_leaves`.
+fn face_span(
+    source: &impl BlockSource,
+    coord: IVec3,
+    normal: IVec3,
+    block: BlockType,
+    leaves_cover_leaves: bool,
+) -> Option<Option<[f32; 2]>> {
     if matches!(block, BlockType::Air | BlockType::Water) {
         return None;
     }
     let neighbour = coord + normal;
-    let covered = source.block(neighbour).is_opaque();
+    let neighbour_block = source.block(neighbour);
+    let covered = neighbour_block.is_opaque()
+        || (leaves_cover_leaves && block == BlockType::Leaves && neighbour_block == BlockType::Leaves);
     // every face is asked about, and most are hidden, so those leave before any lookups
     if !source.has_surface_tops() || normal.y < 0 {
         return (!covered).then_some(None);
@@ -986,11 +998,13 @@ fn face_span(source: &impl BlockSource, coord: IVec3, normal: IVec3, block: Bloc
 }
 
 // Merges runs of identical, flat-shaded opaque faces into single quads, one face direction slice at a time.
+// With `solid_leaves`, leaves hide the faces of the leaves behind them.
 fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
     face_vertices: &[&[Vertex]; 6],
     buffers: &mut MeshBuffers,
     ambient_occlusion: bool,
+    solid_leaves: bool,
     grass_tint: &GrassTint,
     light: &impl Deref<Target = SkyLight>,
 ) {
@@ -1019,8 +1033,10 @@ fn mesh_opaque_greedy(
                 for a in 0..size {
                     let coord = normal_unit * slice + ta * a + tb * b;
                     let block = source.block(coord);
-                    // faces show through leaves' holes, including other leaves'
-                    let span = face_span(source, coord, normal, block);
+                    // past the mesh's edge the terrain may be drawn at another detail, with no
+                    // leaves just there, so leaves on the edge keep their faces
+                    let inside = source.contains(coord + normal);
+                    let span = face_span(source, coord, normal, block, solid_leaves && inside);
                     // unshaded leaves merge into big quads, which keeps the faces between them cheap,
                     // so they and coarse LODs take one light level a face instead of smooth light
                     let smooth = ambient_occlusion && block != BlockType::Leaves;
@@ -1137,12 +1153,14 @@ fn mesh_opaque_greedy(
     }
 }
 
-// `cell_size` is how many blocks wide each cell of `source` is.
+// `cell_size` is how many blocks wide each cell of `source` is. `solid_leaves` is whether
+// leaves are drawn without their holes, so hide the leaves behind them.
 fn mesh_blocks(
     source: &impl BlockSource,
     cell_size: i64,
     ambient_occlusion: bool,
     textured: bool,
+    solid_leaves: bool,
     grass_tint: &GrassTint,
     light: &impl Deref<Target = SkyLight>,
 ) -> ChunkMeshes {
@@ -1243,6 +1261,7 @@ fn mesh_blocks(
         &face_vertices,
         &mut opaque,
         ambient_occlusion,
+        solid_leaves,
         grass_tint,
         light,
     );
@@ -1545,7 +1564,7 @@ mod tests {
         let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
         let light = Box::new(super::SkyLight::new(IVec3::splat(-1), IVec3::splat(lod.size + 2), super::sky_above(top, lod.cell), opacity));
         let tint = GrassTint::new(&NoiseGenerator::new(3), Vec3::ZERO, lod.cell as f32);
-        super::mesh_blocks(lod, lod.cell, false, false, &tint, &light).opaque
+        super::mesh_blocks(lod, lod.cell, false, false, true, &tint, &light).opaque
     }
 
     // each face's normal and its vertices' positions
@@ -1634,7 +1653,7 @@ mod tests {
     fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
         // well above the sea, under open sky
         let coord = ChunkCoordinate(I64Vec3::new(0, 40, 0));
-        generate_chunk_mesh(Arc::new(chunk), vec![None; 26], coord, &NoiseGenerator::new(3))
+        generate_chunk_mesh(Arc::new(chunk), vec![None; 26], coord, &NoiseGenerator::new(3), false)
     }
 
     fn mesh_vertices(chunk: ChunkData) -> usize {
@@ -1881,6 +1900,95 @@ mod tests {
         assert!(mesh_vertices(chunk) > 44);
     }
 
+    // Open air over ground far below the node, with `blocks` set, in cells of 4 blocks.
+    fn lod_with(blocks: &[(IVec3, BlockType)]) -> LodBlocks {
+        let size = 16;
+        let padded = (size + 2) as usize;
+        let mut cells = vec![BlockType::Air; padded * padded * padded];
+        for &(coord, block) in blocks {
+            cells[LodBlocks::index(size, coord)] = block;
+        }
+        LodBlocks::new(size, cells, vec![0; padded * padded], WATER_LEVEL + 64, 4)
+    }
+
+    // a 2x2x2 cube of leaves from `min` up
+    fn leaf_cube(min: i32) -> Vec<(IVec3, BlockType)> {
+        let mut cube = Vec::new();
+        for x in min..min + 2 {
+            for y in min..min + 2 {
+                for z in min..min + 2 {
+                    cube.push((IVec3::new(x, y, z), BlockType::Leaves));
+                }
+            }
+        }
+        cube
+    }
+
+    // how many vertices lie on faces in the plane at `plane` across their normal's axis
+    fn vertices_in_plane(mesh: &Mesh, plane: f32) -> usize {
+        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+            panic!("missing positions");
+        };
+        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+            panic!("missing normals");
+        };
+        positions
+            .iter()
+            .zip(normals)
+            .filter(|(p, n)| (0..3).any(|k| n[k] != 0.0 && p[k] == plane))
+            .count()
+    }
+
+    #[test]
+    fn test_untextured_leaves_hide_the_leaves_behind_them() {
+        let mesh = mesh_lod(&lod_with(&leaf_cube(7)));
+        // cells 7 and 8 meet at 7.5; the shell is at 6.5 and 8.5
+        assert_eq!(0, vertices_in_plane(&mesh, 7.5));
+        assert!(vertices_in_plane(&mesh, 6.5) > 0 && vertices_in_plane(&mesh, 8.5) > 0);
+        // each side of the shell merges into one quad, a centre point and 8 round its border
+        assert_eq!(6 * 9, mesh.count_vertices());
+    }
+
+    #[test]
+    fn test_untextured_leaves_still_show_other_blocks() {
+        let mut blocks = leaf_cube(7);
+        blocks.push((IVec3::new(6, 7, 7), BlockType::Log));
+        let faces = faces(&mesh_lod(&lod_with(&blocks)));
+        // the log's face into the leaves stays: only leaves hide leaves
+        assert!(faces.iter().any(|(n, vs)| *n == [1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 6.5)));
+    }
+
+    #[test]
+    fn test_untextured_leaves_on_the_nodes_edge_keep_their_faces() {
+        // past the edge the leaves may be drawn at another detail, with none just there
+        let lod = lod_with(&[(IVec3::new(15, 4, 4), BlockType::Leaves), (IVec3::new(16, 4, 4), BlockType::Leaves)]);
+        let faces = faces(&mesh_lod(&lod));
+        assert!(faces.iter().any(|(n, vs)| *n == [1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 15.5)));
+    }
+
+    fn leaf_cube_chunk() -> ChunkData {
+        let mut chunk = ChunkData::default();
+        for (coord, block) in leaf_cube(4) {
+            chunk.set_block_at(coord.as_u16vec3(), block);
+        }
+        chunk
+    }
+
+    #[test]
+    fn test_full_detail_leaves_show_the_leaves_behind_them() {
+        // blocks 4 and 5 meet at 4.5, where the faces between them show through the holes
+        let mesh = mesh_chunk(leaf_cube_chunk()).opaque;
+        assert!(vertices_in_plane(&mesh, 4.5) > 0);
+    }
+
+    #[test]
+    fn test_full_detail_solid_leaves_hide_the_leaves_behind_them() {
+        let coord = ChunkCoordinate(I64Vec3::new(0, 40, 0));
+        let mesh = generate_chunk_mesh(Arc::new(leaf_cube_chunk()), vec![None; 26], coord, &NoiseGenerator::new(3), true).opaque;
+        assert_eq!(0, vertices_in_plane(&mesh, 4.5));
+        assert!(vertices_in_plane(&mesh, 3.5) > 0 && vertices_in_plane(&mesh, 5.5) > 0);
+    }
+
     #[test]
     fn test_lod_border_exposes_surface_cells_as_skirt() {
         let lod = flat_lod(8);
@@ -1973,7 +2081,7 @@ mod tests {
             vertices = 0;
             for &c in &meshed {
                 let neighbours = c.neighbors_26().iter().map(|n| data.get(n).cloned()).collect();
-                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise());
+                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise(), false);
                 vertices += meshes.opaque.count_vertices();
             }
             best = best.min(start.elapsed());

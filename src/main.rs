@@ -100,6 +100,7 @@ fn setup_scene(
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
+        debug: settings.debug,
     });
     let water_material_handle = water_materials.add(WaterMaterial {
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
@@ -109,6 +110,7 @@ fn setup_scene(
     insert_terrain_resources(
         &mut commands,
         &renderer,
+        &settings.debug,
         world_height,
         chunk_material_handle,
         water_material_handle,
