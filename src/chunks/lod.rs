@@ -844,7 +844,9 @@ pub fn refresh_lod_visibility(
     // a node fades in once its mesh is ready, not when it's first spawned
     let node_shown = |key: LodKey| state.node_visible(key) && node_ready(key);
 
-    if lods.refresh_all {
+    // a coarse area holds 8^level nodes to walk, so from level 2 it's cheaper to visit each entity once
+    let full_pass = lods.refresh_all || lods.dirty_areas.iter().any(|area| area.level >= 2);
+    if full_pass {
         for (entity, group) in all_groups.iter() {
             set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
         }
