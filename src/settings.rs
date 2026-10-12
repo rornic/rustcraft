@@ -88,7 +88,7 @@ mod tests {
         let file = std::fs::read_to_string("assets/settings.toml").unwrap();
         let settings: Settings = toml::from_str(&file).unwrap();
         assert_eq!(16, settings.renderer.full_detail_distance);
-        assert_eq!(4, settings.renderer.lod_level_scale);
+        assert_eq!(2, settings.renderer.lod_level_scale);
         // the debug switches ship off
         assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);
     }
