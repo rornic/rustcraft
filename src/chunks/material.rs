@@ -116,3 +116,52 @@ impl Material for WaterMaterial {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bevy::color::{LinearRgba, Srgba};
+
+    // `block_mean`'s colours in block_texture.wgsl, in atlas order
+    fn shader_means() -> Vec<[f32; 3]> {
+        let shader = std::fs::read_to_string("assets/shaders/block_texture.wgsl").unwrap();
+        shader
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("vec3<f32>(")?.split(')').next())
+            .map(|args| {
+                let v: Vec<f32> = args.split(',').map(|a| a.trim().parse().unwrap()).collect();
+                [v[0], v[1], v[2]]
+            })
+            .collect()
+    }
+
+    // The mean linear colour of the texels each atlas cell draws, those the shaders don't cut out.
+    fn atlas_means() -> Vec<[f32; 3]> {
+        let atlas = image::open("assets/textures/blocks.png").unwrap().to_rgba8();
+        let tile = atlas.height();
+        (0..atlas.width() / tile)
+            .map(|cell| {
+                let drawn: Vec<LinearRgba> = (0..tile)
+                    .flat_map(|y| (0..tile).map(move |x| (x, y)))
+                    .map(|(x, y)| atlas.get_pixel(cell * tile + x, y).0)
+                    .filter(|p| p[3] >= 128)
+                    .map(|p| Srgba::rgb_u8(p[0], p[1], p[2]).into())
+                    .collect();
+                let mean = |channel: fn(&LinearRgba) -> f32| {
+                    drawn.iter().map(channel).sum::<f32>() / drawn.len() as f32
+                };
+                [mean(|c| c.red), mean(|c| c.green), mean(|c| c.blue)]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_block_means_match_the_atlas() {
+        let (shader, atlas) = (shader_means(), atlas_means());
+        assert_eq!(atlas.len(), shader.len(), "one mean per atlas cell");
+        for (cell, (s, a)) in shader.iter().zip(&atlas).enumerate() {
+            for i in 0..3 {
+                assert!((s[i] - a[i]).abs() < 0.001, "atlas cell {cell}: shader has {s:?}, blocks.png averages {a:?}");
+            }
+        }
+    }
+}
