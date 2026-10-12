@@ -183,6 +183,19 @@ impl LodKey {
         })
     }
 
+    /// This node and each one above it, up to `top`.
+    pub fn self_and_ancestors(self, top: u8) -> impl Iterator<Item = LodKey> {
+        std::iter::successors(Some(self), move |key| (key.level < top).then(|| key.parent()))
+    }
+
+    /// Whether the level-1 node `group` lies within this one.
+    pub fn contains_group(self, group: LodKey) -> bool {
+        match self.level {
+            0 => group.coord == self.coord.div_euclid(I64Vec3::splat(2)),
+            level => group.coord.div_euclid(I64Vec3::splat(1 << (level - 1))) == self.coord,
+        }
+    }
+
     /// The level-1 nodes within this one, or just it if it's level 1.
     pub fn groups_in(self) -> impl Iterator<Item = LodKey> {
         let width = 1i64 << self.level.saturating_sub(1);
@@ -398,6 +411,8 @@ pub struct LodLoader {
     // level-1 nodes over the full-detail area, drawn while its chunks aren't ready
     stand_ins: HashSet<LodKey>,
     nodes: HashMap<LodKey, Entity>,
+    // how many nodes exist at or below each key, so areas are walked only where nodes are
+    populated: HashMap<LodKey, u32>,
     // farthest first, so popping yields the nearest
     to_spawn: Vec<LodKey>,
     retiring: Vec<LodKey>,
@@ -408,7 +423,49 @@ pub struct LodLoader {
     water_material: Handle<WaterMaterial>,
 }
 
+// Levels `LodLoader::populated` counts up through, however far the layout reaches.
+const POPULATED_LEVELS: u8 = 16;
+
 impl LodLoader {
+    fn add_node(&mut self, key: LodKey, entity: Entity) {
+        if self.nodes.insert(key, entity).is_none() {
+            for ancestor in key.self_and_ancestors(POPULATED_LEVELS) {
+                *self.populated.entry(ancestor).or_insert(0) += 1;
+            }
+        }
+    }
+
+    fn remove_node(&mut self, key: LodKey) -> Option<Entity> {
+        let entity = self.nodes.remove(&key)?;
+        for ancestor in key.self_and_ancestors(POPULATED_LEVELS) {
+            if let Some(count) = self.populated.get_mut(&ancestor) {
+                *count -= 1;
+                if *count == 0 {
+                    self.populated.remove(&ancestor);
+                }
+            }
+        }
+        Some(entity)
+    }
+
+    /// The nodes that exist at or below `area`, found without visiting keys that hold none.
+    fn nodes_under(&self, area: LodKey) -> Vec<(LodKey, Entity)> {
+        let mut found = Vec::new();
+        let mut pending = vec![area];
+        while let Some(key) = pending.pop() {
+            if !self.populated.contains_key(&key) {
+                continue;
+            }
+            if let Some(&entity) = self.nodes.get(&key) {
+                found.push((key, entity));
+            }
+            if key.level > 1 {
+                pending.extend(key.children());
+            }
+        }
+        found
+    }
+
     pub fn layout(&self) -> LodLayout {
         self.layout
     }
@@ -463,6 +520,7 @@ impl LodLoader {
             selected: HashSet::new(),
             stand_ins: HashSet::new(),
             nodes: HashMap::new(),
+            populated: HashMap::new(),
             to_spawn: Vec::new(),
             retiring: Vec::new(),
             dirty_areas: Vec::new(),
@@ -576,12 +634,23 @@ pub fn update_lod_selection(
         .copied()
         .collect();
 
+    // Whether a node or chunk shows depends on the anchor only through these two sets, so only
+    // where they changed needs rechecking. The first pass, and a new layout, check everything.
+    if lods.anchor.is_none() {
+        lods.refresh_all = true;
+    } else {
+        let changed: Vec<LodKey> = selected
+            .symmetric_difference(&lods.selected)
+            .chain(stand_ins.symmetric_difference(&lods.stand_ins))
+            .copied()
+            .collect();
+        lods.dirty_areas.extend(changed);
+    }
     lods.anchor = Some(anchor);
     lods.selected = selected;
     lods.stand_ins = stand_ins;
     lods.to_spawn = to_spawn;
     lods.retiring = retiring;
-    lods.refresh_all = true;
 }
 
 pub fn spawn_lods(
@@ -639,7 +708,7 @@ pub fn spawn_lods(
             let entity = commands
                 .spawn((LodNode { key }, lod_transform(key), Visibility::Hidden))
                 .id();
-            lods.nodes.insert(key, entity);
+            lods.add_node(key, entity);
             if stand_in {
                 lods.retiring.push(key);
             }
@@ -663,7 +732,7 @@ pub fn spawn_lods(
                 Visibility::Hidden,
             ))
             .id();
-        lods.nodes.insert(key, entity);
+        lods.add_node(key, entity);
         if stand_in {
             lods.retiring.push(key);
         }
@@ -793,7 +862,7 @@ pub fn retire_lods(
     lods.retiring
         .retain(|key| !retired.contains(key) && !lods.selected.contains(key));
     for key in retired {
-        if let Some(entity) = lods.nodes.remove(&key) {
+        if let Some(entity) = lods.remove_node(key) {
             let visible = visibility
                 .get(entity)
                 .is_ok_and(|v| *v != Visibility::Hidden);
@@ -844,9 +913,7 @@ pub fn refresh_lod_visibility(
     // a node fades in once its mesh is ready, not when it's first spawned
     let node_shown = |key: LodKey| state.node_visible(key) && node_ready(key);
 
-    // a coarse area holds 8^level nodes to walk, so from level 2 it's cheaper to visit each entity once
-    let full_pass = lods.refresh_all || lods.dirty_areas.iter().any(|area| area.level >= 2);
-    if full_pass {
+    if lods.refresh_all {
         for (entity, group) in all_groups.iter() {
             set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
         }
@@ -856,22 +923,20 @@ pub fn refresh_lod_visibility(
     } else {
         for &area in &lods.dirty_areas {
             // a group is drawn whole, so one chunk of it says whether it shows
-            for group in LodKey::groups_in(area) {
-                if let Some(entity) = chunk_loader.group_entity(group).filter(|&e| built_groups.contains(e)) {
-                    set(entity, state.chunk_visible(ChunkCoordinate(group.min_chunk())));
-                }
+            let in_area = |group: LodKey| {
+                chunk_loader.group_entity(group).filter(|&e| built_groups.contains(e)).map(|e| (group, e))
+            };
+            let width = 1usize << (3 * area.level.saturating_sub(1) as usize).min(40);
+            let groups: Vec<(LodKey, Entity)> = if width <= chunk_loader.groups.len() {
+                LodKey::groups_in(area).filter_map(in_area).collect()
+            } else {
+                chunk_loader.groups.keys().filter(|&&group| area.contains_group(group)).filter_map(|&group| in_area(group)).collect()
+            };
+            for (group, entity) in groups {
+                set(entity, state.chunk_visible(ChunkCoordinate(group.min_chunk())));
             }
-            let mut level_keys = vec![area];
-            loop {
-                for &key in &level_keys {
-                    if let Some(&entity) = nodes.get(&key) {
-                        set(entity, node_shown(key));
-                    }
-                }
-                if level_keys[0].level <= 1 {
-                    break;
-                }
-                level_keys = level_keys.iter().flat_map(|key| key.children()).collect();
+            for (key, entity) in lods.nodes_under(area) {
+                set(entity, node_shown(key));
             }
         }
     }
@@ -888,11 +953,13 @@ pub fn refresh_lod_visibility(
 #[cfg(test)]
 mod tests {
     use bevy::{
+        asset::Handle,
+        ecs::entity::Entity,
         math::I64Vec3,
         utils::{HashMap, HashSet},
     };
 
-    use super::{select_lods, ChunkState, LodBand, LodKey, LodLayout, LodState};
+    use super::{select_lods, select_lods_and_stand_ins, ChunkState, LodBand, LodKey, LodLayout, LodLoader, LodState};
     use crate::chunks::chunk::ChunkCoordinate;
 
     const BAND: LodBand = LodBand {
@@ -1412,6 +1479,86 @@ mod tests {
         assert!(!with_state(anchor, &selected, &none, &ready, true, |s| s
             .chunk_visible(c)));
     }
+    fn loader() -> LodLoader {
+        LodLoader::new(layout(4), 1024, Handle::default(), Handle::default())
+    }
+
+    fn key(level: u8, x: i64, y: i64, z: i64) -> LodKey {
+        LodKey { level, coord: I64Vec3::new(x, y, z) }
+    }
+
+    #[test]
+    fn test_nodes_under_finds_only_existing_nodes_within_the_area() {
+        let mut lods = loader();
+        let inside = [key(1, 5, 1, 6), key(2, 2, 0, 3), key(3, 1, 0, 1)];
+        // the same area's neighbours and ancestors
+        let outside = [key(3, 2, 0, 1), key(1, 8, 0, 8), key(4, 0, 0, 0)];
+        for (i, k) in inside.iter().chain(&outside).enumerate() {
+            lods.add_node(*k, Entity::from_raw(i as u32));
+        }
+        let found: HashSet<LodKey> = lods.nodes_under(key(3, 1, 0, 1)).into_iter().map(|(k, _)| k).collect();
+        // (1, 5, 1, 6) lies in (2, 2, 0, 3), which lies in (3, 1, 0, 1)
+        assert_eq!(inside.into_iter().collect::<HashSet<_>>(), found);
+    }
+
+    #[test]
+    fn test_removing_nodes_empties_the_population() {
+        let mut lods = loader();
+        lods.add_node(key(1, 3, 2, 3), Entity::from_raw(0));
+        lods.add_node(key(2, 1, 1, 1), Entity::from_raw(1));
+        assert!(lods.remove_node(key(1, 3, 2, 3)).is_some());
+        assert!(lods.remove_node(key(1, 3, 2, 3)).is_none());
+        assert!(lods.nodes_under(key(3, 0, 0, 0)).len() == 1);
+        lods.remove_node(key(2, 1, 1, 1));
+        assert!(lods.populated.is_empty());
+        assert!(lods.nodes_under(key(4, 0, 0, 0)).is_empty());
+    }
+
+    #[test]
+    fn test_adding_a_node_twice_counts_it_once() {
+        let mut lods = loader();
+        lods.add_node(key(2, 0, 0, 0), Entity::from_raw(0));
+        lods.add_node(key(2, 0, 0, 0), Entity::from_raw(1));
+        lods.remove_node(key(2, 0, 0, 0));
+        assert!(lods.populated.is_empty());
+    }
+
+    #[test]
+    fn test_contains_group_matches_groups_in() {
+        for area in [key(1, -3, 2, 5), key(2, 1, -1, 0), key(4, -2, 1, 3)] {
+            let inside: HashSet<LodKey> = LodKey::groups_in(area).collect();
+            for x in -40..40 {
+                for z in -40..40 {
+                    for y in [-8, 0, 7] {
+                        let group = key(1, x, y, z);
+                        assert_eq!(inside.contains(&group), area.contains_group(group), "{area:?} {group:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_full_detail_changes_only_where_the_stand_ins_change() {
+        let layout = layout(3);
+        for (from, to) in [((100, 5, 100), (101, 5, 100)), ((100, 5, 100), (100, 6, 100)), ((-3, 8, 70), (-3, 8, 69))] {
+            let (a, b) = (chunk(from.0, from.1, from.2), chunk(to.0, to.1, to.2));
+            let (_, before) = select_lods_and_stand_ins(a, layout, BAND);
+            let (_, after) = select_lods_and_stand_ins(b, layout, BAND);
+            let changed: HashSet<LodKey> = before.symmetric_difference(&after).copied().collect();
+            for x in -80..80 {
+                for z in -80..80 {
+                    for y in [0, 5, 8, 15] {
+                        let c = chunk(from.0 + x, y, from.2 + z);
+                        if layout.full_detail(c, a) != layout.full_detail(c, b) {
+                            assert!(changed.contains(&LodKey::containing(c, 1)), "{c:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 }
 
 
