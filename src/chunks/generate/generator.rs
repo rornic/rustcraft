@@ -82,7 +82,7 @@ impl BlockSource for ChunkNeighbourhood<'_> {
     }
 }
 
-const SKIRT_CELLS: i32 = 2;
+const SKIRT_CELLS: i32 = 1;
 
 struct LodBlocks {
     size: i32,
@@ -1071,7 +1071,12 @@ fn mesh_opaque_greedy(
                     // lit by the air over it, and is too thin to shade smoothly
                     let step = span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
                     let smooth = smooth && !step;
-                    let lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
+                    let mut lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
+                    // a skirt wall past the mesh's edge faces a buried cell, see `LodBlocks::block`, so takes its light from the air above
+                    if !inside && normal.y == 0 {
+                        let air = (0..=SKIRT_CELLS).find(|&dy| !is_solid(source.terrain(lit_from + IVec3::Y * dy)));
+                        lit_from += IVec3::Y * air.unwrap_or(0);
+                    }
                     mask[(b * size + a) as usize] = span.map(|span| FaceCell {
                         span,
                         block,
@@ -2042,11 +2047,11 @@ mod tests {
     #[test]
     fn test_lod_border_exposes_surface_cells_as_skirt() {
         let lod = flat_lod(8);
-        // the border's top two solid cells read as open, so the edge draws a wall
+        // the border's top solid cell reads as open, so the edge draws a wall
         assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 7, 4)));
-        assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 6, 16)));
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 7, 16)));
         // deeper border cells and every interior cell read as they are
-        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 5, 4)));
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 6, 4)));
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
         // below the node isn't a horizontal border, so no skirt
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
