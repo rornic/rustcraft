@@ -31,3 +31,19 @@ fn block_texel(uv: vec2<f32>, vertex_alpha: f32) -> vec4<f32> {
     let texel = textureSampleGrad(material_color_texture, material_color_sampler, atlas_uv, atlas_dx, atlas_dy);
     return material_color * texel;
 }
+
+// What a block's texture averages to: the mean linear colour of each atlas cell's opaque
+// texels, in atlas order. Checked against blocks.png by `material.rs`'s tests.
+fn block_mean(vertex_alpha: f32) -> vec4<f32> {
+    var means = array<vec3<f32>, 7>(
+        vec3<f32>(0.1181, 0.1182, 0.1182), // stone
+        vec3<f32>(0.5001, 0.5001, 0.5001), // grass
+        vec3<f32>(0.4778, 0.3629, 0.1825), // sand
+        vec3<f32>(0.0659, 0.1014, 0.9148), // water
+        vec3<f32>(0.9453, 0.9921, 0.9921), // snow
+        vec3<f32>(0.0804, 0.0448, 0.0193), // log
+        vec3<f32>(0.2499, 0.2499, 0.2499), // leaves
+    );
+    let atlas_cell = u32(floor(vertex_alpha + 0.5));
+    return material_color * vec4<f32>(means[atlas_cell], 1.0);
+}

@@ -64,6 +64,10 @@ const SEA_FLOOR_DETAIL: f64 = 10.0;
 const CLIMATE_WAVELENGTH: f64 = 12000.0;
 // Spreads the climate noise, which clusters around 0, out over the whole 0..1 range.
 const CLIMATE_CONTRAST: f64 = 1.6;
+// How much of the temperature is latitude (hot equator, cold poles) rather than noise.
+const LATITUDE_WEIGHT: f64 = 0.6;
+// The poles sit at this fraction of the half size, about where the land gives way to the ocean ring.
+const POLE_LATITUDE: f64 = 0.9;
 
 // Continentalness to height above sea level: abyssal plain, continental slope, the
 // shelf around each coast, then the coast and inland.
@@ -235,9 +239,17 @@ impl NoiseGenerator {
     pub fn climate(&self, x: f64, z: f64) -> Climate {
         let spread = |n: f64| (n * CLIMATE_CONTRAST * 0.5 + 0.5).clamp(0.0, 1.0) as f32;
         Climate {
-            temperature: spread(self.temperature.get([x, z])),
+            temperature: self.temperature(x, z),
             humidity: spread(self.humidity.get([x, z])),
         }
+    }
+
+    // How hot the column at (x, z) is: noise, pulled cold towards the poles at the north and south edges of the land.
+    pub fn temperature(&self, x: f64, z: f64) -> f32 {
+        let noise = (self.temperature.get([x, z]) * CLIMATE_CONTRAST * 0.5 + 0.5).clamp(0.0, 1.0);
+        let latitude = (z.abs() / (WORLD_HALF_SIZE as f64 * POLE_LATITUDE)).min(1.0);
+        let warmth = (latitude * std::f64::consts::FRAC_PI_2).cos();
+        (noise * (1.0 - LATITUDE_WEIGHT) + warmth * LATITUDE_WEIGHT) as f32
     }
 
     // Ridged multifractal in 0..1: sharp crests where the noise crosses zero, with each
@@ -354,6 +366,15 @@ mod tests {
             let (low, high) = samples.iter().map(value).fold((1.0f32, 0.0f32), |(l, h), v| (l.min(v), h.max(v)));
             assert!(low < 0.15 && high > 0.85, "climate only spans {low}..{high}");
         }
+    }
+
+    #[test]
+    fn test_poles_are_colder_than_the_equator() {
+        let noise = NoiseGenerator::new(9);
+        let mean = |z: f64| (-40..40).map(|i| noise.temperature(i as f64 * 400.0, z)).sum::<f32>() / 80.0;
+        let pole = WORLD_HALF_SIZE as f64 * 0.85;
+        assert!(mean(0.0) > 0.7, "equator was {}", mean(0.0));
+        assert!(mean(pole) < 0.3 && mean(-pole) < 0.3, "poles were {} and {}", mean(pole), mean(-pole));
     }
 
     #[test]

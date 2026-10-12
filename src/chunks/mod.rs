@@ -12,7 +12,7 @@ use bevy::{
     ecs::{schedule::IntoSystemConfigs, system::Commands},
 };
 
-use crate::settings::RendererSettings;
+use crate::settings::{DebugSettings, RendererSettings};
 use chunk_loader::{
     gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
 };
@@ -71,6 +71,7 @@ pub fn task_pool_plugin() -> TaskPoolPlugin {
 pub fn insert_terrain_resources(
     commands: &mut Commands,
     renderer: &RendererSettings,
+    debug: &DebugSettings,
     world_height: u64,
     chunk_material: Handle<ChunkMaterial>,
     water_material: Handle<WaterMaterial>,
@@ -91,5 +92,10 @@ pub fn insert_terrain_resources(
         chunk_material.clone(),
         water_material.clone(),
     ));
-    commands.insert_resource(ChunkLoader::new(layout, chunk_material, water_material));
+    commands.insert_resource(ChunkLoader::new(
+        layout,
+        debug.solid_leaves,
+        chunk_material,
+        water_material,
+    ));
 }

@@ -8,6 +8,8 @@ use crate::chunks::lod::LodLayout;
 #[derive(Default, Deserialize, Clone, Copy, Component)]
 pub struct Settings {
     pub renderer: RendererSettings,
+    #[serde(default)]
+    pub debug: DebugSettings,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -22,6 +24,17 @@ pub struct RendererSettings {
     pub lod_level_scale: u32,
     /// How long swapping between LOD levels takes to cross-fade, in seconds.
     pub lod_fade_seconds: f32,
+}
+
+/// Switches for testing what the renderer spends its time on, all off by default.
+#[derive(Default, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[serde(default)]
+pub struct DebugSettings {
+    /// Leaves stay still instead of swaying in the wind.
+    pub still_leaves: bool,
+    /// Leaves are drawn in their mean colour without their holes, in shadows too, and hide
+    /// the faces of the leaves behind them, as coarse LODs draw them everywhere.
+    pub solid_leaves: bool,
 }
 
 impl Settings {
@@ -60,6 +73,14 @@ mod tests {
         let settings: Settings = toml::from_str("[renderer]\nrender_distance = 64").unwrap();
         assert_eq!(64, settings.renderer.render_distance);
         assert_eq!(32, settings.renderer.full_detail_distance);
+        assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);
+    }
+
+    #[test]
+    fn test_debug_settings_parse() {
+        let settings: Settings = toml::from_str("[renderer]\n[debug]\nsolid_leaves = true").unwrap();
+        assert!(settings.debug.solid_leaves);
+        assert!(!settings.debug.still_leaves);
     }
 
     #[test]
@@ -67,6 +88,8 @@ mod tests {
         let file = std::fs::read_to_string("assets/settings.toml").unwrap();
         let settings: Settings = toml::from_str(&file).unwrap();
         assert_eq!(16, settings.renderer.full_detail_distance);
-        assert_eq!(4, settings.renderer.lod_level_scale);
+        assert_eq!(2, settings.renderer.lod_level_scale);
+        // the debug switches ship off
+        assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);
     }
 }

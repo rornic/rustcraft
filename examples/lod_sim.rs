@@ -17,7 +17,7 @@ use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::lod::{LodKey, LodLayout, LodNode};
 use rustcraft::chunks::material::{ChunkMaterial, WaterMaterial};
 use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
-use rustcraft::settings::{RendererSettings, Settings};
+use rustcraft::settings::{DebugSettings, RendererSettings, Settings};
 
 #[derive(Component)]
 struct SimCamera;
@@ -32,7 +32,7 @@ fn setup(
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
     let renderer = &renderer.0;
-    let world = rustcraft::world::World::new(renderer.lod_layout().render_distance() as u32);
+    let world = rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32);
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);
@@ -49,6 +49,10 @@ fn setup(
         color: LinearRgba::WHITE,
         texture: None,
         fade: FULLY_VISIBLE,
+        // nothing's drawn, so no clouds
+        cloud_pattern: Default::default(),
+        cloud_layer: Default::default(),
+        debug: DebugSettings::default(),
     });
     let water = water_materials.add(WaterMaterial {
         color: LinearRgba::WHITE,
@@ -58,6 +62,7 @@ fn setup(
     insert_terrain_resources(
         &mut commands,
         renderer,
+        &DebugSettings::default(),
         height,
         chunk,
         water,
