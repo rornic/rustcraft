@@ -2,6 +2,7 @@ pub mod chunk;
 pub mod chunk_loader;
 pub mod fade;
 pub mod generate;
+pub mod group;
 pub mod lod;
 pub mod material;
 
@@ -17,6 +18,7 @@ use chunk_loader::{
     gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
 };
 use fade::{apply_fades, FadeMaterials};
+use group::{build_groups, load_groups};
 use lod::{
     load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_lod_selection, LodLoader,
 };
@@ -30,7 +32,8 @@ impl Plugin for TerrainPlugin {
         app.add_systems(
             Update,
             (
-                (gather_chunks, generate_chunks, mark_chunks, load_chunks).before(unload_chunks),
+                (gather_chunks, generate_chunks, mark_chunks, load_chunks, build_groups, load_groups)
+                    .before(unload_chunks),
                 (
                     update_lod_selection,
                     spawn_lods,

@@ -21,8 +21,9 @@ use bevy::{
 
 use super::{
     chunk::{ChunkCoordinate, CHUNK_SIZE},
-    chunk_loader::{Chunk, ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
+    chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
     fade::{fade_out_and_despawn, set_shown, Fade},
+    group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk},
     generate::{
         columns::COARSE_CELL,
         generator::{generate_lod_mesh, ChunkMeshes},
@@ -179,6 +180,18 @@ impl LodKey {
             level: self.level - 1,
             coord: self.coord * 2
                 + I64Vec3::new((i & 1) as i64, ((i >> 1) & 1) as i64, ((i >> 2) & 1) as i64),
+        })
+    }
+
+    /// The level-1 nodes within this one, or just it if it's level 1.
+    pub fn groups_in(self) -> impl Iterator<Item = LodKey> {
+        let width = 1i64 << self.level.saturating_sub(1);
+        let min = if self.level == 0 { self.coord.div_euclid(I64Vec3::splat(2)) } else { self.coord * width };
+        let count = if self.level == 0 { 1 } else { width };
+        (0..count).flat_map(move |x| {
+            (0..count).flat_map(move |y| {
+                (0..count).map(move |z| LodKey { level: 1, coord: min + I64Vec3::new(x, y, z) })
+            })
         })
     }
 
@@ -464,6 +477,7 @@ type PendingChunk = Or<(
     With<GenerateChunkData>,
     With<DirtyChunk>,
     With<GenerateChunkMesh>,
+    With<MeshedChunk>,
 )>;
 
 /// How far along a full-detail chunk is, as far as LODs are concerned.
@@ -486,7 +500,7 @@ impl ChunkState {
 pub struct ChunkStates<'w, 's> {
     loader: Res<'w, ChunkLoader>,
     pending: Query<'w, 's, (), PendingChunk>,
-    drawn: Query<'w, 's, (), (With<Chunk>, With<Mesh3d>)>,
+    drawn: Query<'w, 's, (), With<GroupedChunk>>,
 }
 
 impl ChunkStates<'_, '_> {
@@ -796,8 +810,9 @@ pub fn refresh_lod_visibility(
     time: Res<Time>,
     chunk_loader: Res<ChunkLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
-    all_chunks: Query<(Entity, &Chunk), With<Mesh3d>>,
-    new_chunks: Query<(Entity, &Chunk), Added<Mesh3d>>,
+    all_groups: Query<(Entity, &ChunkGroup), With<BuiltGroup>>,
+    new_groups: Query<(Entity, &ChunkGroup), Added<BuiltGroup>>,
+    built_groups: Query<(), With<BuiltGroup>>,
     // only nodes with something to draw - nodes still loading are shown when their mesh lands
     all_nodes: Query<(Entity, &LodNode), With<Mesh3d>>,
     mut visibility: Query<(&mut Visibility, Option<&Fade>)>,
@@ -830,17 +845,18 @@ pub fn refresh_lod_visibility(
     let node_shown = |key: LodKey| state.node_visible(key) && node_ready(key);
 
     if lods.refresh_all {
-        for (entity, chunk) in all_chunks.iter() {
-            set(entity, state.chunk_visible(chunk.coord));
+        for (entity, group) in all_groups.iter() {
+            set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
         }
         for (entity, node) in all_nodes.iter() {
             set(entity, node_shown(node.key));
         }
     } else {
         for &area in &lods.dirty_areas {
-            for chunk in area.chunks() {
-                if let Some(entity) = chunk_loader.chunk_entity(chunk) {
-                    set(entity, state.chunk_visible(chunk));
+            // a group is drawn whole, so one chunk of it says whether it shows
+            for group in LodKey::groups_in(area) {
+                if let Some(entity) = chunk_loader.group_entity(group).filter(|&e| built_groups.contains(e)) {
+                    set(entity, state.chunk_visible(ChunkCoordinate(group.min_chunk())));
                 }
             }
             let mut level_keys = vec![area];
@@ -858,9 +874,9 @@ pub fn refresh_lod_visibility(
         }
     }
 
-    // newly meshed chunks arrive hidden, and fade in unless a node still covers them
-    for (entity, chunk) in new_chunks.iter() {
-        set(entity, state.chunk_visible(chunk.coord));
+    // newly built groups arrive hidden, and fade in unless a node still covers them
+    for (entity, group) in new_groups.iter() {
+        set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
     }
 
     lods.refresh_all = false;
