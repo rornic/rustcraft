@@ -14,6 +14,7 @@ use bevy::{
 
 use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
+use crate::settings::DebugSettings;
 
 // Sea level, where `fog.wgsl` turns from fog across the land to murk all round.
 pub(crate) fn water_level() -> ShaderDefVal {
@@ -29,6 +30,7 @@ pub(crate) fn push_shader_defs(descriptor: &mut RenderPipelineDescriptor, defs: 
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+#[bind_group_data(DebugSettings)]
 pub struct ChunkMaterial {
     #[uniform(0)]
     pub color: LinearRgba,
@@ -44,6 +46,14 @@ pub struct ChunkMaterial {
     pub cloud_pattern: Handle<Image>,
     #[uniform(6)]
     pub cloud_layer: Vec4,
+    // compiled into the shaders, see `specialize`
+    pub debug: DebugSettings,
+}
+
+impl From<&ChunkMaterial> for DebugSettings {
+    fn from(material: &ChunkMaterial) -> Self {
+        material.debug
+    }
 }
 
 impl Material for ChunkMaterial {
@@ -66,20 +76,33 @@ impl Material for ChunkMaterial {
         "shaders/world_prepass.wgsl".into()
     }
 
+    // solid leaves have no holes to cut, so are drawn as opaque
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Mask(0.5)
+        if self.debug.solid_leaves {
+            AlphaMode::Opaque
+        } else {
+            AlphaMode::Mask(0.5)
+        }
     }
 
     fn specialize(
         _pipeline: &MaterialPipeline<Self>,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = Some(Face::Front);
         // the main and shadow passes both sway leaves, see `foliage.wgsl`
         let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), BlockType::Leaves as u32 - 1);
-        push_shader_defs(descriptor, &[leaf_cell, water_level()]);
+        let mut defs = vec![leaf_cell, water_level()];
+        // compiled in or out, so the switches leave no trace of the code they turn off
+        if key.bind_group_data.still_leaves {
+            defs.push("STILL_LEAVES".into());
+        }
+        if key.bind_group_data.solid_leaves {
+            defs.push("SOLID_LEAVES".into());
+        }
+        push_shader_defs(descriptor, &defs);
         Ok(())
     }
 }

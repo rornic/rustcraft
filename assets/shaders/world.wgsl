@@ -7,7 +7,7 @@
     view_transformations::{position_world_to_clip, position_world_to_view},
 }
 #import "shaders/block_texture.wgsl"::{block_mean, block_texel, material_fade}
-#import "shaders/foliage.wgsl"::swayed
+#import "shaders/foliage.wgsl"::{is_leaf, swayed}
 #import "shaders/fog.wgsl"::fogged
 #import "shaders/lighting.wgsl"::{direct_sun, open_sky}
 #import "shaders/cloud_shadow.wgsl"::cloud_shadow
@@ -92,6 +92,12 @@ fn fragment(
         color = block_mean(in.color.a);
     }
 #endif
+#ifdef SOLID_LEAVES
+    // `DebugSettings::solid_leaves`: leaves without their holes, as coarse LODs draw them
+    if is_leaf(in.color.a) {
+        color = block_mean(in.color.a);
+    }
+#endif
     // ambient occlusion and grass/leaf tint
     color = vec4<f32>(color.rgb * in.color.rgb, color.a);
 
@@ -113,9 +119,11 @@ fn fragment(
         discard;
     }
     // the holes in leaves: this shader replaces Bevy's, so must cut out alpha-masked texels itself
+#ifndef SOLID_LEAVES
     if color.a < 0.5 {
         discard;
     }
+#endif
 
     var output: FragmentOutput;
     output.color = color;

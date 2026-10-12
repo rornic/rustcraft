@@ -54,6 +54,8 @@ pub struct ChunkLoader {
     material: Handle<ChunkMaterial>,
     water_material: Handle<WaterMaterial>,
     max_in_flight_generating: usize,
+    // see `DebugSettings::solid_leaves`
+    solid_leaves: bool,
 }
 
 // A fixed per-frame item budget tuned at one render distance silently falls behind at a
@@ -97,6 +99,7 @@ fn scale_budget(baseline: usize, render_distance: u32) -> usize {
 impl ChunkLoader {
     pub fn new(
         layout: LodLayout,
+        solid_leaves: bool,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
     ) -> Self {
@@ -116,6 +119,7 @@ impl ChunkLoader {
                 BASELINE_IN_FLIGHT_GENERATING,
                 render_distance,
             ),
+            solid_leaves,
         }
     }
 
@@ -317,8 +321,9 @@ pub fn load_chunks(
                     if let Some(data) = world.get_chunk_data(gen_chunk_mesh.coord) {
                         let adjacent = world.adjacent_chunk_data(chunk.coord);
                         let (coord, regions) = (chunk.coord, world.region_store.clone());
+                        let solid_leaves = chunk_loader.solid_leaves;
                         gen_chunk_mesh.task = Some(task_pool.spawn(async move {
-                            generate_chunk_mesh(data, adjacent, coord, regions.noise())
+                            generate_chunk_mesh(data, adjacent, coord, regions.noise(), solid_leaves)
                         }));
                     }
                 }
