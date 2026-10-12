@@ -1,5 +1,5 @@
 [renderer]
-render_distance = 128
+render_distance = 512
 full_detail_distance = 16
 lod_level_scale = 4
 lod_fade_seconds = 1.5
