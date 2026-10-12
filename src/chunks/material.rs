@@ -1,5 +1,6 @@
 use bevy::{
-    asset::Asset,
+    asset::{Asset, RenderAssetUsages},
+    image::{CompressedImageFormats, ImageFilterMode, ImageSampler, ImageSamplerDescriptor, ImageType},
     pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     reflect::TypePath,
@@ -27,6 +28,64 @@ pub(crate) fn push_shader_defs(descriptor: &mut RenderPipelineDescriptor, defs: 
     if let Some(fragment) = &mut descriptor.fragment {
         fragment.shader_defs.extend_from_slice(defs);
     }
+}
+
+/// The block texture atlas, one square tile per block in a row, with mipmaps down to one texel
+/// a tile: each mip level halves every tile, so none bleeds into its neighbour. Bevy builds no
+/// mipmaps itself, and without them textures shimmer as the camera moves. Magnified texels
+/// stay crisp.
+pub fn block_atlas(path: &str) -> Image {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("could not read {path}: {e}"));
+    let mut image = Image::from_buffer(
+        &bytes,
+        ImageType::Extension("png"),
+        CompressedImageFormats::NONE,
+        true,
+        ImageSampler::Descriptor(ImageSamplerDescriptor {
+            mag_filter: ImageFilterMode::Nearest,
+            min_filter: ImageFilterMode::Linear,
+            mipmap_filter: ImageFilterMode::Linear,
+            ..default()
+        }),
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .unwrap_or_else(|e| panic!("could not decode {path}: {e}"));
+    let tile = image.height();
+    mip_tiles(&mut image, tile.ilog2() + 1);
+    image
+}
+
+// Appends `levels` - 1 box-filtered mip levels to an RGBA8 sRGB image, averaging in linear
+// light and weighting colour by alpha so cut-out texels don't darken what's left.
+fn mip_tiles(image: &mut Image, levels: u32) {
+    let (mut width, mut height) = (image.width() as usize, image.height() as usize);
+    let mut level = image.data.clone();
+    for _ in 1..levels {
+        let (next_width, next_height) = (width / 2, height / 2);
+        let mut next = Vec::with_capacity(next_width * next_height * 4);
+        for y in 0..next_height {
+            for x in 0..next_width {
+                let (mut rgb, mut alpha) = ([0.0f32; 3], 0.0f32);
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let at = ((2 * y + dy) * width + 2 * x + dx) * 4;
+                    let texel = &level[at..at + 4];
+                    let linear = LinearRgba::from(Srgba::rgb_u8(texel[0], texel[1], texel[2]));
+                    let a = texel[3] as f32 / 255.0;
+                    rgb[0] += linear.red * a;
+                    rgb[1] += linear.green * a;
+                    rgb[2] += linear.blue * a;
+                    alpha += a;
+                }
+                let weight = alpha.max(f32::EPSILON);
+                let colour = Srgba::from(LinearRgba::rgb(rgb[0] / weight, rgb[1] / weight, rgb[2] / weight)).to_u8_array();
+                next.extend_from_slice(&[colour[0], colour[1], colour[2], (alpha / 4.0 * 255.0).round() as u8]);
+            }
+        }
+        image.data.extend_from_slice(&next);
+        level = next;
+        (width, height) = (next_width, next_height);
+    }
+    image.texture_descriptor.mip_level_count = levels;
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -149,6 +208,18 @@ impl Material for WaterMaterial {
 #[cfg(test)]
 mod tests {
     use bevy::color::{LinearRgba, Srgba};
+
+    #[test]
+    fn test_atlas_mips_end_at_one_texel_a_tile() {
+        let atlas = super::block_atlas("assets/textures/blocks.png");
+        let tile = atlas.height() as usize;
+        let levels = tile.ilog2() as usize + 1;
+        assert_eq!(levels as u32, atlas.texture_descriptor.mip_level_count);
+        let texels: usize = (0..levels).map(|l| (atlas.width() as usize >> l) * (tile >> l)).sum();
+        assert_eq!(texels * 4, atlas.data.len());
+        // the last level has one texel for each of the atlas's tiles
+        assert_eq!(atlas.width() as usize / tile, atlas.width() as usize >> (levels - 1));
+    }
 
     // `block_mean`'s colours in block_texture.wgsl, in atlas order
     fn shader_means() -> Vec<[f32; 3]> {

@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
     insert_terrain_resources,
-    material::{ChunkMaterial, WaterMaterial},
+    material::{block_atlas, ChunkMaterial, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
@@ -17,7 +17,6 @@ use rustcraft::tonemap::{dry_color_grading, scene_colour, TONEMAPPING};
 
 fn setup_scene(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -91,9 +90,10 @@ fn setup_scene(
     let shadow_distance = (renderer.shadow_distance as f32 * 16.0).min(fog_distance);
     commands.spawn(sun(shadow_distance, renderer.shadow_cascades));
 
+    let atlas = images.add(block_atlas("assets/textures/blocks.png"));
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
         color: LinearRgba::WHITE,
-        texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        texture: Some(atlas.clone()),
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
@@ -101,7 +101,7 @@ fn setup_scene(
     });
     let water_material_handle = water_materials.add(WaterMaterial {
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
-        texture: Some(asset_server.load::<Image>("textures/blocks.png")),
+        texture: Some(atlas),
         fade: FULLY_VISIBLE,
     });
     insert_terrain_resources(
