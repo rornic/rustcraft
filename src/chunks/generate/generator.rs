@@ -261,7 +261,7 @@ impl LodBlocks {
                     if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
                         block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient, temperature);
                     }
-                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = block;
+                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = underwater(block, base.y + cy as i64 * cell, cell, height);
                 }
             }
         }
@@ -345,7 +345,7 @@ impl LodBlocks {
                     if block == BlockType::Air && base.y + cy as i64 * cell < top {
                         block = column_block(biomes, biome, top - 1, column_height, combined_gradient, temperature);
                     }
-                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = block;
+                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = underwater(block, base.y + cy as i64 * cell, cell, column_height);
                 }
             }
         }
@@ -560,6 +560,16 @@ impl BlockSource for LodBlocks {
             }
         }
         result
+    }
+}
+
+// The cell at the water's surface over ground below it is water, not ground: filled by its
+// ground it would draw as a beach at sea level, where the water over it is mostly of the cell.
+fn underwater(block: BlockType, bottom: i64, cell: i64, column_height: i64) -> BlockType {
+    if is_solid(block) && bottom < WATER_LEVEL && WATER_LEVEL <= bottom + cell && ground_top(column_height) < WATER_LEVEL {
+        BlockType::Water
+    } else {
+        block
     }
 }
 
@@ -2559,6 +2569,37 @@ mod tests {
         assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 16, 4)));
         assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 15, 4)));
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 14, 4)));
+    }
+
+    #[test]
+    fn test_lod_water_surface_cells_over_shallow_ground_are_water() {
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(102))));
+        let mut checked = 0;
+        for level in [3u8, 4, 5] {
+            for x in -6..6i64 {
+                for z in -6..6i64 {
+                    let width = 1i64 << level;
+                    let key = LodKey { level, coord: I64Vec3::new(x, (WATER_LEVEL / 16).div_euclid(width), z) };
+                    let lod = LodBlocks::sample(&regions, key);
+                    for cx in 0..lod.size {
+                        for cz in 0..lod.size {
+                            let column = LodBlocks::column(lod.size, cx, cz);
+                            if lod.tops[column] >= WATER_LEVEL {
+                                continue;
+                            }
+                            for cy in 0..lod.size {
+                                let bottom = lod.base_y + cy as i64 * lod.cell;
+                                if bottom < WATER_LEVEL && WATER_LEVEL <= bottom + lod.cell {
+                                    assert!(!super::is_solid(lod.raw(IVec3::new(cx, cy, cz))));
+                                    checked += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 1000);
     }
 
     #[test]
