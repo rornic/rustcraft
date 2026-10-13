@@ -48,12 +48,9 @@ const LOBES: usize = 3;
 // Trunks this tall are two blocks thick.
 const THICK_TRUNK: i64 = 12;
 // Cells this wide or wider judge leaves by coverage: a quarter of a 3 x 3 x 3 spread of points
-// inside. Cells wider than a crown, `WIDE_CELL` and up, only have to catch a couple of a finer
-// spread, or crowns would fill under a quarter of them and vanish. A spread has to be finer than
-// a crown, so it gets finer again at `WIDER_CELL`.
+// inside, or small crowns would fall between cell centres.
 const COVERAGE_CELL: i64 = 4;
-const WIDE_CELL: i64 = 16;
-const WIDER_CELL: i64 = 32;
+const COVERAGE_POINTS: usize = 7;
 /// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
 /// is. Meshing draws it as a thin box instead, see `generator::Trunk`.
 pub const THIN_TRUNK_CELL: i64 = 4;
@@ -174,27 +171,40 @@ impl Tree {
         }
     }
 
-    // Whether enough of the cell centred `offset` from the trunk's base is among the leaves.
+    // Whether enough of the cell centred `offset` from the trunk's base is among the leaves, judged
+    // from a 3 x 3 x 3 spread of points through it.
     fn leaf_coverage(&self, offset: DVec3, size: i64) -> bool {
-        let (across, least) = match size {
-            s if s >= WIDER_CELL => (9, 2),
-            s if s >= WIDE_CELL => (5, 2),
-            _ => (3, 7),
-        };
-        let step = size as f64 / across as f64;
-        let half = (across - 1) as f64 / 2.0;
+        let step = size as f64 / 3.0;
         let mut inside = 0;
-        for x in 0..across {
-            for y in 0..across {
-                for z in 0..across {
-                    let point = DVec3::new(x as f64 - half, y as f64 - half, z as f64 - half) * step;
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    let point = DVec3::new(x as f64, y as f64, z as f64) * step;
                     if self.in_leaves(offset + point) {
                         inside += 1;
                     }
                 }
             }
         }
-        inside >= least
+        inside >= COVERAGE_POINTS
+    }
+
+    /// The crown as one box, in blocks, for cells too wide to hold it: where its leaves reach,
+    /// roughly, not cell by cell. Broadleaf crowns are the big round blob, and pines a box as wide
+    /// as their tiers are on average.
+    pub fn crown_box(&self) -> (DVec3, DVec3) {
+        let axis = self.base.as_dvec3() + self.axis();
+        let (centre, half) = match self.kind {
+            TreeKind::Broadleaf => {
+                (axis + self.crown.centre - self.axis(), DVec3::new(self.crown.radius * 1.15, self.crown.radius * self.crown.squash * 1.1, self.crown.radius * 1.15))
+            }
+            TreeKind::Pine => {
+                let (bottom, top) = ((self.trunk / 4) as f64, (self.trunk + 1) as f64);
+                let wide = (0.6 + self.spread) * 0.65;
+                (axis + DVec3::Y * (bottom + top) / 2.0, DVec3::new(wide, (top - bottom) / 2.0, wide))
+            }
+        };
+        (centre - half, centre + half)
     }
 
     // Whether the point `offset` from the trunk's base is among the leaves.
