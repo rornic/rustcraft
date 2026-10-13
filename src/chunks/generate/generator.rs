@@ -82,6 +82,14 @@ trait BlockSource {
     fn has_skirts(&self) -> bool {
         false
     }
+
+    /// The water over the column at `coord`, in blocks, 0 for land.
+    fn water_depth_blocks(&self, coord: IVec3) -> f32
+    where
+        Self: Sized,
+    {
+        water_depth(self, coord) as f32
+    }
 }
 
 /// Part of a tree as a box of leaves or logs, in mesh units, for cells too wide to hold it.
@@ -125,6 +133,8 @@ struct LodBlocks {
     any_surface_tops: bool,
     // the top of each padded column's canopy in blocks, `i64::MIN` where it has none, or empty with no canopies at all
     canopy_tops: Vec<i64>,
+    // each column's ground height before rounding, empty when not known
+    ground_heights: Vec<f32>,
     // how much of each padded column's ground forest covers, 0..1, or empty where trees are real
     forest: Vec<f32>,
     boxes: Vec<TreeBox>,
@@ -219,6 +229,7 @@ impl LodBlocks {
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
+        let mut ground_heights = vec![0.0; padded * padded];
         let mut canopy_tops = vec![i64::MIN; padded * padded];
         let mut boxes = Vec::new();
         let grid = regions.column_grid(key);
@@ -229,7 +240,9 @@ impl LodBlocks {
 
         for cx in -1..=size {
             for cz in -1..=size {
-                let height = grid.height(cx, cz).round() as i64;
+                let exact_height = grid.height(cx, cz);
+                let height = exact_height.round() as i64;
+                ground_heights[Self::column(size, cx, cz)] = exact_height as f32;
                 (lowest, highest) = (lowest.min(height), highest.max(height));
                 let gradient = grid.gradient(cx, cz);
                 let biome = grid.biome(cx, cz);
@@ -291,7 +304,7 @@ impl LodBlocks {
                 }
             }
         }
-        Self::new(size, cells, tops, base.y, cell).with_canopy_tops(canopy_tops).with_forest(forest).with_boxes(boxes)
+        Self::new(size, cells, tops, base.y, cell).with_ground_heights(ground_heights).with_canopy_tops(canopy_tops).with_forest(forest).with_boxes(boxes)
     }
 
     // From full-detail regions, with real trees.
@@ -302,6 +315,7 @@ impl LodBlocks {
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
+        let mut ground_heights = vec![0.0; padded * padded];
         let mut heights = regions.sampler();
         let noise = regions.noise();
         let biomes = noise.biomes();
@@ -311,7 +325,9 @@ impl LodBlocks {
             for cz in -1..=size {
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
-                let column_height = heights.height(world_x, world_z).round() as i64;
+                let exact_height = heights.height(world_x, world_z);
+                let column_height = exact_height.round() as i64;
+                ground_heights[Self::column(size, cx, cz)] = exact_height as f32;
                 (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
@@ -344,7 +360,12 @@ impl LodBlocks {
             }
         }
 
-        Self::new(size, cells, tops, base.y, cell)
+        Self::new(size, cells, tops, base.y, cell).with_ground_heights(ground_heights)
+    }
+
+    fn with_ground_heights(mut self, ground_heights: Vec<f32>) -> Self {
+        self.ground_heights = ground_heights;
+        self
     }
 
     fn with_canopy_tops(mut self, canopy_tops: Vec<i64>) -> Self {
@@ -363,7 +384,7 @@ impl LodBlocks {
     }
 
     fn new(size: i32, cells: Vec<BlockType>, tops: Vec<i64>, base_y: i64, cell: i64) -> Self {
-        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false, canopy_tops: Vec::new(), forest: Vec::new(), boxes: Vec::new() };
+        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false, canopy_tops: Vec::new(), ground_heights: Vec::new(), forest: Vec::new(), boxes: Vec::new() };
         blocks.surface_tops = vec![None; blocks.cells.len()];
         for x in -1..=size {
             for z in -1..=size {
@@ -448,6 +469,16 @@ impl BlockSource for LodBlocks {
 
     fn has_skirts(&self) -> bool {
         true
+    }
+
+    // the seabed's real depth, not the cells' count, so deep colour shades smoothly however coarse they are
+    fn water_depth_blocks(&self, coord: IVec3) -> f32 {
+        if water_depth(self, coord) == 0 {
+            return 0.0;
+        }
+        let column = Self::column(self.size, coord.x.clamp(-1, self.size), coord.z.clamp(-1, self.size));
+        let ground = self.ground_heights.get(column).copied().unwrap_or(self.tops[column] as f32);
+        (WATER_LEVEL as f32 - ground).max(1.0)
     }
 
     fn forest_shade(&self, position: Vec3) -> f32 {
@@ -983,17 +1014,17 @@ fn water_depth(source: &impl BlockSource, block_coord: IVec3) -> u32 {
 
 // Water depth at a top-face corner, averaged over the four columns sharing it (land counts as 0).
 fn vertex_water_depth(
-    depth_of: &mut impl FnMut(IVec3) -> u32,
+    depth_of: &mut impl FnMut(IVec3) -> f32,
     block_coord: IVec3,
     face_index: usize,
     vertex_local_pos: [f32; 3],
 ) -> f32 {
     let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
-    let total: u32 = [IVec3::ZERO, offset_a, offset_b, offset_a + offset_b]
+    let total: f32 = [IVec3::ZERO, offset_a, offset_b, offset_a + offset_b]
         .into_iter()
         .map(|offset| depth_of(block_coord + offset))
         .sum();
-    total as f32 / 4.0
+    total / 4.0
 }
 
 // Tints grass by the climate it grows in. Climate drifts over thousands of blocks, so it's
@@ -1467,7 +1498,7 @@ fn mesh_blocks(
     // columns' water depths, shared between the corners that sample them
     let mut depths = HashMap::new();
     let mut depth_of =
-        |coord: IVec3| *depths.entry(coord).or_insert_with(|| water_depth(source, coord));
+        |coord: IVec3| *depths.entry(coord).or_insert_with(|| source.water_depth_blocks(coord));
 
     let size = CHUNK_SIZE as i32;
     let mut blocks = vec![BlockType::Air; (size * size * size) as usize];
@@ -1506,9 +1537,7 @@ fn mesh_blocks(
                 .iter()
                 .map(|v| {
                     let depth_factor = if is_top {
-                        vertex_water_depth(&mut depth_of, block_coord, i, v.position)
-                            * cell_size as f32
-                            / CHUNK_SIZE as f32
+                        vertex_water_depth(&mut depth_of, block_coord, i, v.position) / CHUNK_SIZE as f32
                     } else {
                         0.0
                     };
@@ -1685,7 +1714,7 @@ mod tests {
             chunk: &chunk,
             neighbors: &neighbors,
         };
-        let mut depth_of = |coord: IVec3| water_depth(&source, coord);
+        let mut depth_of = |coord: IVec3| water_depth(&source, coord) as f32;
 
         // the corner between them, on the +z side: seen from each column's top face
         let deep = vertex_water_depth(&mut depth_of, IVec3::new(4, 5, 4), 4, [0.5, 0.5, 0.5]);
