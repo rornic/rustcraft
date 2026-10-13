@@ -52,8 +52,9 @@ const THICK_TRUNK: i64 = 12;
 // spread, or crowns would fill under a quarter of them and vanish.
 const COVERAGE_CELL: i64 = 4;
 const WIDE_CELL: i64 = 16;
-// Cells this wide or wider leave out the trunk.
-const MAX_TRUNK_CELL: i64 = 8;
+/// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
+/// is. Meshing draws it as a thin box instead, see `generator::Trunk`.
+pub const THIN_TRUNK_CELL: i64 = 4;
 // How far in leaves are nibbled from the edge of a crown.
 const NIBBLE: f64 = 0.9;
 
@@ -126,7 +127,7 @@ impl Tree {
         Self { kind, base, trunk, spread, seed, crown, lobes }
     }
 
-    fn width(&self) -> i64 {
+    pub fn width(&self) -> i64 {
         if self.trunk >= THICK_TRUNK { 2 } else { 1 }
     }
 
@@ -148,7 +149,7 @@ impl Tree {
     // one block across are just blocks, where wood runs up through the leaves; in coarser cells
     // the leaves win, or a whole cell's width of trunk would stand in for the crown. Cells this
     // wide or wider hold leaves if a quarter of them would be, or small crowns would fall between
-    // cell centres, and they leave out the trunk, which would stand as a pillar far thicker than it is.
+    // cell centres, and from `THIN_TRUNK_CELL` they leave out the trunk.
     pub fn block_in_cell(&self, min: I64Vec3, size: i64) -> Option<BlockType> {
         let overlaps = |lo: i64, from: i64, to: i64| lo < to && lo + size > from;
         let width = self.width();
@@ -163,7 +164,7 @@ impl Tree {
         };
         match (trunk, leaves) {
             (true, true) if size > 1 => Some(BlockType::Leaves),
-            (true, _) if size >= MAX_TRUNK_CELL => None,
+            (true, _) if size >= THIN_TRUNK_CELL => None,
             (true, _) => Some(BlockType::Log),
             (false, _) if size == 1 && self.in_branch(offset) => Some(BlockType::Log),
             (false, true) => Some(BlockType::Leaves),
@@ -385,12 +386,16 @@ mod tests {
     #[test]
     fn test_coarse_cells_keep_the_trunk_and_crown() {
         let t = tree(TreeKind::Broadleaf, 12, 6.0);
-        // 4-block cells aligned so the trunk's column isn't at a cell's centre
+        // 2-block cells aligned so the trunk's column isn't at a cell's centre
         let origin = I64Vec3::new(96, 496, -44);
         let mut seen = Vec::new();
-        t.plant(origin, 4, (IVec3::splat(-4), IVec3::splat(10)), |_, block| seen.push(block));
+        t.plant(origin, 2, (IVec3::splat(-8), IVec3::splat(20)), |_, block| seen.push(block));
         assert!(seen.contains(&BlockType::Log));
         assert!(seen.contains(&BlockType::Leaves));
+        // from `THIN_TRUNK_CELL` the trunk is drawn as a box of its own, so the cells are crown alone
+        let mut wide = Vec::new();
+        t.plant(origin, THIN_TRUNK_CELL, (IVec3::splat(-4), IVec3::splat(10)), |_, block| wide.push(block));
+        assert!(wide.contains(&BlockType::Leaves) && !wide.contains(&BlockType::Log));
     }
 
     #[test]
@@ -443,10 +448,11 @@ mod tests {
     }
 
     #[test]
-    fn test_trunks_stand_in_cells_up_to_four_wide_and_not_beyond() {
+    fn test_trunks_stand_in_cells_up_to_two_wide_and_not_beyond() {
         let t = tree(TreeKind::Pine, 24, 6.0);
         let logs = |size| cells(&t, size).into_iter().filter(|(_, b)| *b == BlockType::Log).count();
-        assert!(logs(2) > 0 && logs(4) > 0);
+        assert!(logs(1) > 0 && logs(2) > 0);
+        assert_eq!(0, logs(THIN_TRUNK_CELL));
         assert_eq!(0, logs(8));
     }
 

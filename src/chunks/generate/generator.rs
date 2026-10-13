@@ -1,7 +1,7 @@
 use std::{cell::LazyCell, collections::HashMap, ops::Deref, sync::Arc};
 
 use bevy::{
-    math::{I64Vec2, IVec3, U16Vec3, Vec3},
+    math::{I64Vec2, I64Vec3, IVec3, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
         render_asset::RenderAssetUsages,
@@ -14,7 +14,7 @@ use super::noise::NoiseGenerator;
 use super::region_store::RegionStore;
 use super::WATER_LEVEL;
 use super::columns::{ColumnGrid, COARSE_CELL};
-use super::trees::{self, grows_into, trees_near, TreeGround, TREE_HEIGHT};
+use super::trees::{self, grows_into, trees_near, TreeGround, THIN_TRUNK_CELL, TREE_HEIGHT};
 use crate::block::{BlockType, BLOCK_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -67,6 +67,18 @@ trait BlockSource {
     fn canopy_shade(&self, _position: Vec3) -> f32 {
         1.0
     }
+
+    /// Trunks too thin for the cells they stand in, drawn as boxes of their own.
+    fn trunks(&self) -> &[Trunk] {
+        &[]
+    }
+}
+
+/// A tree's trunk as a box, in mesh units, for cells too wide to hold one.
+#[derive(Debug, Copy, Clone)]
+struct Trunk {
+    min: Vec3,
+    max: Vec3,
 }
 
 struct ChunkNeighbourhood<'a> {
@@ -102,6 +114,7 @@ struct LodBlocks {
     any_surface_tops: bool,
     // the top of each padded column's canopy in blocks, `i64::MIN` where it has none, or empty with no canopies at all
     canopy_tops: Vec<i64>,
+    trunks: Vec<Trunk>,
 }
 
 // From afar, forests show as their canopy: leaves over this much of the ground for each
@@ -174,6 +187,7 @@ impl LodBlocks {
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
         let mut canopy_tops = vec![i64::MIN; padded * padded];
+        let mut trunks = Vec::new();
         let grid = regions.column_grid(key);
         let noise = regions.noise();
         let real_trees = cell <= TREE_MAX_CELL;
@@ -220,6 +234,16 @@ impl LodBlocks {
                 let min = I64Vec2::new(base.x, base.z) - cell;
                 let mut ground = GridGround { grid: &grid, base: I64Vec2::new(base.x, base.z), cell, size };
                 for tree in trees_near(noise, &mut ground, min, min + span + cell) {
+                    // each trunk is drawn by the one node its base is in
+                    let at = (tree.base - base).div_euclid(I64Vec3::splat(cell));
+                    if cell >= THIN_TRUNK_CELL && at.cmpge(I64Vec3::ZERO).all() && at.cmplt(I64Vec3::splat(size as i64)).all() {
+                        let corner = |offset: I64Vec3| ((tree.base + offset - base).as_vec3() / cell as f32) - 0.5;
+                        let width = tree.width();
+                        trunks.push(Trunk {
+                            min: corner(I64Vec3::ZERO),
+                            max: corner(I64Vec3::new(width, tree.trunk, width)),
+                        });
+                    }
                     tree.plant(base, cell, (IVec3::splat(-1), IVec3::splat(size)), |coord, block| {
                         let cell = &mut cells[Self::index(size, coord)];
                         if grows_into(*cell, block) {
@@ -238,7 +262,7 @@ impl LodBlocks {
                 }
             }
         }
-        Self::new(size, cells, tops, base.y, cell).with_canopy_tops(canopy_tops)
+        Self::new(size, cells, tops, base.y, cell).with_canopy_tops(canopy_tops).with_trunks(trunks)
     }
 
     // From full-detail regions, with real trees.
@@ -299,8 +323,13 @@ impl LodBlocks {
         self
     }
 
+    fn with_trunks(mut self, trunks: Vec<Trunk>) -> Self {
+        self.trunks = trunks;
+        self
+    }
+
     fn new(size: i32, cells: Vec<BlockType>, tops: Vec<i64>, base_y: i64, cell: i64) -> Self {
-        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false, canopy_tops: Vec::new() };
+        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false, canopy_tops: Vec::new(), trunks: Vec::new() };
         blocks.surface_tops = vec![None; blocks.cells.len()];
         for x in -1..=size {
             for z in -1..=size {
@@ -370,6 +399,10 @@ impl BlockSource for LodBlocks {
 
     fn has_surface_tops(&self) -> bool {
         self.any_surface_tops
+    }
+
+    fn trunks(&self) -> &[Trunk] {
+        &self.trunks
     }
 
     fn canopy_shade(&self, position: Vec3) -> f32 {
@@ -1078,6 +1111,10 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
     fn canopy_shade(&self, position: Vec3) -> f32 {
         self.source.canopy_shade(position)
     }
+
+    fn trunks(&self) -> &[Trunk] {
+        self.source.trunks()
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -1420,6 +1457,18 @@ fn mesh_blocks(
         grass_tint,
         light,
     );
+    // sky light there is rarely bright under a canopy, and trunks are too thin to shade smoothly
+    const TRUNK_LIGHT: f32 = 0.8;
+    let log_cell = (BlockType::Log as usize - 1) as f32;
+    for trunk in source.trunks() {
+        let (centre, extent) = ((trunk.min + trunk.max) / 2.0, trunk.max - trunk.min);
+        // no bottom face: it stands on the ground
+        for face in &face_vertices[..5] {
+            let positions = std::array::from_fn(|j| (centre + Vec3::from(face[j].position) * extent).to_array());
+            let uvs = std::array::from_fn(|j| face[j].uv);
+            opaque.push_tiled_quad(positions, face[0].normal, uvs, [[1.0, 1.0, 1.0, log_cell]; 4], [TRUNK_LIGHT; 4]);
+        }
+    }
 
     let water_mesh = if water.vertices.is_empty() {
         None
@@ -2288,6 +2337,44 @@ mod tests {
             let blocks = LodBlocks::sample(&regions, key);
             let leaves = blocks.cells.iter().filter(|&&c| c == BlockType::Leaves).count();
             assert!(leaves > 0, "no leaves at level {level}, cells {} blocks wide", key.cell_size());
+        }
+    }
+
+    #[test]
+    fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_wide_and_up() {
+        use crate::chunks::generate::trees::trees_near;
+        use bevy::math::I64Vec2;
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let mut heights = regions.sampler();
+        let trees = trees_near(regions.noise(), &mut heights, I64Vec2::splat(-300), I64Vec2::splat(300));
+        let near = |a: &crate::chunks::generate::trees::Tree, b: &crate::chunks::generate::trees::Tree| {
+            (a.base.x - b.base.x).abs() < 40 && (a.base.z - b.base.z).abs() < 40
+        };
+        let tree = trees.iter().find(|t| trees.iter().filter(|o| near(t, o)).count() == 1).expect("no lone tree");
+        for level in [2u8, 3, 4] {
+            let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), level);
+            let blocks = LodBlocks::sample(&regions, key);
+            let cell = key.cell_size() as f32;
+            let at = |block: i64, min: i64| (block - min) as f32 / cell - 0.5;
+            let (min_x, min_z) = (key.min_block().x, key.min_block().z);
+            let trunk = blocks.trunks.iter().find(|t| {
+                (t.min.x - at(tree.base.x, min_x)).abs() < 1e-4
+                    && (t.min.z - at(tree.base.z, min_z)).abs() < 1e-4
+                    && (t.max.x - t.min.x - tree.width() as f32 / cell).abs() < 1e-4
+            });
+            assert!(trunk.is_some(), "no trunk box at level {level}: {:?}", blocks.trunks);
+            let trunk = trunk.unwrap();
+            assert!(((trunk.max.y - trunk.min.y) * cell - tree.trunk as f32).abs() < 1e-3);
+            // and no log cells, which would be a pillar several times too thick
+            assert_eq!(0, blocks.cells.iter().filter(|&&c| c == BlockType::Log).count());
+            // meshed, the box is a few quads standing out of the ground's
+            let lone = LodBlocks { trunks: vec![*trunk], ..LodBlocks::new(16, vec![BlockType::Air; 18 * 18 * 18], vec![0; 18 * 18], 0, key.cell_size()) };
+            let tint = super::GrassTint::new(regions.noise(), Vec3::ZERO, 1.0);
+            let light = std::cell::LazyCell::new(|| {
+                crate::chunks::generate::light::SkyLight::new(IVec3::splat(-1), IVec3::splat(18), crate::chunks::generate::light::MAX_LIGHT, vec![0; 18 * 18 * 18])
+            });
+            let mesh = super::mesh_blocks(&lone, key.cell_size(), false, false, true, &tint, &light).opaque;
+            assert_eq!(5 * 4, mesh.count_vertices());
         }
     }
 
