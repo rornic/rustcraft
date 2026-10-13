@@ -135,8 +135,8 @@ impl LodLayout {
 const LOD_TASKS_PER_THREAD: usize = 32;
 // The spawn queue is re-sorted this often, since nodes drift between covered and gap as terrain loads.
 const LOD_RESORT_INTERVAL: f32 = 2.0;
-// Nodes known to have nothing to draw are added straight away without a task, up to this many a frame.
-const LOD_EMPTY_NODES_PER_FRAME: usize = 2048;
+// Nodes known to have nothing to draw are added straight away without a task or an entity, up to this many a frame.
+const LOD_EMPTY_NODES_PER_FRAME: usize = 8192;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -417,7 +417,8 @@ pub struct LodLoader {
     selecting: Option<Task<LodSelection>>,
     // counts layout changes, which make a walk under the old one out of date
     generation: u32,
-    nodes: HashMap<LodKey, Entity>,
+    // each node's entity, or none for one with nothing to draw, which needs no entity at all
+    nodes: HashMap<LodKey, Option<Entity>>,
     // how many nodes exist at or below each key, so areas are walked only where nodes are
     populated: HashMap<LodKey, u32>,
     // farthest first, so popping yields the nearest
@@ -434,7 +435,7 @@ pub struct LodLoader {
 const POPULATED_LEVELS: u8 = 16;
 
 impl LodLoader {
-    fn add_node(&mut self, key: LodKey, entity: Entity) {
+    fn add_node(&mut self, key: LodKey, entity: Option<Entity>) {
         if self.nodes.insert(key, entity).is_none() {
             for ancestor in key.self_and_ancestors(POPULATED_LEVELS) {
                 *self.populated.entry(ancestor).or_insert(0) += 1;
@@ -442,7 +443,7 @@ impl LodLoader {
         }
     }
 
-    fn remove_node(&mut self, key: LodKey) -> Option<Entity> {
+    fn remove_node(&mut self, key: LodKey) -> Option<Option<Entity>> {
         let entity = self.nodes.remove(&key)?;
         for ancestor in key.self_and_ancestors(POPULATED_LEVELS) {
             if let Some(count) = self.populated.get_mut(&ancestor) {
@@ -463,7 +464,7 @@ impl LodLoader {
             if !self.populated.contains_key(&key) {
                 continue;
             }
-            if let Some(&entity) = self.nodes.get(&key) {
+            if let Some(&Some(entity)) = self.nodes.get(&key) {
                 found.push((key, entity));
             }
             if key.level > 1 {
@@ -505,7 +506,7 @@ impl LodLoader {
         while key.level < self.layout.max_level {
             key = key.parent();
             if self.selected.contains(&key) {
-                return self.nodes.get(&key).is_some_and(|e| !pending.contains(*e));
+                return node_ready(&self.nodes, pending, key);
             }
         }
         true
@@ -659,7 +660,7 @@ fn apply_selection(lods: &mut LodLoader, done: LodSelection, chunks: &ChunkState
     let first = lods.anchor.is_none();
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
-    let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+    let node_ready = |key: LodKey| node_ready(nodes, pending_lods, key);
     let state = LodState {
         anchor,
         layout: lods.layout,
@@ -725,7 +726,7 @@ pub fn spawn_lods(
             let nodes = &lods.nodes;
             let node_exists = |key: LodKey| nodes.contains_key(&key);
             let node_ready =
-                |key: LodKey| nodes.get(&key).is_some_and(|e| !pending.contains(*e));
+                |key: LodKey| node_ready(nodes, &pending, key);
             let state = LodState {
                 anchor,
                 layout: lods.layout,
@@ -760,10 +761,7 @@ pub fn spawn_lods(
         }
         // nothing to mesh, so the node is ready as soon as it exists
         if known_empty(key, &world.region_store) {
-            let entity = commands
-                .spawn((LodNode { key }, lod_transform(key), Visibility::Hidden))
-                .id();
-            lods.add_node(key, entity);
+            lods.add_node(key, None);
             if stand_in {
                 lods.retiring.push(key);
             }
@@ -787,12 +785,17 @@ pub fn spawn_lods(
                 Visibility::Hidden,
             ))
             .id();
-        lods.add_node(key, entity);
+        lods.add_node(key, Some(entity));
         if stand_in {
             lods.retiring.push(key);
         }
         in_flight += 1;
     }
+}
+
+// Whether the node at `key` exists and has its mesh, or has nothing to draw.
+fn node_ready(nodes: &HashMap<LodKey, Option<Entity>>, pending: &Query<(), With<GenerateLodMesh>>, key: LodKey) -> bool {
+    nodes.get(&key).is_some_and(|slot| slot.map_or(true, |entity| !pending.contains(entity)))
 }
 
 // Whether `key` is known to have nothing to draw, going by regions or coarse columns
@@ -850,6 +853,7 @@ pub fn load_lods(
             continue;
         };
 
+        let has_mesh = result.is_some();
         if let Some(chunk_meshes) = result {
             commands.entity(entity).insert((
                 Mesh3d(meshes.add(chunk_meshes.opaque)),
@@ -868,7 +872,13 @@ pub fn load_lods(
                 });
             }
         }
-        commands.entity(entity).remove::<GenerateLodMesh>();
+        if has_mesh {
+            commands.entity(entity).remove::<GenerateLodMesh>();
+        } else {
+            // meshed to nothing, so it needs no entity
+            commands.entity(entity).despawn();
+            lods.add_node(node.key, None);
+        }
         lods.dirty_areas.push(node.key);
 
         if start.elapsed() >= LOD_APPLY_TIME_BUDGET {
@@ -893,7 +903,7 @@ pub fn retire_lods(
     {
         let nodes = &lods.nodes;
         let node_exists = |key: LodKey| nodes.contains_key(&key);
-        let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+        let node_ready = |key: LodKey| node_ready(nodes, &pending_lods, key);
         let state = LodState {
             anchor,
             layout: lods.layout,
@@ -917,7 +927,7 @@ pub fn retire_lods(
     lods.retiring
         .retain(|key| !retired.contains(key) && !lods.selected.contains(key));
     for key in retired {
-        if let Some(entity) = lods.remove_node(key) {
+        if let Some(Some(entity)) = lods.remove_node(key) {
             let visible = visibility
                 .get(entity)
                 .is_ok_and(|v| *v != Visibility::Hidden);
@@ -949,7 +959,7 @@ pub fn refresh_lod_visibility(
     let lods = &mut *lods;
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
-    let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+    let node_ready = |key: LodKey| node_ready(nodes, &pending_lods, key);
     let state = LodState {
         anchor,
         layout: lods.layout,
@@ -1549,7 +1559,7 @@ mod tests {
         // the same area's neighbours and ancestors
         let outside = [key(3, 2, 0, 1), key(1, 8, 0, 8), key(4, 0, 0, 0)];
         for (i, k) in inside.iter().chain(&outside).enumerate() {
-            lods.add_node(*k, Entity::from_raw(i as u32));
+            lods.add_node(*k, Some(Entity::from_raw(i as u32)));
         }
         let found: HashSet<LodKey> = lods.nodes_under(key(3, 1, 0, 1)).into_iter().map(|(k, _)| k).collect();
         // (1, 5, 1, 6) lies in (2, 2, 0, 3), which lies in (3, 1, 0, 1)
@@ -1559,8 +1569,8 @@ mod tests {
     #[test]
     fn test_removing_nodes_empties_the_population() {
         let mut lods = loader();
-        lods.add_node(key(1, 3, 2, 3), Entity::from_raw(0));
-        lods.add_node(key(2, 1, 1, 1), Entity::from_raw(1));
+        lods.add_node(key(1, 3, 2, 3), Some(Entity::from_raw(0)));
+        lods.add_node(key(2, 1, 1, 1), Some(Entity::from_raw(1)));
         assert!(lods.remove_node(key(1, 3, 2, 3)).is_some());
         assert!(lods.remove_node(key(1, 3, 2, 3)).is_none());
         assert!(lods.nodes_under(key(3, 0, 0, 0)).len() == 1);
@@ -1570,10 +1580,25 @@ mod tests {
     }
 
     #[test]
+    fn test_nodes_without_entities_still_exist_but_are_not_found_to_refresh() {
+        let mut lods = loader();
+        lods.add_node(key(1, 2, 0, 2), None);
+        lods.add_node(key(2, 1, 0, 1), Some(Entity::from_raw(7)));
+        assert!(lods.nodes.contains_key(&key(1, 2, 0, 2)));
+        let found: Vec<LodKey> = lods.nodes_under(key(3, 0, 0, 0)).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(vec![key(2, 1, 0, 1)], found);
+        // an entity-less node later meshing to nothing, or the reverse, counts once
+        lods.add_node(key(1, 2, 0, 2), None);
+        lods.remove_node(key(1, 2, 0, 2));
+        lods.remove_node(key(2, 1, 0, 1));
+        assert!(lods.populated.is_empty());
+    }
+
+    #[test]
     fn test_adding_a_node_twice_counts_it_once() {
         let mut lods = loader();
-        lods.add_node(key(2, 0, 0, 0), Entity::from_raw(0));
-        lods.add_node(key(2, 0, 0, 0), Entity::from_raw(1));
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(0)));
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(1)));
         lods.remove_node(key(2, 0, 0, 0));
         assert!(lods.populated.is_empty());
     }
