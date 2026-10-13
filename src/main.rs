@@ -16,6 +16,7 @@ use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
 use rustcraft::sky::{gradient_skybox, sun, FOG_MAX_OPACITY, HORIZON_COLOR};
+use rustcraft::sun_disc::SunDiscPlugin;
 use rustcraft::tonemap::{dry_color_grading, scene_colour, TONEMAPPING};
 
 fn setup_scene(
@@ -159,6 +160,7 @@ fn main() {
             MaterialPlugin::<WaterMaterial>::default(),
             TerrainPlugin,
             CloudPlugin,
+            SunDiscPlugin,
             DebugOverlayPlugin,
         ))
         .insert_resource(winit_settings())
