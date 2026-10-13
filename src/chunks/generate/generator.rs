@@ -77,6 +77,11 @@ trait BlockSource {
     fn tree_boxes(&self) -> &[TreeBox] {
         &[]
     }
+
+    /// Whether faces on its edge are skirt walls hanging from its own ground, over what's beyond.
+    fn has_skirts(&self) -> bool {
+        false
+    }
 }
 
 /// Part of a tree as a box of leaves or logs, in mesh units, for cells too wide to hold it.
@@ -432,6 +437,10 @@ impl BlockSource for LodBlocks {
 
     fn tree_boxes(&self) -> &[TreeBox] {
         &self.boxes
+    }
+
+    fn has_skirts(&self) -> bool {
+        true
     }
 
     fn forest_shade(&self, position: Vec3) -> f32 {
@@ -1165,6 +1174,10 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
     fn tree_boxes(&self) -> &[TreeBox] {
         self.source.tree_boxes()
     }
+
+    fn has_skirts(&self) -> bool {
+        self.source.has_skirts()
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -1278,13 +1291,15 @@ fn mesh_opaque_greedy(
                     // a step above lowered ground faces into that ground's cell, which is dark: it's
                     // lit by the air over it, and is too thin to shade smoothly
                     let step = span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
-                    let smooth = smooth && !step;
-                    let mut lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
-                    // a skirt wall past the mesh's edge faces a buried cell, see `LodBlocks::block`, so takes its light from the air above
-                    if !inside && normal.y == 0 {
-                        let air = (0..=SKIRT_CELLS).find(|&dy| !is_solid(source.terrain(lit_from + IVec3::Y * dy)));
-                        lit_from += IVec3::Y * air.unwrap_or(0);
-                    }
+                    // A skirt wall hangs from the node's own ground over solid cells beyond, whose
+                    // occlusion and light are none, so it is lit as that ground is, by the open air above.
+                    let skirt = !inside && normal.y == 0 && source.has_skirts();
+                    let smooth = smooth && !step && !skirt;
+                    let lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
+                    let skirt_light = skirt.then(|| {
+                        let air = (0..=SKIRT_CELLS + 1).find(|&dy| !is_solid(source.terrain(coord + IVec3::Y * dy)));
+                        face_light(air.map_or(MAX_LIGHT, |dy| light.level(coord + IVec3::Y * dy)))
+                    });
                     mask[(b * size + a) as usize] = span.map(|span| FaceCell {
                         span,
                         block,
@@ -1296,7 +1311,7 @@ fn mesh_opaque_greedy(
                         light: if smooth {
                             std::array::from_fn(|j| vertex_light(source, light, coord, i, template[j].position))
                         } else {
-                            [face_light(light.level(lit_from)); 4]
+                            [skirt_light.unwrap_or_else(|| face_light(light.level(lit_from))); 4]
                         },
                     });
                 }
@@ -2304,6 +2319,26 @@ mod tests {
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
         // below the node isn't a horizontal border, so no skirt
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
+    }
+
+    #[test]
+    fn test_skirt_walls_are_lit_like_the_open_ground_they_hang_from() {
+        // flat ground under open sky, cells a block across, and the cells beyond it solid
+        let lod = flat_lod(8);
+        let noise = NoiseGenerator::new(1);
+        let tint = super::GrassTint::new(&noise, Vec3::ZERO, 1.0);
+        let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
+        let light = std::cell::LazyCell::new(|| {
+            crate::chunks::generate::light::SkyLight::new(IVec3::splat(-1), IVec3::splat(18), crate::chunks::generate::light::MAX_LIGHT, opacity)
+        });
+        let mesh = super::mesh_blocks(&lod, 1, true, false, true, &tint, &light).opaque;
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+            panic!("no light on the mesh");
+        };
+        // the top and the four walls, each from a corner to a corner of the node
+        assert!(lights.len() >= 4 * 5);
+        let darkest = lights.iter().map(|l| l[0]).fold(f32::MAX, f32::min);
+        assert!(darkest > 0.6, "a vertex is lit {darkest}, so a skirt wall is dark");
     }
 
     #[test]
