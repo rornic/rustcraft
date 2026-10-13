@@ -67,6 +67,11 @@ impl Material for CloudMaterial {
         "shaders/clouds.wgsl".into()
     }
 
+    // blended meshes draw by their origin's distance, which means nothing for a tile this wide, and put clouds under water
+    fn depth_bias(&self) -> f32 {
+        1.0e6
+    }
+
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Blend
     }
