@@ -21,23 +21,25 @@ use crate::chunks::material::{push_shader_defs, water_level};
 /// Height of the clouds' undersides: above most land, so only the tallest peaks reach them.
 pub const CLOUD_BASE: f32 = 720.0;
 // Clouds are blocks this wide and tall.
-const CELL: f32 = 20.0;
-const THICKNESS: f32 = 8.0;
+const CELL: f32 = 48.0;
+const THICKNESS: f32 = 20.0;
 // Cells across the pattern, which repeats seamlessly.
 const PATTERN: usize = 256;
-// How much of the sky is cloud.
-const COVER: f64 = 0.2;
+// How much of the sky is cloud, before the small ones are dropped.
+const COVER: f64 = 0.14;
+// Clouds under this many cells are dropped, leaving only big ones.
+const MIN_CLOUD_CELLS: usize = 80;
 // Roughly how many cells across a cloud is.
-const CLOUD_CELLS: f64 = 10.0;
+const CLOUD_CELLS: f64 = 16.0;
 // Copies of the pattern drawn out from the one over the camera, each way: enough to reach
-// the fog at the sea-level render distance.
-const COPIES: i32 = 2;
+// the fog from high up, where the render distance has grown to tens of thousands of blocks.
+const COPIES: i32 = 3;
 // The pattern's width in blocks.
 const SPAN: f32 = PATTERN as f32 * CELL;
 // Which way and how fast clouds drift, in blocks a second: a whole number of patterns an
 // hour each way, so they carry on seamlessly when the shaders' clock, Bevy's `globals.time`,
 // wraps back to zero on the hour.
-const WIND: Vec2 = Vec2::new(SPAN * 5.0 / 3600.0, SPAN * 2.0 / 3600.0);
+const WIND: Vec2 = Vec2::new(SPAN * 2.0 / 3600.0, SPAN / 3600.0);
 // Slightly warm white, as sunlight leaves them.
 const CLOUD_COLOR: LinearRgba = LinearRgba::rgb(0.95, 0.95, 0.92);
 
@@ -65,6 +67,11 @@ pub struct CloudMaterial {
 impl Material for CloudMaterial {
     fn fragment_shader() -> ShaderRef {
         "shaders/clouds.wgsl".into()
+    }
+
+    // blended meshes draw by their origin's distance, which means nothing for a tile this wide, and put clouds under water
+    fn depth_bias(&self) -> f32 {
+        1.0e6
     }
 
     fn alpha_mode(&self) -> AlphaMode {
@@ -101,7 +108,7 @@ struct CloudTile {
 /// Which cells of the pattern are cloud, `PATTERN` x `PATTERN`, row-major [x][z]. Sampled
 /// round a torus in 4D noise, so it wraps at its edges without a seam.
 fn cloud_pattern(seed: u32) -> Vec<bool> {
-    let noise = Fbm::<Perlin>::new(seed).set_octaves(3);
+    let noise = Fbm::<Perlin>::new(seed).set_octaves(2).set_persistence(0.35);
     let radius = PATTERN as f64 / (TAU * CLOUD_CELLS);
     let around = |cell: usize| {
         let angle = TAU * cell as f64 / PATTERN as f64;
@@ -117,7 +124,40 @@ fn cloud_pattern(seed: u32) -> Vec<bool> {
     let mut sorted = values.clone();
     sorted.sort_by(f64::total_cmp);
     let threshold = sorted[((1.0 - COVER) * sorted.len() as f64) as usize];
-    values.into_iter().map(|v| v > threshold).collect()
+    let mut pattern: Vec<bool> = values.into_iter().map(|v| v > threshold).collect();
+    drop_small_clouds(&mut pattern);
+    pattern
+}
+
+// Clears every cloud of fewer than `MIN_CLOUD_CELLS` cells, where cells touch edge to edge, and
+// round the pattern's wrap like the clouds themselves do.
+fn drop_small_clouds(pattern: &mut [bool]) {
+    let n = PATTERN;
+    let mut seen = vec![false; n * n];
+    for start in 0..n * n {
+        if !pattern[start] || seen[start] {
+            continue;
+        }
+        let mut cloud = vec![start];
+        seen[start] = true;
+        let mut next = 0;
+        while next < cloud.len() {
+            let (x, z) = (cloud[next] / n, cloud[next] % n);
+            next += 1;
+            for (dx, dz) in [(1, 0), (n - 1, 0), (0, 1), (0, n - 1)] {
+                let neighbour = ((x + dx) % n) * n + (z + dz) % n;
+                if pattern[neighbour] && !seen[neighbour] {
+                    seen[neighbour] = true;
+                    cloud.push(neighbour);
+                }
+            }
+        }
+        if cloud.len() < MIN_CLOUD_CELLS {
+            for cell in cloud {
+                pattern[cell] = false;
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -307,7 +347,52 @@ mod tests {
     fn test_pattern_covers_about_the_share_of_sky_asked() {
         let pattern = cloud_pattern(3);
         let cover = pattern.iter().filter(|&&c| c).count() as f64 / pattern.len() as f64;
-        assert!((cover - COVER).abs() < 0.01, "{cover}");
+        // dropping the small clouds takes some of it
+        assert!(cover <= COVER + 0.005 && cover > COVER * 0.6, "{cover}");
+    }
+
+    #[test]
+    fn test_only_big_clouds_are_left() {
+        let pattern = cloud_pattern(3);
+        let n = PATTERN;
+        // every cloud has at least the minimum, found by flood fill as `drop_small_clouds` does
+        let mut seen = vec![false; n * n];
+        for start in 0..n * n {
+            if !pattern[start] || seen[start] {
+                continue;
+            }
+            let mut cloud = vec![start];
+            seen[start] = true;
+            let mut next = 0;
+            while next < cloud.len() {
+                let (x, z) = (cloud[next] / n, cloud[next] % n);
+                next += 1;
+                for (dx, dz) in [(1, 0), (n - 1, 0), (0, 1), (0, n - 1)] {
+                    let neighbour = ((x + dx) % n) * n + (z + dz) % n;
+                    if pattern[neighbour] && !seen[neighbour] {
+                        seen[neighbour] = true;
+                        cloud.push(neighbour);
+                    }
+                }
+            }
+            assert!(cloud.len() >= MIN_CLOUD_CELLS, "a cloud of {} cells", cloud.len());
+        }
+    }
+
+    #[test]
+    fn test_small_clouds_are_dropped_and_wrapped_ones_kept_whole() {
+        let n = PATTERN;
+        let mut pattern = vec![false; n * n];
+        // a lone cell, and a cloud cut in two by the pattern's edge, each half under the minimum
+        pattern[10 * n + 10] = true;
+        for x in [n - 1, 0] {
+            for z in 100..100 + MIN_CLOUD_CELLS {
+                pattern[x * n + z] = true;
+            }
+        }
+        drop_small_clouds(&mut pattern);
+        assert!(!pattern[10 * n + 10]);
+        assert!(pattern[(n - 1) * n + 100] && pattern[100]);
     }
 
     #[test]
