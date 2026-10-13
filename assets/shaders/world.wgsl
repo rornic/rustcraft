@@ -40,13 +40,25 @@ fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>) -> f32 {
 }
 
 // Sunlight reaching a face, shadowed by the land and the clouds.
-fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, sky: f32) -> vec3<f32> {
-    let light = direct_sun(normal) * smoothstep(0.0, SUN_SKY_GATE, sky);
+fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky: f32) -> vec3<f32> {
+    let light = direct_sun(shaded) * smoothstep(0.0, SUN_SKY_GATE, sky);
     // faces it can't reach need no shadow lookups
     if all(light == vec3<f32>(0.0)) {
         return light;
     }
     return light * sun_shadow(world_position, normal) * cloud_shadow(world_position.xyz);
+}
+
+// Faces turn toward up between these distances in blocks, to this much of the way: past
+// where a block step is under a pixel, lit tops and dark sides shimmer into each other.
+const FLATTEN_START: f32 = 250.0;
+const FLATTEN_END: f32 = 1000.0;
+const FLATTEN_MAX: f32 = 0.85;
+
+// The normal to light by: turned toward up with distance, which evens out the sun's and sky's contrast between faces.
+fn lit_normal(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
+    let flatten = FLATTEN_MAX * smoothstep(FLATTEN_START, FLATTEN_END, distance(world_position, view_bindings::view.world_position));
+    return normalize(mix(normal, vec3<f32>(0.0, 1.0, 0.0), flatten));
 }
 
 // Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves
@@ -115,7 +127,8 @@ fn fragment(
     sky = in.uv_b.x;
 #endif
 
-    let light = sunlight(in.world_position, normal, sky) + sky_ambient(sky, normal);
+    let shaded = lit_normal(normal, world_position);
+    let light = sunlight(in.world_position, normal, shaded, sky) + sky_ambient(sky, shaded);
     color = vec4<f32>(color.rgb * light, color.a);
 
     // so distant chunks fade into the sky instead of popping in and out
