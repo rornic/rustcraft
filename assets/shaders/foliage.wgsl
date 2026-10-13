@@ -11,13 +11,14 @@ fn is_leaf(vertex_alpha: f32) -> bool {
 }
 
 // Where a vertex at `world` sways to by `time`. It depends on nothing but where the vertex
-// is, so corners shared by neighbouring leaves move together and leave no cracks.
-fn swayed(world: vec3<f32>, vertex_alpha: f32, time: f32) -> vec3<f32> {
+// is, so corners shared by neighbouring leaves move together and leave no cracks. Coarse LOD
+// cells, whose faces span many blocks, stay still: their corners would drift apart and tear.
+fn swayed(world: vec3<f32>, vertex_alpha: f32, coarse: bool, time: f32) -> vec3<f32> {
 #ifdef STILL_LEAVES
     // `DebugSettings::still_leaves`
     return world;
 #else
-    if !is_leaf(vertex_alpha) {
+    if coarse || !is_leaf(vertex_alpha) {
         return world;
     }
     // slow gusts roll across the canopy, with a quicker flutter on top
