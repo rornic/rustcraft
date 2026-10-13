@@ -178,11 +178,18 @@ pub struct WaterMaterial {
     // the dither window drawn, see `fade::FadeMaterials`
     #[uniform(3)]
     pub fade: Vec4,
+    // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
+    pub solid: bool,
 }
 
 impl Material for WaterMaterial {
     // light passes through water, so it casts no shadow
     fn enable_shadows() -> bool {
+        false
+    }
+
+    // its waves would put a prepass's depth off the main pass's
+    fn enable_prepass() -> bool {
         false
     }
 
@@ -195,7 +202,11 @@ impl Material for WaterMaterial {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Blend
+        if self.solid {
+            AlphaMode::Opaque
+        } else {
+            AlphaMode::Blend
+        }
     }
 
     fn specialize(

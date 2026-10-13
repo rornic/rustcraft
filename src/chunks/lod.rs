@@ -28,7 +28,7 @@ use bevy::{
 use super::{
     chunk::{ChunkCoordinate, CHUNK_SIZE},
     chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
-    fade::{fade_out_and_despawn, set_shown, Fade},
+    fade::{fade_out_and_despawn, set_shown, Fade, SolidWater},
     group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk},
     generate::{
         columns::COARSE_CELL,
@@ -432,6 +432,7 @@ pub struct LodLoader {
     refresh_all: bool,
     material: Handle<ChunkMaterial>,
     water_material: Handle<WaterMaterial>,
+    solid_water_material: Handle<WaterMaterial>,
 }
 
 // Levels `LodLoader::populated` counts up through, however far the layout reaches.
@@ -549,6 +550,7 @@ impl LodLoader {
         world_height: u64,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
+        solid_water_material: Handle<WaterMaterial>,
     ) -> Self {
         Self {
             set_layout: layout,
@@ -570,6 +572,7 @@ impl LodLoader {
             refresh_all: false,
             material,
             water_material,
+            solid_water_material,
         }
     }
 }
@@ -872,6 +875,10 @@ fn lod_aabb() -> Aabb {
     Aabb::from_min_max(Vec3::splat(-0.5), Vec3::splat(size - 0.5))
 }
 
+// From this level up, water draws with the opaque meshes. Blended meshes are drawn one at a time,
+// where Bevy batches opaque ones into a few draws, and water this far out is nearly opaque anyway.
+const SOLID_WATER_LEVEL: u8 = 2;
+
 pub fn load_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
@@ -893,14 +900,18 @@ pub fn load_lods(
                 lod_aabb(),
             ));
             if let Some(water_mesh) = chunk_meshes.water {
-                let water_material = lods.water_material.clone();
+                let solid = node.key.level >= SOLID_WATER_LEVEL;
+                let water_material = if solid { &lods.solid_water_material } else { &lods.water_material }.clone();
                 commands.entity(entity).with_children(|parent| {
-                    parent.spawn((
+                    let mut water = parent.spawn((
                         Mesh3d(meshes.add(water_mesh)),
                         MeshMaterial3d(water_material),
                         Transform::default(),
                         lod_aabb(),
                     ));
+                    if solid {
+                        water.insert(SolidWater);
+                    }
                 });
             }
         }
@@ -1577,7 +1588,7 @@ mod tests {
             .chunk_visible(c)));
     }
     fn loader() -> LodLoader {
-        LodLoader::new(layout(4), 1024, Handle::default(), Handle::default())
+        LodLoader::new(layout(4), 1024, Handle::default(), Handle::default(), Handle::default())
     }
 
     fn key(level: u8, x: i64, y: i64, z: i64) -> LodKey {

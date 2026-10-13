@@ -111,7 +111,13 @@ fn setup_scene(
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
         texture: Some(atlas),
         fade: FULLY_VISIBLE,
+        solid: false,
     });
+    let solid_water = WaterMaterial {
+        solid: true,
+        ..water_materials.get(&water_material_handle).unwrap().clone()
+    };
+    let solid_water_material_handle = water_materials.add(solid_water);
     insert_terrain_resources(
         &mut commands,
         &renderer,
@@ -119,6 +125,7 @@ fn setup_scene(
         world_height,
         chunk_material_handle,
         water_material_handle,
+        solid_water_material_handle,
         &mut chunk_materials,
         &mut water_materials,
     );

@@ -82,6 +82,7 @@ pub fn insert_terrain_resources(
     world_height: u64,
     chunk_material: Handle<ChunkMaterial>,
     water_material: Handle<WaterMaterial>,
+    solid_water_material: Handle<WaterMaterial>,
     chunk_materials: &mut Assets<ChunkMaterial>,
     water_materials: &mut Assets<WaterMaterial>,
 ) {
@@ -90,6 +91,7 @@ pub fn insert_terrain_resources(
         renderer.lod_fade_seconds,
         chunk_material.clone(),
         water_material.clone(),
+        solid_water_material.clone(),
         chunk_materials,
         water_materials,
     ));
@@ -98,6 +100,7 @@ pub fn insert_terrain_resources(
         world_height,
         chunk_material.clone(),
         water_material.clone(),
+        solid_water_material,
     ));
     commands.insert_resource(ChunkLoader::new(
         layout,

@@ -35,9 +35,11 @@ pub struct FadeMaterials {
     seconds: f32,
     chunk: Handle<ChunkMaterial>,
     water: Handle<WaterMaterial>,
+    solid_water: Handle<WaterMaterial>,
     // a material for each step of a fade out
     chunk_steps: Vec<Handle<ChunkMaterial>>,
     water_steps: Vec<Handle<WaterMaterial>>,
+    solid_water_steps: Vec<Handle<WaterMaterial>>,
 }
 
 impl FadeMaterials {
@@ -45,11 +47,13 @@ impl FadeMaterials {
         seconds: f32,
         chunk: Handle<ChunkMaterial>,
         water: Handle<WaterMaterial>,
+        solid_water: Handle<WaterMaterial>,
         chunk_materials: &mut Assets<ChunkMaterial>,
         water_materials: &mut Assets<WaterMaterial>,
     ) -> Self {
         let base_chunk = chunk_materials.get(&chunk).unwrap().clone();
         let base_water = water_materials.get(&water).unwrap().clone();
+        let base_solid = water_materials.get(&solid_water).unwrap().clone();
         let chunk_steps = (0..FADE_STEPS)
             .map(|step| {
                 chunk_materials.add(ChunkMaterial {
@@ -66,15 +70,29 @@ impl FadeMaterials {
                 })
             })
             .collect();
+        let solid_water_steps = (0..FADE_STEPS)
+            .map(|step| {
+                water_materials.add(WaterMaterial {
+                    fade: fade_window(step),
+                    ..base_solid.clone()
+                })
+            })
+            .collect();
         Self {
             seconds,
             chunk,
             water,
+            solid_water,
             chunk_steps,
             water_steps,
+            solid_water_steps,
         }
     }
 }
+
+/// On a water mesh drawn with the solid material.
+#[derive(Component)]
+pub struct SolidWater;
 
 #[derive(Component)]
 pub struct Fade {
@@ -135,13 +153,13 @@ pub fn apply_fades(
     materials: Res<FadeMaterials>,
     mut fading: Query<(Entity, &Fade, &mut Visibility, Option<&Children>)>,
     mut chunk_materials: Query<&mut MeshMaterial3d<ChunkMaterial>>,
-    mut water_materials: Query<&mut MeshMaterial3d<WaterMaterial>>,
+    mut water_materials: Query<(&mut MeshMaterial3d<WaterMaterial>, bevy::ecs::query::Has<SolidWater>)>,
 ) {
     let now = time.elapsed_secs();
 
     for (entity, fade, mut visibility, children) in fading.iter_mut() {
         let progress = (now - fade.start) / materials.seconds.max(f32::EPSILON);
-        let (chunk, water) = if progress >= 1.0 {
+        let (chunk, water, solid_water) = if progress >= 1.0 {
             if fade.out && fade.despawn {
                 commands.entity(entity).despawn();
                 continue;
@@ -150,10 +168,10 @@ pub fn apply_fades(
                 *visibility = Visibility::Hidden;
             }
             commands.entity(entity).remove::<Fade>();
-            (&materials.chunk, &materials.water)
+            (&materials.chunk, &materials.water, &materials.solid_water)
         } else {
             let step = ((progress.max(0.0) * FADE_STEPS as f32) as usize).min(FADE_STEPS - 1);
-            (&materials.chunk_steps[step], &materials.water_steps[step])
+            (&materials.chunk_steps[step], &materials.water_steps[step], &materials.solid_water_steps[step])
         };
 
         if let Ok(mut material) = chunk_materials.get_mut(entity) {
@@ -163,7 +181,8 @@ pub fn apply_fades(
         }
         // water is drawn by a child entity with its own material
         for &child in children.into_iter().flatten() {
-            if let Ok(mut material) = water_materials.get_mut(child) {
+            if let Ok((mut material, solid)) = water_materials.get_mut(child) {
+                let water = if solid { solid_water } else { water };
                 if material.0 != *water {
                     material.0 = water.clone();
                 }
