@@ -112,6 +112,10 @@ pub fn set_shown(
     shown: bool,
     now: f32,
 ) {
+    // one fading out to be despawned is gone however the rules would show it, or it would linger unowned
+    if fade.is_some_and(|f| f.despawn) {
+        return;
+    }
     let currently_shown = *visibility != Visibility::Hidden && !fade.is_some_and(|f| f.out);
     if currently_shown == shown {
         return;
@@ -251,5 +255,12 @@ mod tests {
         assert_eq!(Visibility::Inherited, visibility);
         // a fade that's long over, which resets its material
         assert_eq!(Some((f32::MIN, false)), fade);
+    }
+
+    #[test]
+    fn test_one_fading_out_to_despawn_is_never_brought_back() {
+        let fading = Fade { start: 3.0, out: true, despawn: true };
+        let (_, fade) = shown(Visibility::Inherited, Some(fading), true);
+        assert_eq!(Some((3.0, true)), fade);
     }
 }
