@@ -478,6 +478,16 @@ impl LodLoader {
         self.layout
     }
 
+    /// The camera chunk the selection was last applied for.
+    pub fn anchor_chunk(&self) -> Option<ChunkCoordinate> {
+        self.anchor
+    }
+
+    /// Whether the node at `key` exists with nothing to draw.
+    pub fn node_is_empty(&self, key: LodKey) -> bool {
+        self.nodes.get(&key).is_some_and(Option::is_none)
+    }
+
     /// Draws terrain out to `render_distance` chunks, or the set render distance if that's
     /// further, selecting nodes afresh for it.
     pub fn set_render_distance(&mut self, render_distance: f32) {
