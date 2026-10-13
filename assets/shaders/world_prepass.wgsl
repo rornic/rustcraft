@@ -3,7 +3,8 @@
 
 #import bevy_pbr::{mesh_functions, prepass_io, view_transformations::position_world_to_clip}
 #import bevy_render::globals::Globals
-#import "shaders/block_texture.wgsl"::block_alpha
+#import "shaders/block_texture.wgsl"::{block_alpha, material_fade}
+#import "shaders/dither.wgsl"::dither_threshold
 #import "shaders/foliage.wgsl"::{is_leaf, swayed}
 
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
@@ -24,6 +25,10 @@ fn vertex(vertex: prepass_io::Vertex) -> prepass_io::VertexOutput {
     out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, coarse, globals.time), 1.0);
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
+#ifndef DEPTH_CLAMP_ORTHO
+    // a mesh fading out sits a little farther than it is, as in the main pass, see `fade.rs`
+    out.position.z *= 1.0 - material_fade.z;
+#endif
 #ifdef DEPTH_CLAMP_ORTHO
     out.clip_position_unclamped = out.position;
     out.position.z = min(out.position.z, 1.0);
@@ -59,11 +64,22 @@ fn cut_leaf_holes(in: prepass_io::VertexOutput) {
 #endif
 }
 
-// Unlike the main pass, no dither fade: a fading chunk and the one it's replacing are
-// the same shape, and shadows dithered in light space would only flicker.
+// The view's depth is dithered just as the main pass is, so a pixel a fading mesh gives up
+// doesn't keep its depth, which would reject whatever is behind it. Shadows aren't: dithered
+// in light space they would only flicker.
+fn dither_fade(in: prepass_io::VertexOutput) {
+#ifndef DEPTH_CLAMP_ORTHO
+    let threshold = dither_threshold(in.position.xy);
+    if threshold < material_fade.x || threshold >= material_fade.y {
+        discard;
+    }
+#endif
+}
+
 #ifdef PREPASS_FRAGMENT
 @fragment
 fn fragment(in: prepass_io::VertexOutput) -> prepass_io::FragmentOutput {
+    dither_fade(in);
     cut_leaf_holes(in);
 
     var out: prepass_io::FragmentOutput;
@@ -79,6 +95,7 @@ fn fragment(in: prepass_io::VertexOutput) -> prepass_io::FragmentOutput {
 #else
 @fragment
 fn fragment(in: prepass_io::VertexOutput) {
+    dither_fade(in);
     cut_leaf_holes(in);
 }
 #endif

@@ -11,7 +11,7 @@ use bevy::{
 use super::biome::{grass_tint, BiomeId, Biomes};
 use super::light::{SkyLight, MAX_LIGHT};
 use super::noise::NoiseGenerator;
-use super::region_store::RegionStore;
+use super::region_store::{RegionStore, SLOPE_SPAN};
 use super::WATER_LEVEL;
 use super::columns::{ColumnGrid, COARSE_CELL};
 use super::trees::{grows_into, trees_near, TreeGround, THIN_TRUNK_CELL, TREE_HEIGHT};
@@ -77,6 +77,11 @@ trait BlockSource {
     fn tree_boxes(&self) -> &[TreeBox] {
         &[]
     }
+
+    /// Whether faces on its edge are skirt walls hanging from its own ground, over what's beyond.
+    fn has_skirts(&self) -> bool {
+        false
+    }
 }
 
 /// Part of a tree as a box of leaves or logs, in mesh units, for cells too wide to hold it.
@@ -105,7 +110,7 @@ impl BlockSource for ChunkNeighbourhood<'_> {
     }
 }
 
-const SKIRT_CELLS: i32 = 1;
+const SKIRT_CELLS: i32 = 2;
 
 struct LodBlocks {
     size: i32,
@@ -144,6 +149,7 @@ const CANOPY_SHADE_SPAN: f32 = 20.0;
 // The ground a coarse node's trees stand on, read from its grid of columns.
 struct GridGround<'a> {
     grid: &'a ColumnGrid,
+    noise: &'a NoiseGenerator,
     base: I64Vec2,
     cell: i64,
     size: i32,
@@ -156,26 +162,35 @@ impl GridGround<'_> {
     }
 }
 
+// Whether a tree grows, and where, is decided from the noise at its exact position, as the
+// regions full detail reads are made from it, or levels would grow different trees. Only its
+// base stands on the ground this node draws.
 impl TreeGround for GridGround<'_> {
     fn trees(&mut self, x: i64, z: i64) -> f64 {
-        let (cx, cz) = self.column(x, z);
-        self.grid.trees(cx, cz)
+        // stored as a byte
+        (self.noise.sample(x as f64, z as f64).trees * 255.0).round() / 255.0
     }
 
     fn height(&mut self, x: i64, z: i64) -> f64 {
-        let (cx, cz) = self.column(x, z);
-        self.grid.height(cx, cz)
+        // stored as a float
+        self.noise.sample(x as f64, z as f64).height as f32 as f64
     }
 
-    // the grid's slope is already summed over both axes
     fn gradient(&mut self, x: i64, z: i64) -> (f64, f64) {
-        let (cx, cz) = self.column(x, z);
-        (self.grid.gradient(cx, cz), 0.0)
+        let span = SLOPE_SPAN;
+        let scale = 1.0 / span as f64;
+        let gradient_x = self.height(x + span, z) - self.height(x - span, z);
+        let gradient_z = self.height(x, z + span) - self.height(x, z - span);
+        (gradient_x * scale, gradient_z * scale)
     }
 
     fn biome(&mut self, x: i64, z: i64) -> BiomeId {
+        self.noise.sample(x as f64, z as f64).biome
+    }
+
+    fn base_height(&mut self, x: i64, z: i64) -> i64 {
         let (cx, cz) = self.column(x, z);
-        self.grid.biome(cx, cz)
+        self.grid.height(cx, cz).round() as i64
     }
 }
 
@@ -240,7 +255,7 @@ impl LodBlocks {
             let span = (size + 1) as i64 * cell;
             if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
                 let min = I64Vec2::new(base.x, base.z) - cell;
-                let mut ground = GridGround { grid: &grid, base: I64Vec2::new(base.x, base.z), cell, size };
+                let mut ground = GridGround { grid: &grid, noise, base: I64Vec2::new(base.x, base.z), cell, size };
                 for tree in trees_near(noise, &mut ground, min, min + span + cell) {
                     // each tree's boxes are drawn by the one node its base is in
                     let at = (tree.base - base).div_euclid(I64Vec3::splat(cell));
@@ -362,6 +377,13 @@ impl LodBlocks {
         blocks
     }
 
+    // Whether the ground's top lands inside the cell at `coord`, which is solid.
+    fn ground_tops_out_in(&self, coord: IVec3) -> bool {
+        let top = self.tops[Self::column(self.size, coord.x, coord.z)];
+        let bottom = self.base_y + coord.y as i64 * self.cell;
+        bottom < top && top < bottom + self.cell && is_solid(self.raw(coord))
+    }
+
     fn surface_top(&self, coord: IVec3) -> Option<f32> {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         self.surface_tops[Self::index(self.size, coord)]
@@ -424,6 +446,10 @@ impl BlockSource for LodBlocks {
         &self.boxes
     }
 
+    fn has_skirts(&self) -> bool {
+        true
+    }
+
     fn forest_shade(&self, position: Vec3) -> f32 {
         if self.forest.is_empty() {
             return 1.0;
@@ -447,13 +473,33 @@ impl BlockSource for LodBlocks {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         let block = self.raw(coord);
         let outside = |c: i32| c < 0 || c >= self.size;
-        if (outside(coord.x) || outside(coord.z)) && is_solid(block) {
-            for dy in 1..=SKIRT_CELLS {
-                let above = self.raw(coord + IVec3::new(0, dy, 0));
-                if !is_solid(above) {
-                    return above;
+        if outside(coord.x) || outside(coord.z) {
+            // The wall hangs from this node's own surface edge, so it's there whatever the cell
+            // beyond holds: that is sampled at this node's resolution, and a coarser neighbour
+            // that draws its ground lower would be left with a gap.
+            let inner = IVec3::new(coord.x.clamp(0, self.size - 1), coord.y, coord.z.clamp(0, self.size - 1));
+            for cell in [inner, coord] {
+                if is_solid(self.raw(cell)) {
+                    for dy in 1..=SKIRT_CELLS {
+                        let above = self.raw(cell + IVec3::new(0, dy, 0));
+                        if !is_solid(above) {
+                            return above;
+                        }
+                    }
                 }
             }
+            // The ground may run on up into the node above, where there's no air to find, so
+            // cells within the skirt's depth of the column's ground top count too. A buried
+            // node's ground is far above it, so it grows no walls.
+            let ground = self.tops[Self::column(self.size, inner.x, inner.z)];
+            let bottom = self.base_y + inner.y as i64 * self.cell;
+            if is_solid(self.raw(inner)) && bottom + self.cell > ground - SKIRT_CELLS as i64 * self.cell {
+                return BlockType::Air;
+            }
+        }
+        // full detail can have the ground a block below a surface cell in the node above, so lid it
+        if coord.y == self.size && !outside(coord.x) && !outside(coord.z) && self.ground_tops_out_in(coord) {
+            return BlockType::Air;
         }
         block
     }
@@ -1035,10 +1081,6 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
     SkyLight::new(min, span, sky_above(top, 1), opacity)
 }
 
-// Ambient occlusion is barely visible on cells this many blocks across or more, but stops
-// their faces merging, so coarser block LODs leave it out.
-const AO_MAX_CELL_SIZE: i64 = 4;
-
 // Cells wider than this draw their block's mean colour instead of its texture, which tiles a
 // cell's width of times over a face, since one stretched over a coarse cell would read as a
 // giant block. Past a few blocks a tile is under a pixel and mipmaps down to the mean anyway.
@@ -1058,7 +1100,7 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
     });
     let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
     // untextured leaves are drawn solid, so hide the leaves behind them
-    let meshes = mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, textured, !textured, &tint, &light);
+    let meshes = mesh_blocks(&blocks, cell_size, true, textured, !textured, &tint, &light);
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
     }
@@ -1142,6 +1184,10 @@ impl<S: BlockSource> BlockSource for GridView<'_, S> {
 
     fn tree_boxes(&self) -> &[TreeBox] {
         self.source.tree_boxes()
+    }
+
+    fn has_skirts(&self) -> bool {
+        self.source.has_skirts()
     }
 }
 
@@ -1256,13 +1302,15 @@ fn mesh_opaque_greedy(
                     // a step above lowered ground faces into that ground's cell, which is dark: it's
                     // lit by the air over it, and is too thin to shade smoothly
                     let step = span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
-                    let smooth = smooth && !step;
-                    let mut lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
-                    // a skirt wall past the mesh's edge faces a buried cell, see `LodBlocks::block`, so takes its light from the air above
-                    if !inside && normal.y == 0 {
-                        let air = (0..=SKIRT_CELLS).find(|&dy| !is_solid(source.terrain(lit_from + IVec3::Y * dy)));
-                        lit_from += IVec3::Y * air.unwrap_or(0);
-                    }
+                    // A skirt wall hangs from the node's own ground over solid cells beyond, whose
+                    // occlusion and light are none, so it is lit as that ground is, by the open air above.
+                    let skirt = !inside && normal.y == 0 && source.has_skirts();
+                    let smooth = smooth && !step && !skirt;
+                    let lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
+                    let skirt_light = skirt.then(|| {
+                        let air = (0..=SKIRT_CELLS + 1).find(|&dy| !is_solid(source.terrain(coord + IVec3::Y * dy)));
+                        face_light(air.map_or(MAX_LIGHT, |dy| light.level(coord + IVec3::Y * dy)))
+                    });
                     mask[(b * size + a) as usize] = span.map(|span| FaceCell {
                         span,
                         block,
@@ -1274,7 +1322,7 @@ fn mesh_opaque_greedy(
                         light: if smooth {
                             std::array::from_fn(|j| vertex_light(source, light, coord, i, template[j].position))
                         } else {
-                            [face_light(light.level(lit_from)); 4]
+                            [skirt_light.unwrap_or_else(|| face_light(light.level(lit_from))); 4]
                         },
                     });
                 }
@@ -2273,14 +2321,58 @@ mod tests {
     #[test]
     fn test_lod_border_exposes_surface_cells_as_skirt() {
         let lod = flat_lod(8);
-        // the border's top solid cell reads as open, so the edge draws a wall
+        // the border's top two solid cells read as open, so the edge draws a wall
         assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 7, 4)));
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 6, 4)));
         assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 7, 16)));
         // deeper border cells and every interior cell read as they are
-        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 6, 4)));
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 5, 4)));
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
         // below the node isn't a horizontal border, so no skirt
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
+    }
+
+    #[test]
+    fn test_skirt_walls_are_lit_like_the_open_ground_they_hang_from() {
+        // flat ground under open sky, cells a block across, and the cells beyond it solid
+        let lod = flat_lod(8);
+        let noise = NoiseGenerator::new(1);
+        let tint = super::GrassTint::new(&noise, Vec3::ZERO, 1.0);
+        let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
+        let light = std::cell::LazyCell::new(|| {
+            crate::chunks::generate::light::SkyLight::new(IVec3::splat(-1), IVec3::splat(18), crate::chunks::generate::light::MAX_LIGHT, opacity)
+        });
+        let mesh = super::mesh_blocks(&lod, 1, true, false, true, &tint, &light).opaque;
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+            panic!("no light on the mesh");
+        };
+        // the top and the four walls, each from a corner to a corner of the node
+        assert!(lights.len() >= 4 * 5);
+        let darkest = lights.iter().map(|l| l[0]).fold(f32::MAX, f32::min);
+        assert!(darkest > 0.6, "a vertex is lit {darkest}, so a skirt wall is dark");
+    }
+
+    #[test]
+    fn test_lod_skirt_hangs_from_the_nodes_own_ground_not_its_neighbours() {
+        // ground reaching the top of the node, where there's no air above to find
+        let size = 16;
+        let padded = (size + 2) as usize;
+        let mut cells = vec![BlockType::Air; padded * padded * padded];
+        for x in -1..=size {
+            for z in -1..=size {
+                for y in -1..=size {
+                    cells[LodBlocks::index(size, IVec3::new(x, y, z))] = BlockType::Stone;
+                }
+            }
+        }
+        // the ground's top is in the node above, 3 cells over the top row
+        let lod = LodBlocks::new(size, cells.clone(), vec![size as i64 + 3; padded * padded], 0, 1);
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 8, 4)));
+        // ground ending in the top row: the cells within two of it have walls, though the top row is solid
+        let lod = LodBlocks::new(size, cells, vec![size as i64 + 1; padded * padded], 0, 1);
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 16, 4)));
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 15, 4)));
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 14, 4)));
     }
 
     #[test]
@@ -2453,6 +2545,168 @@ mod tests {
         assert_eq!(0, blocks.cells.iter().filter(|&&c| c == BlockType::Leaves || c == BlockType::Log).count());
         assert!(blocks.boxes.is_empty());
         assert!(blocks.forest.iter().any(|&f| f > 0.0) && blocks.forest.iter().all(|&f| (0.0..=1.0).contains(&f)));
+    }
+
+    // Where trees grow within a node's own area, as full detail decides, and as the node's grid does.
+    fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Vec<(i64, i64)>, Vec<(i64, i64)>) {
+        use crate::chunks::generate::trees::trees_near;
+        use bevy::math::I64Vec2;
+        let (cell, base, size) = (key.cell_size(), key.min_block(), crate::chunks::chunk::CHUNK_SIZE as i32);
+        let span = (size + 1) as i64 * cell;
+        let min = I64Vec2::new(base.x, base.z) - cell;
+        let own = |t: &crate::chunks::generate::trees::Tree| {
+            (base.x..base.x + size as i64 * cell).contains(&t.base.x) && (base.z..base.z + size as i64 * cell).contains(&t.base.z)
+        };
+        let mut heights = regions.sampler();
+        let mut exact: Vec<_> = trees_near(regions.noise(), &mut heights, min, min + span + cell)
+            .iter()
+            .filter(|t| own(t))
+            .map(|t| (t.base.x, t.base.z))
+            .collect();
+        let grid = regions.column_grid(key);
+        let mut ground = super::GridGround { grid: &grid, noise: regions.noise(), base: I64Vec2::new(base.x, base.z), cell, size };
+        let mut coarse: Vec<_> = trees_near(regions.noise(), &mut ground, min, min + span + cell)
+            .iter()
+            .filter(|t| own(t))
+            .map(|t| (t.base.x, t.base.z))
+            .collect();
+        exact.sort();
+        coarse.sort();
+        (exact, coarse)
+    }
+
+    #[test]
+    fn test_every_level_grows_the_trees_full_detail_does() {
+        use bevy::math::I64Vec2;
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        for level in [2u8, 3, 4, 5] {
+            // nodes over a forested stretch, found from the full-detail trees
+            let mut heights = regions.sampler();
+            let trees = crate::chunks::generate::trees::trees_near(regions.noise(), &mut heights, I64Vec2::splat(-500), I64Vec2::splat(500));
+            let mut checked = 0;
+            for tree in trees.iter().step_by(trees.len() / 8 + 1) {
+                let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), level);
+                let (exact, coarse) = tree_spots(&regions, key);
+                assert_eq!(exact, coarse, "level {level} node {key:?}");
+                checked += exact.len();
+            }
+            assert!(checked > 0, "no trees checked at level {level}");
+        }
+    }
+
+    // Triangles of a node's opaque mesh in world space, placed as `lod_transform` does.
+    fn world_triangles(regions: &Arc<RegionStore>, key: LodKey) -> Vec<[Vec3; 3]> {
+        let Some(meshes) = super::generate_lod_mesh(regions.clone(), key) else {
+            return Vec::new();
+        };
+        let cell = key.cell_size() as f32;
+        let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell - 0.5);
+        let positions = meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
+        let Some(Indices::U32(indices)) = meshes.opaque.indices() else {
+            return Vec::new();
+        };
+        indices
+            .chunks(3)
+            .map(|t| [0, 1, 2].map(|k| origin + Vec3::from(positions[t[k] as usize]) * cell))
+            .collect()
+    }
+
+    // Whether the ray from `from` along `direction` meets the triangle, either side.
+    fn ray_hits(from: Vec3, direction: Vec3, [a, b, c]: [Vec3; 3]) -> bool {
+        let (e1, e2) = (b - a, c - a);
+        let p = direction.cross(e2);
+        let det = e1.dot(p);
+        if det.abs() < 1e-9 {
+            return false;
+        }
+        let t = from - a;
+        let u = t.dot(p) / det;
+        let q = t.cross(e1);
+        let v = direction.dot(q) / det;
+        u >= 0.0 && v >= 0.0 && u + v <= 1.0 && e2.dot(q) / det > 0.0
+    }
+
+    // How many oblique rays down across the seam between a node and its coarser neighbour pass
+    // through every triangle of both, seeing the sky through a crack.
+    fn seam_leaks(regions: &Arc<RegionStore>, fine: LodKey, coarse: LodKey) -> (usize, usize) {
+        // the nodes above and below too, where the ground crosses into them
+        let mut triangles = Vec::new();
+        for dy in -1..=1 {
+            for key in [fine, coarse] {
+                triangles.extend(world_triangles(regions, LodKey { coord: key.coord + I64Vec3::new(0, dy, 0), ..key }));
+            }
+        }
+        let seam_x = coarse.min_block().x as f32;
+        let (z0, z1) = (fine.min_block().z as f32, (fine.min_block().z + fine.width() * 16) as f32);
+        let mut sampler = regions.sampler();
+        let (mut rays, mut leaks) = (0, 0);
+        for direction in [Vec3::new(0.35, -1.0, 0.1), Vec3::new(-0.35, -1.0, 0.1), Vec3::new(0.0, -1.0, 0.45), Vec3::new(0.2, -1.0, -0.3)] {
+            let direction = direction.normalize();
+            // clear of the node's z edges, past which the next node isn't loaded here
+            let mut z = z0 + 8.713;
+            while z < z1 - 8.0 {
+                for dx in [-2.7f32, -1.77, -0.93, 0.21, 0.83, 1.61, 2.9] {
+                    let x = seam_x + dx;
+                    let y = sampler.height(x as i64, z as i64) as f32;
+                    // from well above any hill the ray might otherwise start inside of
+                    let from = Vec3::new(x, y, z) - direction * (300.0 / -direction.y);
+                    rays += 1;
+                    if !triangles.iter().any(|&t| ray_hits(from, direction, t)) {
+                        leaks += 1;
+                    }
+                }
+                z += 2.07;
+            }
+        }
+        (leaks, rays)
+    }
+
+    #[test]
+    fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let mut sampler = regions.sampler();
+        // stretches of land a few thousand blocks apart, with a fine node beside a coarser one
+        let spots: Vec<(i64, i64)> = (0..8).map(|i| (-3000 + (i % 4) * 1900 + (i * 137) % 400, -3000 + (i / 4) * 1900 + (i * 211) % 400)).collect();
+        for fine_level in 1..=4u8 {
+            let (mut leaks, mut rays) = (0, 0);
+            for &(bx, bz) in &spots {
+                let h = sampler.height(bx, bz) as i64;
+                let coarse = LodKey::containing(ChunkCoordinate(I64Vec3::new(bx, h, bz).div_euclid(I64Vec3::splat(16))), fine_level + 1);
+                let fine_chunk = I64Vec3::new(coarse.min_block().x - 8, h, coarse.min_block().z + 8).div_euclid(I64Vec3::splat(16));
+                let fine = LodKey::containing(ChunkCoordinate(fine_chunk), fine_level);
+                let (l, r) = seam_leaks(&regions, fine, coarse);
+                leaks += l;
+                rays += r;
+            }
+            assert_eq!(0, leaks, "{leaks} of {rays} rays slipped through seams between levels {fine_level} and {}", fine_level + 1);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn scratch_one_leak() {
+        // a leak the real layout showed, from (-224.7, 504.4, -276.3) along (0.329, -0.940, 0.094), with only level 1 nodes near it
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let _ = regions;
+    }
+
+    #[test]
+    fn test_ground_a_block_lower_than_a_surface_cell_above_is_still_lidded() {
+        // here full detail has the ground a block under the level 1 cell the node above draws it in
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(2775841323))));
+        let key = LodKey { level: 1, coord: I64Vec3::new(6, 13, 4) };
+        let meshes = super::generate_lod_mesh(regions, key).unwrap();
+        let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * 2.0 - 0.5);
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)) = meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!() };
+        let Some(Indices::U32(idx)) = meshes.opaque.indices() else { panic!() };
+        let (px, pz) = (198.7f32, 127.7f32);
+        let lidded = idx.chunks(3).any(|t| {
+            let q = [0, 1, 2].map(|j| origin + Vec3::from(pos[t[j] as usize]) * 2.0);
+            let e = |a: Vec3, b: Vec3| (px - b.x) * (a.z - b.z) - (a.x - b.x) * (pz - b.z);
+            let d = [e(q[0], q[1]), e(q[1], q[2]), e(q[2], q[0])];
+            q.iter().all(|v| v.y == 447.5) && !(d.iter().any(|&x| x < 0.0) && d.iter().any(|&x| x > 0.0))
+        });
+        assert!(lidded);
     }
 
     #[test]

@@ -148,7 +148,7 @@ impl RegionStore {
     }
 }
 
-const SLOPE_SPAN: i64 = 6;
+pub(super) const SLOPE_SPAN: i64 = 6;
 
 // Enough for a lookup area that touches a corner where four regions meet.
 const SAMPLER_REGIONS: usize = 4;

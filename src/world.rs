@@ -25,7 +25,8 @@ impl World {
     /// `region_distance` is how far, in chunks, terrain is built from full-detail regions,
     /// see `LodLayout::region_reach`.
     pub fn new(region_distance: u32) -> Self {
-        let seed = rand::random();
+        // RC_SEED repeats a world, for chasing bugs that depend on its terrain
+        let seed = std::env::var("RC_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(rand::random);
         let height = WORLD_HEIGHT;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
         let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
