@@ -147,7 +147,7 @@ const TREE_MAX_CELL: i64 = 32;
 const TRUNK_MAX_CELL: i64 = 16;
 // From cells this wide a crown is a box too, of its real size: as cells it would round up to a
 // cube a cell wide, several times its size.
-const BOX_CROWN_CELL: i64 = 16;
+const BOX_CROWN_CELL: i64 = 4;
 // Each tree a cell grows covers this much of its ground, see `Biome::tree_density`, and a cell
 // that's all covered is drawn this fraction as bright.
 const FOREST_COVER: f64 = 1.6;
@@ -280,8 +280,9 @@ impl LodBlocks {
                             boxes.push(TreeBox { min: mesh_at(min), max: mesh_at(max), block: BlockType::Log });
                         }
                         if cell >= BOX_CROWN_CELL {
-                            let (min, max) = tree.crown_box();
-                            boxes.push(TreeBox { min: mesh_at(min.as_vec3()), max: mesh_at(max.as_vec3()), block: BlockType::Leaves });
+                            for (min, max) in tree.crown_boxes() {
+                                boxes.push(TreeBox { min: mesh_at(min.as_vec3()), max: mesh_at(max.as_vec3()), block: BlockType::Leaves });
+                            }
                         }
                     }
                     if cell < BOX_CROWN_CELL {
@@ -848,6 +849,8 @@ struct MeshBuffers {
     lights: Vec<f32>,
     // whether faces draw their block's mean colour instead of its texture, see `world.wgsl`
     untextured: bool,
+    // where tree boxes start and whether they're untextured, which they are on their own terms
+    boxes: Option<(usize, bool)>,
 }
 
 impl MeshBuffers {
@@ -962,8 +965,16 @@ impl MeshBuffers {
         );
         if !self.lights.is_empty() {
             assert_eq!(self.lights.len(), self.vertices.len(), "only some vertices carry light");
-            let untextured = if self.untextured { 1.0 } else { 0.0 };
-            let lights = self.lights.into_iter().map(|l| [l, untextured]).collect();
+            let flag = |untextured: bool| if untextured { 1.0 } else { 0.0 };
+            let lights = self
+                .lights
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| match self.boxes {
+                    Some((start, untextured)) if i >= start => [l, flag(untextured)],
+                    _ => [l, flag(self.untextured)],
+                })
+                .collect();
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(lights));
         }
         mesh
@@ -1116,6 +1127,20 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
 // cell's width of times over a face, since one stretched over a coarse cell would read as a
 // giant block. Past a few blocks a tile is under a pixel and mipmaps down to the mean anyway.
 const TEXTURE_MAX_CELL_SIZE: i64 = 4;
+// Tree boxes keep their leaf texture, holes and all, up to cells this wide: it has to stay
+// readable as leaves, and past it a crown is a few pixels.
+const BOX_TEXTURE_MAX_CELL: i64 = 8;
+
+// A quad's `uvs` scaled to count blocks across it, so a texture isn't stretched over a whole box.
+fn tiled_uvs(positions: &[[f32; 3]; 4], uvs: &[[f32; 2]; 4], cell: f32) -> [[f32; 2]; 4] {
+    let length = |axis: usize| {
+        let other = |j: usize, k: usize| uvs[j][1 - axis] == uvs[k][1 - axis] && uvs[j][axis] != uvs[k][axis];
+        let (j, k) = (0..4).flat_map(|j| (0..4).map(move |k| (j, k))).find(|&(j, k)| other(j, k)).unwrap_or((0, 0));
+        (Vec3::from(positions[j]) - Vec3::from(positions[k])).length() * cell
+    };
+    let blocks = [length(0), length(1)];
+    std::array::from_fn(|j| [uvs[j][0] * blocks[0], uvs[j][1] * blocks[1]])
+}
 
 pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
     let cell_size = key.cell_size();
@@ -1568,6 +1593,7 @@ fn mesh_blocks(
     );
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly
     const BOX_LIGHT: f32 = 0.8;
+    opaque.boxes = Some((opaque.vertices.len(), cell_size > BOX_TEXTURE_MAX_CELL));
     for tree_box in source.tree_boxes() {
         let (centre, extent) = ((tree_box.min + tree_box.max) / 2.0, tree_box.max - tree_box.min);
         let atlas_cell = (tree_box.block as usize - 1) as f32;
@@ -1576,7 +1602,7 @@ fn mesh_blocks(
         let faces = if tree_box.block == BlockType::Log { &face_vertices[..5] } else { &face_vertices[..] };
         for face in faces {
             let positions = std::array::from_fn(|j| (centre + Vec3::from(face[j].position) * extent).to_array());
-            let uvs = std::array::from_fn(|j| face[j].uv);
+            let uvs = tiled_uvs(&positions, &std::array::from_fn(|j| face[j].uv), cell_size as f32);
             opaque.push_tiled_quad(positions, face[0].normal, uvs, [tint.extend(atlas_cell).to_array(); 4], [BOX_LIGHT; 4]);
         }
     }
@@ -2224,10 +2250,29 @@ mod tests {
         let height = noise.get(I64Vec2::ZERO) as i64;
         let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
         let regions = Arc::new(RegionStore::new(noise));
-        let key = crate::chunks::lod::LodKey::containing(chunk, 3);
-        assert!(key.cell_size() > super::TEXTURE_MAX_CELL_SIZE);
+        let key = crate::chunks::lod::LodKey::containing(chunk, 5);
+        assert!(key.cell_size() > super::BOX_TEXTURE_MAX_CELL);
         let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
         assert!(!flags.is_empty() && flags.iter().all(|&f| f == 1.0));
+    }
+
+    #[test]
+    fn test_tree_boxes_stay_textured_up_to_eight_wide_cells_with_a_tile_a_block() {
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let mut heights = regions.sampler();
+        let trees = crate::chunks::generate::trees::trees_near(regions.noise(), &mut heights, bevy::math::I64Vec2::splat(-300), bevy::math::I64Vec2::splat(300));
+        let tree = &trees[0];
+        let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
+        let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), 3);
+        assert!(key.cell_size() <= super::BOX_TEXTURE_MAX_CELL);
+        let opaque = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
+        let flags = untextured_flags(&opaque);
+        let VertexAttributeValues::Float32x2(uvs) = opaque.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() else { panic!() };
+        // boxes come last: textured, and counting more than one tile across a crown
+        let boxed = flags.len() - flags.iter().rev().take_while(|&&f| f == 0.0).count();
+        assert!(boxed < flags.len(), "no textured tree boxes");
+        assert!(uvs[boxed..].iter().any(|uv| uv[0] > 3.0 || uv[1] > 3.0));
+        assert!(flags[..boxed].iter().all(|&f| f == 1.0));
     }
 
     #[test]
@@ -2496,13 +2541,17 @@ mod tests {
             if cell < super::BOX_CROWN_CELL {
                 assert!(leaf_cells > 0, "no leaf cells at level {level}, cells {cell} blocks wide");
             } else {
-                // a crown is a box of its real size, never a cell's worth of cube
+                // a crown is boxes of its real size, never a cell's worth of cube
                 assert_eq!(0, leaf_cells);
-                let (min, max) = tree.crown_box();
-                let wanted = (max - min).as_vec3();
-                let found = blocks.boxes.iter().filter(|b| b.block == BlockType::Leaves).any(|b| ((b.max - b.min) * cell as f32 - wanted).abs().max_element() < 1e-3);
-                assert!(found && crown_boxes >= 1, "no crown box of {wanted:?} at level {level}");
-                assert!(wanted.x < 20.0 && wanted.x < cell as f32 * 1.5, "crown {wanted:?} wider than a crown should be");
+                let wanted = tree.crown_boxes();
+                assert!(!wanted.is_empty() && crown_boxes >= wanted.len(), "{crown_boxes} crown boxes of {} at level {level}", wanted.len());
+                for (min, max) in &wanted {
+                    let size = (*max - *min).as_vec3();
+                    let found = blocks.boxes.iter().filter(|b| b.block == BlockType::Leaves).any(|b| ((b.max - b.min) * cell as f32 - size).abs().max_element() < 1e-3);
+                    assert!(found, "no crown box of {size:?} at level {level}");
+                }
+                let wanted = wanted.iter().fold(Vec3::ZERO, |w, (min, max)| w.max((*max - *min).as_vec3()));
+                assert!(wanted.x < 20.0, "crown {wanted:?} wider than a crown should be");
             }
         }
     }
