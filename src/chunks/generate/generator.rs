@@ -1041,8 +1041,8 @@ const AO_MAX_CELL_SIZE: i64 = 2;
 
 // Cells wider than this draw their block's mean colour instead of its texture, which tiles a
 // cell's width of times over a face, since one stretched over a coarse cell would read as a
-// giant block.
-const TEXTURE_MAX_CELL_SIZE: i64 = 2;
+// giant block. Past a few blocks a tile is under a pixel and mipmaps down to the mean anyway.
+const TEXTURE_MAX_CELL_SIZE: i64 = 4;
 
 pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
     let cell_size = key.cell_size();
@@ -2140,7 +2140,21 @@ mod tests {
     }
 
     #[test]
-    fn test_lods_wider_than_two_blocks_are_untextured() {
+    fn test_lods_wider_than_four_blocks_are_untextured() {
+        use bevy::math::I64Vec2;
+
+        let noise = Arc::new(NoiseGenerator::new(42));
+        let height = noise.get(I64Vec2::ZERO) as i64;
+        let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
+        let regions = Arc::new(RegionStore::new(noise));
+        let key = crate::chunks::lod::LodKey::containing(chunk, 3);
+        assert!(key.cell_size() > super::TEXTURE_MAX_CELL_SIZE);
+        let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
+        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 1.0));
+    }
+
+    #[test]
+    fn test_lods_up_to_four_blocks_are_textured_with_the_texture_repeating_over_each_cell() {
         use bevy::math::I64Vec2;
 
         let noise = Arc::new(NoiseGenerator::new(42));
@@ -2148,29 +2162,15 @@ mod tests {
         let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
         let regions = Arc::new(RegionStore::new(noise));
         let key = crate::chunks::lod::LodKey::containing(chunk, 2);
-        assert!(key.cell_size() > super::TEXTURE_MAX_CELL_SIZE);
-        let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
-        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 1.0));
-    }
-
-    #[test]
-    fn test_two_block_lods_are_textured_with_the_texture_repeating_over_each_cell() {
-        use bevy::math::I64Vec2;
-
-        let noise = Arc::new(NoiseGenerator::new(42));
-        let height = noise.get(I64Vec2::ZERO) as i64;
-        let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
-        let regions = Arc::new(RegionStore::new(noise));
-        let key = crate::chunks::lod::LodKey::containing(chunk, 1);
-        assert_eq!(2, key.cell_size());
+        assert_eq!(4, key.cell_size());
         let mesh = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
         let flags = untextured_flags(&mesh);
         assert!(!flags.is_empty() && flags.iter().all(|&f| f == 0.0));
-        // a face one cell wide spans two tiles, so none comes out a tile wide
+        // a face one cell wide spans four tiles, so none comes out a tile wide
         let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap();
         let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else { panic!() };
         let tiles = |axis: usize| uvs.iter().map(|uv| uv[axis]).fold(0.0f32, f32::max);
-        assert!(tiles(0) >= 2.0 || tiles(1) >= 2.0);
+        assert!(tiles(0) >= 4.0 || tiles(1) >= 4.0);
     }
 
     #[test]
