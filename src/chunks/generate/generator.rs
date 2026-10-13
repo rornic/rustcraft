@@ -982,9 +982,10 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
 // their faces merging, so coarser block LODs leave it out.
 const AO_MAX_CELL_SIZE: i64 = 2;
 
-// A block texture stretched over a cell wider than this reads as one giant block, so
-// coarser block LODs draw each block's mean colour instead.
-const TEXTURE_MAX_CELL_SIZE: i64 = 1;
+// Cells wider than this draw their block's mean colour instead of its texture, which tiles a
+// cell's width of times over a face, since one stretched over a coarse cell would read as a
+// giant block.
+const TEXTURE_MAX_CELL_SIZE: i64 = 2;
 
 pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<ChunkMeshes> {
     let cell_size = key.cell_size();
@@ -1150,6 +1151,8 @@ fn mesh_opaque_greedy(
     buffers: &mut MeshBuffers,
     ambient_occlusion: bool,
     solid_leaves: bool,
+    // how many times the texture repeats across a cell
+    uv_tiles: f32,
     grass_tint: &GrassTint,
     light: &impl Deref<Target = SkyLight>,
 ) {
@@ -1257,7 +1260,7 @@ fn mesh_opaque_greedy(
                             }
                             position
                         });
-                        let uvs = std::array::from_fn(|j| template[j].uv);
+                        let uvs = std::array::from_fn(|j| template[j].uv.map(|c| c * uv_tiles));
                         let colors = std::array::from_fn(|j| color(cell.ao[j], positions[j]));
                         let positions = positions.map(|p| p.to_array());
                         buffers.push_tiled_quad(positions, template[0].normal, uvs, colors, cell.light);
@@ -1284,7 +1287,7 @@ fn mesh_opaque_greedy(
                         let along = [i as f32, j as f32];
                         [0, 1].map(|k| {
                             let t = (uv_axes[k] == b_axis) as usize;
-                            if uv_ascending[k] { along[t] } else { extent[t] - along[t] }
+                            (if uv_ascending[k] { along[t] } else { extent[t] - along[t] }) * uv_tiles
                         })
                     };
                     buffers.push_fan_quad(FanQuad {
@@ -1413,6 +1416,7 @@ fn mesh_blocks(
         &mut opaque,
         ambient_occlusion,
         solid_leaves,
+        if textured { cell_size as f32 } else { 1.0 },
         grass_tint,
         light,
     );
@@ -2053,7 +2057,21 @@ mod tests {
     }
 
     #[test]
-    fn test_coarse_lods_are_untextured() {
+    fn test_lods_wider_than_two_blocks_are_untextured() {
+        use bevy::math::I64Vec2;
+
+        let noise = Arc::new(NoiseGenerator::new(42));
+        let height = noise.get(I64Vec2::ZERO) as i64;
+        let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
+        let regions = Arc::new(RegionStore::new(noise));
+        let key = crate::chunks::lod::LodKey::containing(chunk, 2);
+        assert!(key.cell_size() > super::TEXTURE_MAX_CELL_SIZE);
+        let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
+        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 1.0));
+    }
+
+    #[test]
+    fn test_two_block_lods_are_textured_with_the_texture_repeating_over_each_cell() {
         use bevy::math::I64Vec2;
 
         let noise = Arc::new(NoiseGenerator::new(42));
@@ -2061,9 +2079,15 @@ mod tests {
         let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
         let regions = Arc::new(RegionStore::new(noise));
         let key = crate::chunks::lod::LodKey::containing(chunk, 1);
-        assert!(key.cell_size() > super::TEXTURE_MAX_CELL_SIZE);
-        let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
-        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 1.0));
+        assert_eq!(2, key.cell_size());
+        let mesh = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
+        let flags = untextured_flags(&mesh);
+        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 0.0));
+        // a face one cell wide spans two tiles, so none comes out a tile wide
+        let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap();
+        let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else { panic!() };
+        let tiles = |axis: usize| uvs.iter().map(|uv| uv[axis]).fold(0.0f32, f32::max);
+        assert!(tiles(0) >= 2.0 || tiles(1) >= 2.0);
     }
 
     #[test]
