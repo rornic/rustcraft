@@ -15,9 +15,8 @@ use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
-use rustcraft::sky::{gradient_skybox, sun, FOG_MAX_OPACITY, HORIZON_COLOR};
-use rustcraft::sun_disc::SunDiscPlugin;
-use rustcraft::tonemap::{dry_color_grading, scene_colour, TONEMAPPING};
+use rustcraft::sky::{atmosphere_camera, spawn_atmosphere, sun, FOG_MAX_OPACITY};
+use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
 fn setup_scene(
     mut commands: Commands,
@@ -56,7 +55,7 @@ fn setup_scene(
         .spawn((
             Transform::from_xyz(0.0, 2.0, 0.0),
             Camera3d { ..default() },
-            gradient_skybox(&mut images),
+            atmosphere_camera(),
             Projection::Perspective(PerspectiveProjection {
                 far: fog_distance + world_height as f32,
                 ..default()
@@ -76,7 +75,7 @@ fn setup_scene(
             MotionVectorPrepass,
             TemporalAntiAliasing::default(),
             DistanceFog {
-                color: scene_colour(HORIZON_COLOR).with_alpha(FOG_MAX_OPACITY).into(),
+                color: Color::NONE.with_alpha(FOG_MAX_OPACITY),
                 falloff: FogFalloff::Linear {
                     // half fogged where the farthest LOD level starts, hiding the swap to it,
                     // see `fog.wesl`
@@ -160,12 +159,11 @@ fn main() {
             MaterialPlugin::<WaterMaterial>::default(),
             TerrainPlugin,
             CloudPlugin,
-            SunDiscPlugin,
             DebugOverlayPlugin,
         ))
         .insert_resource(winit_settings())
-        .insert_resource(ClearColor(scene_colour(HORIZON_COLOR).into()))
-        .add_systems(Startup, setup_scene.after(spawn_clouds))
+        .insert_resource(ClearColor(Color::BLACK))
+        .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
         .add_systems(
             Update,
             (player_move, player_look, update_horizon, update_underwater_effects).chain(),
