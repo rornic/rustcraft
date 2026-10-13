@@ -12,9 +12,8 @@ use bevy::{
     prelude::Mesh3d,
     render::{
         mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues},
-        primitives::Aabb,
-        view::Visibility,
     },
+    camera::{primitives::Aabb, visibility::Visibility},
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::Transform,
     tasks::futures,

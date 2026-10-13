@@ -11,7 +11,7 @@ use bevy::{
     },
     ecs::hierarchy::ChildOf,
     math::{Dir3, I64Vec3, Vec3},
-    render::camera::Camera,
+    camera::Camera,
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::GlobalTransform,
     tasks::futures,
@@ -134,11 +134,11 @@ impl ChunkLoader {
     }
 
     pub fn material(&self) -> Handle<ChunkMaterial> {
-        self.material.clone_weak()
+        self.material.clone()
     }
 
     pub fn water_material(&self) -> Handle<WaterMaterial> {
-        self.water_material.clone_weak()
+        self.water_material.clone()
     }
 
     pub fn group_entity(&self, key: LodKey) -> Option<Entity> {

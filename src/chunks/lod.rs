@@ -16,7 +16,8 @@ use bevy::{
     math::{I64Vec2, I64Vec3, Vec3},
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
-    render::{mesh::Mesh, primitives::Aabb, view::Visibility},
+    camera::{primitives::Aabb, visibility::Visibility},
+    render::mesh::Mesh,
     tasks::{AsyncComputeTaskPool, Task},
     time::Time,
     transform::components::Transform,
@@ -888,11 +889,11 @@ pub fn load_lods(
         if let Some(chunk_meshes) = result {
             commands.entity(entity).insert((
                 Mesh3d(meshes.add(chunk_meshes.opaque)),
-                MeshMaterial3d(lods.material.clone_weak()),
+                MeshMaterial3d(lods.material.clone()),
                 lod_aabb(),
             ));
             if let Some(water_mesh) = chunk_meshes.water {
-                let water_material = lods.water_material.clone_weak();
+                let water_material = lods.water_material.clone();
                 commands.entity(entity).with_children(|parent| {
                     parent.spawn((
                         Mesh3d(meshes.add(water_mesh)),
@@ -1590,7 +1591,7 @@ mod tests {
         // the same area's neighbours and ancestors
         let outside = [key(3, 2, 0, 1), key(1, 8, 0, 8), key(4, 0, 0, 0)];
         for (i, k) in inside.iter().chain(&outside).enumerate() {
-            lods.add_node(*k, Some(Entity::from_raw(i as u32)));
+            lods.add_node(*k, Some(Entity::from_raw_u32(i as u32).unwrap()));
         }
         let found: HashSet<LodKey> = lods.nodes_under(key(3, 1, 0, 1)).into_iter().map(|(k, _)| k).collect();
         // (1, 5, 1, 6) lies in (2, 2, 0, 3), which lies in (3, 1, 0, 1)
@@ -1600,8 +1601,8 @@ mod tests {
     #[test]
     fn test_removing_nodes_empties_the_population() {
         let mut lods = loader();
-        lods.add_node(key(1, 3, 2, 3), Some(Entity::from_raw(0)));
-        lods.add_node(key(2, 1, 1, 1), Some(Entity::from_raw(1)));
+        lods.add_node(key(1, 3, 2, 3), Some(Entity::from_raw_u32(0).unwrap()));
+        lods.add_node(key(2, 1, 1, 1), Some(Entity::from_raw_u32(1).unwrap()));
         assert!(lods.remove_node(key(1, 3, 2, 3)).is_some());
         assert!(lods.remove_node(key(1, 3, 2, 3)).is_none());
         assert!(lods.nodes_under(key(3, 0, 0, 0)).len() == 1);
@@ -1614,7 +1615,7 @@ mod tests {
     fn test_nodes_without_entities_still_exist_but_are_not_found_to_refresh() {
         let mut lods = loader();
         lods.add_node(key(1, 2, 0, 2), None);
-        lods.add_node(key(2, 1, 0, 1), Some(Entity::from_raw(7)));
+        lods.add_node(key(2, 1, 0, 1), Some(Entity::from_raw_u32(7).unwrap()));
         assert!(lods.nodes.contains_key(&key(1, 2, 0, 2)));
         let found: Vec<LodKey> = lods.nodes_under(key(3, 0, 0, 0)).into_iter().map(|(k, _)| k).collect();
         assert_eq!(vec![key(2, 1, 0, 1)], found);
@@ -1628,8 +1629,8 @@ mod tests {
     #[test]
     fn test_adding_a_node_twice_counts_it_once() {
         let mut lods = loader();
-        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(0)));
-        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(1)));
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw_u32(0).unwrap()));
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw_u32(1).unwrap()));
         lods.remove_node(key(2, 0, 0, 0));
         assert!(lods.populated.is_empty());
     }

@@ -1,12 +1,12 @@
 // Clouds' shadows on the land: where the sun's rays cross the cloud layer, looked up in
 // its pattern, so they drift with the clouds however far out. See `clouds.rs`.
 
-#import bevy_pbr::mesh_view_bindings as view_bindings
+import bevy_pbr::render::mesh_view_bindings as view_bindings;
 
-@group(2) @binding(4) var cloud_pattern: texture_2d<f32>;
-@group(2) @binding(5) var cloud_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(4) var cloud_pattern: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(5) var cloud_sampler: sampler;
 // the middle of the layer's height, the pattern's width in blocks, and the wind
-@group(2) @binding(6) var<uniform> cloud_layer: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var<uniform> cloud_layer: vec4<f32>;
 
 // How much of the sun a cloud keeps off the ground.
 const CLOUD_SHADE: f32 = 0.7;

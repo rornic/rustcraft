@@ -1,17 +1,17 @@
-#import bevy_pbr::{
-    forward_io::{Vertex, VertexOutput},
+import bevy_pbr::render::{
+    forward_io::{Vertex, VertexOutput, decompress_vertex},
     mesh_view_bindings as view_bindings,
     mesh_functions,
     view_transformations::position_world_to_clip,
-}
-#import "shaders/fog.wgsl"::fogged
-#import "shaders/dither.wgsl"::dither_threshold
+};
+import super::fog::fogged;
+import super::dither::dither_threshold;
 
-@group(2) @binding(0) var<uniform> material_color: vec4<f32>;
-@group(2) @binding(1) var material_color_texture: texture_2d<f32>;
-@group(2) @binding(2) var material_color_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> material_color: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(1) var material_color_texture: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(2) var material_color_sampler: sampler;
 
-@group(2) @binding(3) var<uniform> material_fade: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
 
 const TROPICAL_TINT: vec3<f32> = vec3<f32>(0.0, 0.85, 0.9);
@@ -74,7 +74,8 @@ fn wave_height(xz: vec2<f32>, time: f32) -> f32 {
 }
 
 @vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
+fn vertex(vertex_in: Vertex) -> VertexOutput {
+    let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
     var out: VertexOutput;
 
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
@@ -83,7 +84,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
 
-#ifdef VERTEX_COLORS
+@if(VERTEX_COLORS) {
     // is_top (B channel) is a flat 0/1 flag, not depth-scaled - see generator.rs for
     // why uniform amplitude across every top face is required to avoid seams.
     //
@@ -100,7 +101,7 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     let amplitude = WAVE_AMPLITUDE * (1.0 - shore_factor) * dist_fade;
     world_position.y += wave_height(world_position.xz, time) * amplitude * is_top;
     out.color = vertex.color;
-#endif
+}
 
     out.world_position = world_position;
     out.position = position_world_to_clip(world_position.xyz);
@@ -174,7 +175,7 @@ fn fragment(
     color = vec4<f32>(mix(color.rgb, TROPICAL_TINT, TROPICAL_PUSH), color.a);
     var alpha = 0.6;
 
-#ifdef VERTEX_COLORS
+@if(VERTEX_COLORS) {
     let shore_factor = in.color.r;
     let raw_depth = in.color.g * CHUNK_SIZE;
 
@@ -223,11 +224,11 @@ fn fragment(
 
     color = vec4<f32>(mix(color.rgb, FOAM_COLOR, foam), color.a);
     alpha = mix(alpha, 1.0, foam);
-#endif
+}
 
     // so distant water fades into the sky instead of popping in and out
     let scene = scene_colour(color.rgb);
-    let shown = fogged(vec4<f32>(scene, alpha), world_position);
+    let shown = fogged(vec4<f32>(scene, alpha), world_position, in.position.xy);
 
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);

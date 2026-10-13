@@ -8,7 +8,7 @@ use bevy::core_pipeline::prepass::{AlphaMask3dPrepass, Opaque3dPrepass};
 use bevy::pbr::Shadow;
 use bevy::prelude::*;
 use bevy::render::render_phase::{BinnedPhaseItem, BinnedRenderPhase, ViewBinnedRenderPhases, ViewSortedRenderPhases};
-use bevy::render::{Render, RenderApp, RenderSet};
+use bevy::render::{Render, RenderApp, RenderSystems};
 
 use crate::chunks::chunk_loader::Chunk;
 use crate::chunks::lod::LodNode;
@@ -31,7 +31,7 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(Startup, spawn_overlay)
             .add_systems(Update, (toggle_overlay, update_overlay).chain());
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.insert_resource(counts).add_systems(Render, count_draws.in_set(RenderSet::Prepare));
+            render_app.insert_resource(counts).add_systems(Render, count_draws.in_set(RenderSystems::Prepare));
         }
     }
 }
@@ -77,7 +77,7 @@ fn spawn_overlay(mut commands: Commands) {
         DebugOverlay,
         Text::new(""),
         TextFont {
-            font_size: 16.0,
+            font_size: bevy::text::FontSize::Px(16.0),
             ..default()
         },
         TextColor(Color::WHITE),
@@ -112,8 +112,6 @@ fn update_overlay(
     chunks: Query<(), With<Chunk>>,
     lod_nodes: Query<&LodNode>,
     counts: Res<DrawCounts>,
-    drawn: Query<(&Mesh3d, &ViewVisibility)>,
-    meshes: Res<Assets<Mesh>>,
     mut overlay: Query<(&mut Text, &Visibility), With<DebugOverlay>>,
 ) {
     let Ok((mut text, visibility)) = overlay.single_mut() else {
@@ -147,16 +145,9 @@ fn update_overlay(
         );
     }
 
-    let mut vertices = 0usize;
-    for (mesh, visible) in &drawn {
-        if visible.get() {
-            vertices += meshes.get(&mesh.0).map_or(0, Mesh::count_vertices);
-        }
-    }
     let load = |count: &AtomicU32| count.load(Ordering::Relaxed);
     let (main, prepass, blended, shadow) = (load(&counts.main), load(&counts.prepass), load(&counts.blended), load(&counts.shadow));
     let _ = writeln!(out, "draw calls: {} (main {main}, depth {prepass}, water/clouds {blended}, shadows {shadow})", main + prepass + blended + shadow);
-    let _ = writeln!(out, "vertices: {vertices}");
 
     let mut per_level = vec![chunks.iter().count()];
     for node in &lod_nodes {

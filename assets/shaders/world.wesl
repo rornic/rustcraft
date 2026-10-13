@@ -1,18 +1,18 @@
-#import bevy_pbr::{
-    forward_io::{Vertex, VertexOutput},
+import bevy_pbr::render::{
+    forward_io::{Vertex, VertexOutput, decompress_vertex},
     mesh_functions,
     mesh_view_bindings as view_bindings,
     mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     shadows::fetch_directional_shadow,
     view_transformations::{position_world_to_clip, position_world_to_view},
-}
-#import "shaders/block_texture.wgsl"::{block_mean, block_texel, material_fade}
-#import "shaders/foliage.wgsl"::{is_leaf, swayed}
-#import "shaders/fog.wgsl"::fogged
-#import "shaders/lighting.wgsl"::{direct_sun, open_sky}
-#import "shaders/cloud_shadow.wgsl"::cloud_shadow
-#import "shaders/lod_patch.wgsl"::patch_tint
-#import "shaders/dither.wgsl"::dither_threshold
+};
+import super::block_texture::{block_mean, block_texel, material_fade};
+import super::foliage::{is_leaf, swayed};
+import super::fog::fogged;
+import super::lighting::{direct_sun, open_sky};
+import super::cloud_shadow::cloud_shadow;
+import super::lod_patch::patch_tint;
+import super::dither::dither_threshold;
 // All that's left with no sky light at all, so caves aren't pitch black.
 const CAVE_AMBIENT: vec3<f32> = vec3<f32>(0.02, 0.02, 0.025);
 // Above 1, light falls away quickly at first under cover, then more slowly.
@@ -28,25 +28,25 @@ fn sky_ambient(sky: f32, normal: vec3<f32>) -> vec3<f32> {
     return CAVE_AMBIENT + open_sky(normal) * pow(clamp(sky, 0.0, 1.0), SKY_LIGHT_CURVE);
 }
 
-fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>) -> f32 {
+fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
     let sun = &view_bindings::lights.directional_lights[0];
     if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
         return 1.0;
     }
     let view_z = position_world_to_view(world_position.xyz).z;
-    let shadow = fetch_directional_shadow(0u, world_position, normal, view_z);
+    let shadow = fetch_directional_shadow(0u, world_position, normal, view_z, frag_coord);
     let reach = (*sun).cascades[(*sun).num_cascades - 1u].far_bound;
     return mix(shadow, 1.0, smoothstep(reach * SHADOW_FADE_START, reach, -view_z));
 }
 
 // Sunlight reaching a face, shadowed by the land and the clouds.
-fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky: f32) -> vec3<f32> {
+fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky: f32, frag_coord: vec2<f32>) -> vec3<f32> {
     let light = direct_sun(shaded) * smoothstep(0.0, SUN_SKY_GATE, sky);
     // faces it can't reach need no shadow lookups
     if all(light == vec3<f32>(0.0)) {
         return light;
     }
-    return light * sun_shadow(world_position, normal) * cloud_shadow(world_position.xyz);
+    return light * sun_shadow(world_position, normal, frag_coord) * cloud_shadow(world_position.xyz);
 }
 
 // Faces turn toward up between these distances in blocks, to this much of the way: past
@@ -64,14 +64,15 @@ fn lit_normal(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
 // Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves
 // swaying in the wind. Block meshes always carry vertex colours, see `MeshBuffers`.
 @vertex
-fn vertex(vertex: Vertex) -> VertexOutput {
+fn vertex(vertex_in: Vertex) -> VertexOutput {
+    let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
     var out: VertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
     var coarse = false;
-#ifdef VERTEX_UVS_B
+@if(VERTEX_UVS_B) {
     coarse = vertex.uv_b.y > 0.5;
-#endif
+}
     out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, coarse, view_bindings::globals.time), 1.0);
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
@@ -79,15 +80,15 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.position.z *= 1.0 - material_fade.z;
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
     out.uv = vertex.uv;
-#ifdef VERTEX_UVS_B
+@if(VERTEX_UVS_B) {
     out.uv_b = vertex.uv_b;
-#endif
-#ifdef VERTEX_OUTPUT_INSTANCE_INDEX
+}
+@if(VERTEX_OUTPUT_INSTANCE_INDEX) {
     out.instance_index = vertex.instance_index;
-#endif
-#ifdef VISIBILITY_RANGE_DITHER
+}
+@if(VISIBILITY_RANGE_DITHER) {
     out.visibility_range_dither = mesh_functions::get_visibility_range_dither_level(vertex.instance_index, world_from_local[3]);
-#endif
+}
     return out;
 }
 
@@ -104,35 +105,35 @@ fn fragment(
     let normal = normalize(in.world_normal);
 
     var color = block_texel(in.uv, in.color.a);
-#ifdef VERTEX_UVS_B
     // coarse LOD cells, where a stretched texture would read as one giant block. Leaves
-    // come out solid, and their shadows match, see `world_prepass.wgsl`.
+    // come out solid, and their shadows match, see `world_prepass.wesl`.
+@if(VERTEX_UVS_B) {
     if in.uv_b.y > 0.5 {
         let mean = block_mean(in.color.a);
         color = vec4<f32>(mean.rgb * patch_tint(world_position), mean.a);
     }
-#endif
-#ifdef SOLID_LEAVES
+}
     // `DebugSettings::solid_leaves`: leaves without their holes, as coarse LODs draw them
+@if(SOLID_LEAVES) {
     if is_leaf(in.color.a) {
         color = block_mean(in.color.a);
     }
-#endif
+}
     // ambient occlusion and grass/leaf tint
     color = vec4<f32>(color.rgb * in.color.rgb, color.a);
 
     // block meshes carry smoothed sky light, all but those with no faces at all
     var sky = 1.0;
-#ifdef VERTEX_UVS_B
+@if(VERTEX_UVS_B) {
     sky = in.uv_b.x;
-#endif
+}
 
     let shaded = lit_normal(normal, world_position);
-    let light = sunlight(in.world_position, normal, shaded, sky) + sky_ambient(sky, shaded);
+    let light = sunlight(in.world_position, normal, shaded, sky, in.position.xy) + sky_ambient(sky, shaded);
     color = vec4<f32>(color.rgb * light, color.a);
 
     // so distant chunks fade into the sky instead of popping in and out
-    color = fogged(color, world_position);
+    color = fogged(color, world_position, in.position.xy);
 
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);
@@ -140,11 +141,11 @@ fn fragment(
         discard;
     }
     // the holes in leaves: this shader replaces Bevy's, so must cut out alpha-masked texels itself
-#ifndef SOLID_LEAVES
+@if(!SOLID_LEAVES) {
     if color.a < 0.5 {
         discard;
     }
-#endif
+}
 
     var output: FragmentOutput;
     output.color = color;

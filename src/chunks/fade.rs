@@ -9,7 +9,7 @@ use bevy::{
     ecs::hierarchy::Children,
     math::Vec4,
     pbr::MeshMaterial3d,
-    render::view::Visibility,
+    camera::visibility::Visibility,
     time::Time,
 };
 
@@ -176,7 +176,7 @@ pub fn apply_fades(
 mod tests {
     use bevy::{
         ecs::{system::Commands, world::{CommandQueue, World}},
-        render::view::Visibility,
+        camera::visibility::Visibility,
     };
 
     use super::{fade_window, set_shown, Fade, FADE_STEPS};

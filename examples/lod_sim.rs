@@ -663,7 +663,7 @@ fn main() {
             let world = app.world_mut();
             let y = world
                 .query_filtered::<&GlobalTransform, With<SimCamera>>()
-                .single(world)
+                .single(world).unwrap()
                 .translation()
                 .y;
             let mut lods = world.resource_mut::<LodLoader>();
@@ -675,7 +675,7 @@ fn main() {
         }
         if probe && t > settle + 40.0 {
             let world = app.world_mut();
-            let pos = world.query_filtered::<&GlobalTransform, With<SimCamera>>().single(world).translation();
+            let pos = world.query_filtered::<&GlobalTransform, With<SimCamera>>().single(world).unwrap().translation();
             for radius in [300.0, 700.0, 1400.0, 2800.0] {
                 println!("radius {radius}:");
                 probe_holes(&mut app, pos, radius, 6000);
@@ -690,14 +690,14 @@ fn main() {
                 let world = app.world_mut();
                 let pos = world
                     .query_filtered::<&GlobalTransform, With<SimCamera>>()
-                    .single(world)
+                    .single(world).unwrap()
                     .translation();
                 surface = surface_chunks(&app, pos, 60);
             }
             let max_level = app.world().resource::<LodLoader>().layout().max_level;
             let (count, first) = holes_in(&mut app, &surface, max_level);
             let world = app.world_mut();
-            let y = world.query_filtered::<&GlobalTransform, With<SimCamera>>().single(world).translation().y;
+            let y = world.query_filtered::<&GlobalTransform, With<SimCamera>>().single(world).unwrap().translation().y;
             let levels = world.resource::<LodLoader>().layout().max_level;
             if count > 0 && !explained {
                 explained = true;
@@ -718,7 +718,7 @@ fn main() {
             let world = app.world_mut();
             let pos = world
                 .query_filtered::<&GlobalTransform, With<SimCamera>>()
-                .single(world)
+                .single(world).unwrap()
                 .translation();
             let r = report(&mut app, layout, pos);
             let phase = match moving_from {

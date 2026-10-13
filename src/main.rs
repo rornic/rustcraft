@@ -1,8 +1,8 @@
 use rustcraft::settings::Settings;
 
-use bevy::core_pipeline::bloom::Bloom;
-use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
-use bevy::core_pipeline::experimental::taa::TemporalAntiAliasing;
+use bevy::post_process::bloom::Bloom;
+use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
 use bevy::prelude::*;
 use rustcraft::chunks::{
@@ -61,7 +61,8 @@ fn setup_scene(
                 ..default()
             }),
             // Depth of field, bloom and sunlight brighter than white all need HDR.
-            Camera { hdr: true, ..default() },
+            Camera::default(),
+            bevy::camera::Hdr,
             TONEMAPPING,
             // Just a soft glow around the brightest sunlit faces and sky.
             Bloom {
@@ -77,7 +78,7 @@ fn setup_scene(
                 color: scene_colour(HORIZON_COLOR).with_alpha(FOG_MAX_OPACITY).into(),
                 falloff: FogFalloff::Linear {
                     // half fogged where the farthest LOD level starts, hiding the swap to it,
-                    // see `fog.wgsl`
+                    // see `fog.wesl`
                     start: layout.last_level_start() * 16.0,
                     end: fog_distance,
                 },
@@ -147,13 +148,8 @@ fn main() {
                     }),
                     ..default()
                 }),
-            bevy::core_pipeline::experimental::taa::TemporalAntiAliasPlugin,
             MaterialPlugin::<ChunkMaterial>::default(),
-            // light passes through water, so it casts no shadow
-            MaterialPlugin::<WaterMaterial> {
-                shadows_enabled: false,
-                ..default()
-            },
+            MaterialPlugin::<WaterMaterial>::default(),
             TerrainPlugin,
             CloudPlugin,
             DebugOverlayPlugin,

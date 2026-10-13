@@ -1,10 +1,10 @@
 use std::{cell::LazyCell, collections::HashMap, ops::Deref, sync::Arc};
 
 use bevy::{
+    asset::RenderAssetUsages,
     math::{I64Vec2, I64Vec3, IVec3, U16Vec3, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
-        render_asset::RenderAssetUsages,
     },
 };
 
@@ -845,9 +845,9 @@ struct MeshBuffers {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     colors: Vec<[f32; 4]>,
-    // sky light per vertex, for block faces only, see `world.wgsl`
+    // sky light per vertex, for block faces only, see `world.wesl`
     lights: Vec<f32>,
-    // whether faces draw their block's mean colour instead of its texture, see `world.wgsl`
+    // whether faces draw their block's mean colour instead of its texture, see `world.wesl`
     untextured: bool,
     // where tree boxes start and whether they're untextured, which they are on their own terms
     boxes: Option<(usize, bool)>,
@@ -876,7 +876,7 @@ impl MeshBuffers {
         ]);
     }
 
-    // `uvs` count tiles across the quad, and the colour alpha carries the atlas cell, see `world.wgsl`.
+    // `uvs` count tiles across the quad, and the colour alpha carries the atlas cell, see `world.wesl`.
     fn push_tiled_quad(
         &mut self,
         positions: [[f32; 3]; 4],
@@ -2228,7 +2228,7 @@ mod tests {
         assert!(dark.is_empty(), "shaded under open sky: {dark:?}");
     }
 
-    // whether each vertex draws its block's mean colour instead of its texture, see `world.wgsl`
+    // whether each vertex draws its block's mean colour instead of its texture, see `world.wesl`
     fn untextured_flags(mesh: &Mesh) -> Vec<f32> {
         let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
             panic!("missing light");

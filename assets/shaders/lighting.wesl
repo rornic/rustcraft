@@ -1,6 +1,6 @@
 // The sun and sky's light, shared by everything lit outdoors.
 
-#import bevy_pbr::mesh_view_bindings as view_bindings
+import bevy_pbr::render::mesh_view_bindings as view_bindings;
 
 // Light falling on a face from the open sky, cool against the warm sun: faces up get
 // the sky's blue, faces down only what the ground bounces back.

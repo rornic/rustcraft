@@ -2,14 +2,13 @@ use std::sync::LazyLock;
 
 use bevy::{
     core_pipeline::{
-        dof::{DepthOfField, DepthOfFieldMode},
-        Skybox,
+                Skybox,
     },
     ecs::{
         bundle::Bundle,
         component::Component,
         entity::Entity,
-        event::EventReader,
+        message::MessageReader,
         query::{With, Without},
         system::{Commands, Local, Query, Res, ResMut},
     },
@@ -18,7 +17,9 @@ use bevy::{
     math::{Dir3, I64Vec3, Vec3},
     pbr::{DistanceFog, FogFalloff},
     prelude::{default, ClearColor, Color, Transform},
-    render::{camera::Camera, view::ColorGrading},
+    camera::Camera,
+    post_process::dof::{DepthOfField, DepthOfFieldMode},
+    render::view::ColorGrading,
     time::Time,
 };
 
@@ -57,7 +58,7 @@ pub fn player_move(
 ) {
     let (parent, camera_transform) = camera_query.single().expect("camera does not exist");
     let (player_movement, player_transform) = &mut player_query
-        .get_mut(parent.get())
+        .get_mut(parent.parent())
         .expect("player does not exist");
 
     let move_speed = if keys.pressed(KeyCode::ShiftLeft) {
@@ -107,13 +108,13 @@ pub fn player_look(
     time: Res<Time>,
     mut player_query: Query<(&PlayerLook, &mut Transform)>,
     mut camera_query: Query<(&ChildOf, &mut Transform), (With<Camera>, Without<PlayerLook>)>,
-    mut motion_evr: EventReader<MouseMotion>,
+    mut motion_evr: MessageReader<MouseMotion>,
 ) {
     let (parent, camera_transform) = &mut camera_query
         .single_mut()
         .expect("camera does not exist");
     let (player_look, player_transform) = &mut player_query
-        .get_mut(parent.get())
+        .get_mut(parent.parent())
         .expect("player does not exist");
 
     for ev in motion_evr.read() {
@@ -153,7 +154,7 @@ pub fn update_underwater_effects(
 ) {
     let (camera, parent, camera_transform, mut fog, mut dof, mut color_grading, skybox) =
         camera_query.single_mut().expect("camera does not exist");
-    let player_transform = player_query.get(parent.get()).expect("player does not exist");
+    let player_transform = player_query.get(parent.parent()).expect("player does not exist");
 
     let world_pos = player_transform.translation + camera_transform.translation;
     let block_coord = I64Vec3::new(
