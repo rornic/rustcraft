@@ -257,6 +257,7 @@ impl LodBlocks {
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     let mut block = under_grass(column_block(noise.biomes(), biome, world_y, height, gradient, temperature), world_y, height, cell);
+                    block = freeze_cell(block, temperature, world_y + cell / 2, cell);
                     if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
                         block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient, temperature);
                     }
@@ -340,6 +341,7 @@ impl LodBlocks {
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
                     let mut block = under_grass(column_block(biomes, biome, world_y, column_height, combined_gradient, temperature), world_y, column_height, cell);
+                    block = freeze_cell(block, temperature, world_y + cell / 2, cell);
                     if block == BlockType::Air && base.y + cy as i64 * cell < top {
                         block = column_block(biomes, biome, top - 1, column_height, combined_gradient, temperature);
                     }
@@ -572,10 +574,32 @@ const SNOW_LINE_PER_DEGREE: f64 = 800.0;
 // At or above this temperature it's too hot for snow, and the heights are bare rock.
 const SNOW_MAX_TEMPERATURE: f32 = 0.62;
 // Below this temperature even the grass is under a layer of snow.
-const SNOWY_GRASS_TEMPERATURE: f32 = 0.15;
+const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
 
-// The lowest the snow line gets, so even the coldest lowlands are grass under their snow.
-const COLDEST_SNOW_LINE: i64 = 60;
+// The lowest the snow line gets, so even the coldest lowlands are snow-covered.
+const COLDEST_SNOW_LINE: i64 = 10;
+
+// Below this temperature the top of the sea freezes, thicker the colder it is.
+pub const FREEZE_TEMPERATURE: f32 = 0.12;
+const ICE_MAX_DEPTH: i64 = 3;
+const ICE_TEMPERATURE_PER_LAYER: f32 = 0.04;
+
+// How many blocks of the sea's surface are ice at this temperature.
+fn ice_depth(temperature: f32) -> i64 {
+    if temperature >= FREEZE_TEMPERATURE {
+        return 0;
+    }
+    (1 + ((FREEZE_TEMPERATURE - temperature) / ICE_TEMPERATURE_PER_LAYER) as i64).min(ICE_MAX_DEPTH)
+}
+
+// A wider LOD cell's water, as ice when it overlaps the frozen top of the sea; its middle is sampled, which is usually below it.
+fn freeze_cell(block: BlockType, temperature: f32, cell_top: i64, cell: i64) -> BlockType {
+    if cell > 1 && block == BlockType::Water && cell_top > WATER_LEVEL - ice_depth(temperature) {
+        BlockType::Ice
+    } else {
+        block
+    }
+}
 
 // Height above the sea where snow starts to settle, lower in the cold.
 fn snow_line(temperature: f32) -> i64 {
@@ -616,18 +640,25 @@ fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64, tempe
             BlockType::Sand
         }
     } else if world_y < WATER_LEVEL {
-        BlockType::Water
+        if world_y >= WATER_LEVEL - ice_depth(temperature) {
+            BlockType::Ice
+        } else {
+            BlockType::Water
+        }
     } else {
         BlockType::Air
     }
 }
 
-// Grass is only the top layer of the ground, over dirt. Wider LOD cells are sampled mid-cell, which would turn their tops dirt.
+// Grass is only the top layer of the ground, over dirt, and glacier ice over snow. Wider LOD cells are sampled mid-cell, which would turn their tops dirt.
 fn under_grass(block: BlockType, world_y: i64, column_height: i64, cell: i64) -> BlockType {
-    if block == BlockType::Grass && cell == 1 && world_y < column_height - 1 {
-        BlockType::Dirt
-    } else {
-        block
+    if cell != 1 || world_y >= column_height - 1 {
+        return block;
+    }
+    match block {
+        BlockType::Grass => BlockType::Dirt,
+        BlockType::Ice => BlockType::Snow,
+        other => other,
     }
 }
 
@@ -1654,9 +1685,9 @@ mod tests {
 
     use super::{
         under_grass,
-        generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
+        freeze_cell, generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
         vertex_water_depth, water_depth, BlockSource, ChunkMeshes, ChunkNeighbourhood, GrassTint, LodBlocks, AO_STRENGTH,
-        WATER_LEVEL,
+        FREEZE_TEMPERATURE, WATER_LEVEL,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
@@ -1838,6 +1869,38 @@ mod tests {
     }
 
     #[test]
+    fn test_cold_sea_freezes_from_the_top_and_thicker_when_colder() {
+        let ice_layers = |temperature| {
+            (WATER_LEVEL - 10..WATER_LEVEL).filter(|&y| terrain_block(y, 0, 0.0, temperature) == BlockType::Ice).count()
+        };
+        assert_eq!(0, ice_layers(0.5));
+        assert_eq!(0, ice_layers(FREEZE_TEMPERATURE));
+        assert_eq!(1, ice_layers(FREEZE_TEMPERATURE - 0.01));
+        assert_eq!(3, ice_layers(0.0));
+        assert_eq!(BlockType::Ice, terrain_block(WATER_LEVEL - 1, 0, 0.0, 0.0));
+        assert_eq!(BlockType::Water, terrain_block(WATER_LEVEL - 4, 0, 0.0, 0.0));
+        assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_wide_cells_freeze_when_they_reach_the_ice() {
+        let top = WATER_LEVEL;
+        assert_eq!(BlockType::Ice, freeze_cell(BlockType::Water, 0.0, top, 32));
+        assert_eq!(BlockType::Water, freeze_cell(BlockType::Water, 0.0, top - 32, 32));
+        assert_eq!(BlockType::Water, freeze_cell(BlockType::Water, 0.5, top, 32));
+        assert_eq!(BlockType::Stone, freeze_cell(BlockType::Stone, 0.0, top, 32));
+    }
+
+    #[test]
+    fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
+        let ground = WATER_LEVEL + 20;
+        assert_eq!(BlockType::Snow, terrain_block(ground - 1, ground, 0.0, 0.1));
+        assert_eq!(BlockType::Grass, terrain_block(ground - 1, ground, 0.0, 0.5));
+        assert_eq!(BlockType::Snow, under_grass(BlockType::Ice, ground - 5, ground, 1));
+        assert_eq!(BlockType::Ice, under_grass(BlockType::Ice, ground - 1, ground, 1));
+    }
+
+    #[test]
     fn test_terrain_block_floor_and_water() {
         // below the solid floor even a zero-height column is solid
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0, 0.5));
@@ -1876,8 +1939,8 @@ mod tests {
 
     #[test]
     fn test_only_the_top_of_frozen_grass_is_snow() {
-        let at = |y: i64, temperature: f32| terrain_block(y, WATER_LEVEL + 20, 0.0, temperature);
-        let top = WATER_LEVEL + 19;
+        let at = |y: i64, temperature: f32| terrain_block(y, WATER_LEVEL + 7, 0.0, temperature);
+        let top = WATER_LEVEL + 6;
         assert_eq!(BlockType::Snow, at(top, 0.05));
         assert_eq!(BlockType::Grass, at(top, 0.3));
         assert_eq!(BlockType::Grass, at(top - 1, 0.05));
