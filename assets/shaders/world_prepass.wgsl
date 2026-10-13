@@ -17,7 +17,11 @@ fn vertex(vertex: prepass_io::Vertex) -> prepass_io::VertexOutput {
     var out: prepass_io::VertexOutput;
     let world_from_local = mesh_functions::get_world_from_local(vertex.instance_index);
     out.world_position = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(vertex.position, 1.0));
-    out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, globals.time), 1.0);
+    var coarse = false;
+#ifdef VERTEX_UVS_B
+    coarse = vertex.uv_b.y > 0.5;
+#endif
+    out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, coarse, globals.time), 1.0);
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
 #ifdef DEPTH_CLAMP_ORTHO

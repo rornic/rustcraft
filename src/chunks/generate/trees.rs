@@ -1,9 +1,37 @@
 use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3};
 
+use super::biome::BiomeId;
 use super::generator::column_block;
 use super::noise::NoiseGenerator;
 use super::region_store::HeightSampler;
 use crate::block::BlockType;
+
+/// What trees need to know about the ground to take root, from the full-detail heightmap or
+/// from the coarser grid a distant LOD node samples.
+pub trait TreeGround {
+    fn trees(&mut self, x: i64, z: i64) -> f64;
+    fn height(&mut self, x: i64, z: i64) -> f64;
+    fn gradient(&mut self, x: i64, z: i64) -> (f64, f64);
+    fn biome(&mut self, x: i64, z: i64) -> BiomeId;
+}
+
+impl TreeGround for HeightSampler<'_> {
+    fn trees(&mut self, x: i64, z: i64) -> f64 {
+        HeightSampler::trees(self, x, z)
+    }
+
+    fn height(&mut self, x: i64, z: i64) -> f64 {
+        HeightSampler::height(self, x, z)
+    }
+
+    fn gradient(&mut self, x: i64, z: i64) -> (f64, f64) {
+        HeightSampler::gradient(self, x, z)
+    }
+
+    fn biome(&mut self, x: i64, z: i64) -> BiomeId {
+        HeightSampler::biome(self, x, z)
+    }
+}
 
 // Trees stand on a grid of cells this many blocks across, at most one somewhere in each cell.
 const CELL: i64 = 10;
@@ -19,6 +47,13 @@ const MAX_GRADIENT: f64 = 1.5;
 const LOBES: usize = 3;
 // Trunks this tall are two blocks thick.
 const THICK_TRUNK: i64 = 12;
+// Cells this wide or wider judge leaves by coverage: a quarter of a 3 x 3 x 3 spread of points
+// inside, or small crowns would fall between cell centres.
+const COVERAGE_CELL: i64 = 4;
+const COVERAGE_POINTS: usize = 7;
+/// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
+/// is. Meshing draws it as a thin box instead, see `generator::Trunk`.
+pub const THIN_TRUNK_CELL: i64 = 4;
 // How far in leaves are nibbled from the edge of a crown.
 const NIBBLE: f64 = 0.9;
 
@@ -91,7 +126,7 @@ impl Tree {
         Self { kind, base, trunk, spread, seed, crown, lobes }
     }
 
-    fn width(&self) -> i64 {
+    pub fn width(&self) -> i64 {
         if self.trunk >= THICK_TRUNK { 2 } else { 1 }
     }
 
@@ -111,7 +146,9 @@ impl Tree {
     // The tree's block in the cell `size` blocks across with `min` its lowest block, if any:
     // leaves if its centre is among them, a log if the trunk or a branch runs through it. Cells
     // one block across are just blocks, where wood runs up through the leaves; in coarser cells
-    // the leaves win, or a whole cell's width of trunk would stand in for the crown.
+    // the leaves win, or a whole cell's width of trunk would stand in for the crown. Cells this
+    // wide or wider hold leaves if a quarter of them would be, or small crowns would fall between
+    // cell centres, and from `THIN_TRUNK_CELL` they leave out the trunk.
     pub fn block_in_cell(&self, min: I64Vec3, size: i64) -> Option<BlockType> {
         let overlaps = |lo: i64, from: i64, to: i64| lo < to && lo + size > from;
         let width = self.width();
@@ -119,14 +156,55 @@ impl Tree {
             && overlaps(min.z, self.base.z, self.base.z + width)
             && overlaps(min.y, self.base.y, self.base.y + self.trunk);
         let offset = min.as_dvec3() + (size - 1) as f64 / 2.0 - self.base.as_dvec3();
-        let leaves = self.in_leaves(offset);
+        let leaves = if size >= COVERAGE_CELL {
+            self.leaf_coverage(offset, size)
+        } else {
+            self.in_leaves(offset)
+        };
         match (trunk, leaves) {
             (true, true) if size > 1 => Some(BlockType::Leaves),
+            (true, _) if size >= THIN_TRUNK_CELL => None,
             (true, _) => Some(BlockType::Log),
             (false, _) if size == 1 && self.in_branch(offset) => Some(BlockType::Log),
             (false, true) => Some(BlockType::Leaves),
             (false, false) => None,
         }
+    }
+
+    // Whether enough of the cell centred `offset` from the trunk's base is among the leaves, judged
+    // from a 3 x 3 x 3 spread of points through it.
+    fn leaf_coverage(&self, offset: DVec3, size: i64) -> bool {
+        let step = size as f64 / 3.0;
+        let mut inside = 0;
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    let point = DVec3::new(x as f64, y as f64, z as f64) * step;
+                    if self.in_leaves(offset + point) {
+                        inside += 1;
+                    }
+                }
+            }
+        }
+        inside >= COVERAGE_POINTS
+    }
+
+    /// The crown as one box, in blocks, for cells too wide to hold it: where its leaves reach,
+    /// roughly, not cell by cell. Broadleaf crowns are the big round blob, and pines a box as wide
+    /// as their tiers are on average.
+    pub fn crown_box(&self) -> (DVec3, DVec3) {
+        let axis = self.base.as_dvec3() + self.axis();
+        let (centre, half) = match self.kind {
+            TreeKind::Broadleaf => {
+                (axis + self.crown.centre - self.axis(), DVec3::new(self.crown.radius * 1.15, self.crown.radius * self.crown.squash * 1.1, self.crown.radius * 1.15))
+            }
+            TreeKind::Pine => {
+                let (bottom, top) = ((self.trunk / 4) as f64, (self.trunk + 1) as f64);
+                let wide = (0.6 + self.spread) * 0.65;
+                (axis + DVec3::Y * (bottom + top) / 2.0, DVec3::new(wide, (top - bottom) / 2.0, wide))
+            }
+        };
+        (centre - half, centre + half)
     }
 
     // Whether the point `offset` from the trunk's base is among the leaves.
@@ -201,7 +279,7 @@ pub fn grows_into(existing: BlockType, block: BlockType) -> bool {
 }
 
 // Every tree that could reach into the columns `min..=max` (x, z).
-pub fn trees_near(noise: &NoiseGenerator, heights: &mut HeightSampler, min: I64Vec2, max: I64Vec2) -> Vec<Tree> {
+pub fn trees_near(noise: &NoiseGenerator, heights: &mut impl TreeGround, min: I64Vec2, max: I64Vec2) -> Vec<Tree> {
     let first = (min - TREE_REACH).div_euclid(I64Vec2::splat(CELL));
     let last = (max + TREE_REACH).div_euclid(I64Vec2::splat(CELL));
     let mut trees = Vec::new();
@@ -215,7 +293,7 @@ pub fn trees_near(noise: &NoiseGenerator, heights: &mut HeightSampler, min: I64V
     trees
 }
 
-fn tree_in_cell(noise: &NoiseGenerator, heights: &mut HeightSampler, cx: i64, cz: i64) -> Option<Tree> {
+fn tree_in_cell(noise: &NoiseGenerator, heights: &mut impl TreeGround, cx: i64, cz: i64) -> Option<Tree> {
     let seed = hash(noise.seed() as u64, cx, cz);
     let x = cx * CELL + ((seed >> 16) % CELL as u64) as i64;
     let z = cz * CELL + ((seed >> 24) % CELL as u64) as i64;
@@ -324,12 +402,16 @@ mod tests {
     #[test]
     fn test_coarse_cells_keep_the_trunk_and_crown() {
         let t = tree(TreeKind::Broadleaf, 12, 6.0);
-        // 4-block cells aligned so the trunk's column isn't at a cell's centre
+        // 2-block cells aligned so the trunk's column isn't at a cell's centre
         let origin = I64Vec3::new(96, 496, -44);
         let mut seen = Vec::new();
-        t.plant(origin, 4, (IVec3::splat(-4), IVec3::splat(10)), |_, block| seen.push(block));
+        t.plant(origin, 2, (IVec3::splat(-8), IVec3::splat(20)), |_, block| seen.push(block));
         assert!(seen.contains(&BlockType::Log));
         assert!(seen.contains(&BlockType::Leaves));
+        // from `THIN_TRUNK_CELL` the trunk is drawn as a box of its own, so the cells are crown alone
+        let mut wide = Vec::new();
+        t.plant(origin, THIN_TRUNK_CELL, (IVec3::splat(-4), IVec3::splat(10)), |_, block| wide.push(block));
+        assert!(wide.contains(&BlockType::Leaves) && !wide.contains(&BlockType::Log));
     }
 
     #[test]
@@ -359,5 +441,51 @@ mod tests {
             assert!(trees.iter().any(|o| o.base == t.base && o.trunk == t.trunk && o.kind == t.kind));
         }
     }
+    // Every cell `size` blocks across the tree fills, from its bounds.
+    fn cells(tree: &Tree, size: i64) -> Vec<(I64Vec3, BlockType)> {
+        let (low, high) = tree.bounds();
+        let origin = I64Vec3::new(low.x.div_euclid(size), low.y.div_euclid(size), low.z.div_euclid(size)) * size;
+        let mut cells = Vec::new();
+        tree.plant(origin, size, (IVec3::ZERO, ((high - origin) / size).as_ivec3()), |cell, block| {
+            cells.push((origin + cell.as_i64vec3() * size, block));
+        });
+        cells
+    }
+
+    #[test]
+    fn test_every_tree_leaves_a_crown_in_cells_four_and_eight_wide() {
+        for t in extremes() {
+            // the thinnest pines are a spire a cell or two across at eight
+            for (size, least) in [(4, 2), (8, 1)] {
+                let leaves = cells(&t, size).into_iter().filter(|(_, b)| *b == BlockType::Leaves).count();
+                assert!(leaves >= least, "{:?} {} trunk at {size}: {leaves} leaf cells", t.kind, t.trunk);
+            }
+        }
+    }
+
+    #[test]
+    fn test_trunks_stand_in_cells_up_to_two_wide_and_not_beyond() {
+        let t = tree(TreeKind::Pine, 24, 6.0);
+        let logs = |size| cells(&t, size).into_iter().filter(|(_, b)| *b == BlockType::Log).count();
+        assert!(logs(1) > 0 && logs(2) > 0);
+        assert_eq!(0, logs(THIN_TRUNK_CELL));
+        assert_eq!(0, logs(8));
+    }
+
+    #[test]
+    fn test_coverage_widens_a_crown_by_less_than_a_cell() {
+        let t = tree(TreeKind::Broadleaf, 15, 7.0);
+        for size in [4, 8] {
+            let reach = cells(&t, size)
+                .into_iter()
+                .filter(|(_, b)| *b == BlockType::Leaves)
+                .map(|(p, _)| (p.x + size / 2 - t.base.x).abs().max((p.z + size / 2 - t.base.z).abs()))
+                .max()
+                .unwrap();
+            // a crown's lobes hang out to about 1.35 times its spread, and a cell edge can add up to a cell
+            assert!(reach as f64 <= t.spread * 1.35 + size as f64, "reach {reach} at {size}");
+        }
+    }
+
 }
 
