@@ -63,6 +63,13 @@ fn setup(
         color: LinearRgba::WHITE,
         texture: None,
         fade: FULLY_VISIBLE,
+        solid: false,
+    });
+    let solid_water = water_materials.add(WaterMaterial {
+        color: LinearRgba::WHITE,
+        texture: None,
+        fade: FULLY_VISIBLE,
+        solid: true,
     });
     insert_terrain_resources(
         &mut commands,
@@ -71,6 +78,7 @@ fn setup(
         height,
         chunk,
         water,
+        solid_water,
         &mut chunk_materials,
         &mut water_materials,
     );
@@ -79,6 +87,7 @@ fn setup(
 struct Report {
     holes: [usize; 4],
     stale: usize,
+    lingering: usize,
     lods: usize,
 }
 
@@ -142,9 +151,27 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
             }
         }
     }
+    let loader = world.resource::<LodLoader>();
+    let lingering_keys: Vec<LodKey> = lod_vis.iter().filter(|&(key, &shown)| shown && !loader.is_selected(*key)).map(|(k, _)| *k).collect();
+    let lingering = lingering_keys.len();
+    if lingering > 0 && lingering < 6 {
+        println!("lingering: {:?}", lingering_keys.iter().map(|k| (k.level, k.coord, loader.is_stand_in(*k))).collect::<Vec<_>>());
+        for &k in &lingering_keys {
+            println!("  {:?} kind {} retiring {} anchor {:?}", (k.level, k.coord), loader.node_kind(k), loader.is_retiring(k), loader.anchor_chunk());
+            let mut up = k;
+            while up.level < loader.layout().max_level {
+                up = up.parent();
+                println!("    ancestor L{} {:?} selected {} kind {}", up.level, up.coord, loader.is_selected(up), loader.node_kind(up));
+            }
+            for c in k.children() {
+                println!("    child L{} {:?} selected {} stand-in {} kind {}", c.level, c.coord, loader.is_selected(c), loader.is_stand_in(c), loader.node_kind(c));
+            }
+        }
+    }
     Report {
         holes,
         stale,
+        lingering,
         lods: lod_vis.len(),
     }
 }
@@ -727,8 +754,8 @@ fn main() {
                 _ => "stopped",
             };
             println!(
-                "t={t:5.1} {phase:8} x={:7.0} holes [full detail, 1.5x, 4x, beyond]: {:?}  stale full-detail: {}  lod nodes: {}",
-                pos.x, r.holes, r.stale, r.lods
+                "t={t:5.1} {phase:8} x={:7.0} holes [full detail, 1.5x, 4x, beyond]: {:?}  stale full-detail: {}  shown but unselected lod nodes: {}  lod nodes: {}",
+                pos.x, r.holes, r.stale, r.lingering, r.lods
             );
         }
     }

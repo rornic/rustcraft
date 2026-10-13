@@ -497,6 +497,10 @@ impl LodLoader {
     }
 
     /// Whether `key` is among the nodes chosen to be drawn.
+    pub fn is_retiring(&self, key: LodKey) -> bool {
+        self.retiring.contains(&key)
+    }
+
     pub fn is_selected(&self, key: LodKey) -> bool {
         self.selected.contains(&key)
     }
