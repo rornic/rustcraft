@@ -89,7 +89,7 @@ fn spawn_overlay(mut commands: Commands) {
             padding: UiRect::all(Val::Px(6.0)),
             ..default()
         },
-        Visibility::Hidden,
+        if std::env::var("RC_STATS").is_ok() { Visibility::Visible } else { Visibility::Hidden },
     ));
 }
 
@@ -171,5 +171,8 @@ fn update_overlay(
         let _ = write!(out, " L{level}={count}");
     }
 
+    if std::env::var("RC_STATS").is_ok() {
+        println!("STATS {}", out.replace('\n', " | "));
+    }
     text.0 = out;
 }
