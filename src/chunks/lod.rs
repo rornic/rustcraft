@@ -483,6 +483,25 @@ impl LodLoader {
         self.anchor
     }
 
+    /// How the node at `key` is held, for diagnostics.
+    pub fn node_kind(&self, key: LodKey) -> &'static str {
+        match self.nodes.get(&key) {
+            None => "none",
+            Some(None) => "empty slot",
+            Some(Some(_)) => "entity",
+        }
+    }
+
+    /// Whether `key` is among the nodes chosen to be drawn.
+    pub fn is_selected(&self, key: LodKey) -> bool {
+        self.selected.contains(&key)
+    }
+
+    /// Whether `key` is a stand-in for the full-detail chunks under it.
+    pub fn is_stand_in(&self, key: LodKey) -> bool {
+        self.stand_ins.contains(&key)
+    }
+
     /// Whether the node at `key` exists with nothing to draw.
     pub fn node_is_empty(&self, key: LodKey) -> bool {
         self.nodes.get(&key).is_some_and(Option::is_none)

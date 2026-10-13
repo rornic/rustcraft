@@ -377,6 +377,13 @@ impl LodBlocks {
         blocks
     }
 
+    // Whether the ground's top lands inside the cell at `coord`, which is solid.
+    fn ground_tops_out_in(&self, coord: IVec3) -> bool {
+        let top = self.tops[Self::column(self.size, coord.x, coord.z)];
+        let bottom = self.base_y + coord.y as i64 * self.cell;
+        bottom < top && top < bottom + self.cell && is_solid(self.raw(coord))
+    }
+
     fn surface_top(&self, coord: IVec3) -> Option<f32> {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         self.surface_tops[Self::index(self.size, coord)]
@@ -489,6 +496,10 @@ impl BlockSource for LodBlocks {
             if is_solid(self.raw(inner)) && bottom + self.cell > ground - SKIRT_CELLS as i64 * self.cell {
                 return BlockType::Air;
             }
+        }
+        // full detail can have the ground a block below a surface cell in the node above, so lid it
+        if coord.y == self.size && !outside(coord.x) && !outside(coord.z) && self.ground_tops_out_in(coord) {
+            return BlockType::Air;
         }
         block
     }
@@ -2669,6 +2680,33 @@ mod tests {
             }
             assert_eq!(0, leaks, "{leaks} of {rays} rays slipped through seams between levels {fine_level} and {}", fine_level + 1);
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn scratch_one_leak() {
+        // a leak the real layout showed, from (-224.7, 504.4, -276.3) along (0.329, -0.940, 0.094), with only level 1 nodes near it
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let _ = regions;
+    }
+
+    #[test]
+    fn test_ground_a_block_lower_than_a_surface_cell_above_is_still_lidded() {
+        // here full detail has the ground a block under the level 1 cell the node above draws it in
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(2775841323))));
+        let key = LodKey { level: 1, coord: I64Vec3::new(6, 13, 4) };
+        let meshes = super::generate_lod_mesh(regions, key).unwrap();
+        let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * 2.0 - 0.5);
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)) = meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!() };
+        let Some(Indices::U32(idx)) = meshes.opaque.indices() else { panic!() };
+        let (px, pz) = (198.7f32, 127.7f32);
+        let lidded = idx.chunks(3).any(|t| {
+            let q = [0, 1, 2].map(|j| origin + Vec3::from(pos[t[j] as usize]) * 2.0);
+            let e = |a: Vec3, b: Vec3| (px - b.x) * (a.z - b.z) - (a.x - b.x) * (pz - b.z);
+            let d = [e(q[0], q[1]), e(q[1], q[2]), e(q[2], q[0])];
+            q.iter().all(|v| v.y == 447.5) && !(d.iter().any(|&x| x < 0.0) && d.iter().any(|&x| x > 0.0))
+        });
+        assert!(lidded);
     }
 
     #[test]
