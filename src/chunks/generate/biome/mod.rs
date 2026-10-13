@@ -1,6 +1,7 @@
 mod desert;
 mod foothills;
 mod forest;
+mod glacier;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::Vec3;
@@ -9,6 +10,7 @@ use crate::block::BlockType;
 pub use desert::Desert;
 pub use foothills::Foothills;
 pub use forest::Forest;
+pub use glacier::Glacier;
 
 // How hot and how wet a column is, each 0..1. See `NoiseGenerator::climate`.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -86,6 +88,7 @@ impl Biomes {
     pub fn new(seed: u32) -> Self {
         // earlier biomes win ties for a column
         Self::with(vec![
+            Box::new(Glacier),
             Box::new(Desert::new(seed)),
             Box::new(Forest),
             Box::new(Foothills::new(seed)),

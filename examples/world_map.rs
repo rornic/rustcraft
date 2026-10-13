@@ -13,6 +13,7 @@ use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::WATER_LEVEL;
+use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
 use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
 
@@ -111,6 +112,8 @@ fn height_colour(above_sea: f64) -> [f64; 3] {
 }
 
 const SAND: [f64; 3] = [222.0, 196.0, 132.0];
+const SEA_ICE: [f64; 3] = [190.0, 222.0, 240.0];
+const GLACIER: [f64; 3] = [226.0, 238.0, 248.0];
 
 // Grass in this climate under trees this dense, as an sRGB map colour.
 fn grass_map_colour(climate: Climate, trees: f64) -> [f64; 3] {
@@ -136,10 +139,18 @@ fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) ->
                 let (sample, climate) = at(x, z);
                 let ground = match biomes.name(sample.biome) {
                     Some("desert") => SAND,
+                    Some("glacier") => GLACIER,
                     _ => grass_map_colour(climate, sample.trees),
                 };
                 let rock = ((above_sea - 40.0) / 100.0).clamp(0.0, 1.0);
                 colour = lerp_rgb(ground, colour, rock);
+            }
+
+            if args.biomes && above_sea <= 0.0 && above_sea > -60.0 {
+                let ice = (1.0 - at(x, z).1.temperature as f64 / FREEZE_TEMPERATURE as f64).clamp(0.0, 1.0);
+                if ice > 0.0 {
+                    colour = lerp_rgb(colour, SEA_ICE, (ice * 4.0).min(1.0));
+                }
             }
 
             // Light from the north west, exaggerated so gentle slopes still read at map scale.
@@ -163,7 +174,7 @@ fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
     let samples: Vec<TerrainSample> = samples.iter().map(|s| s.0).collect();
     let land = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64).count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
-    for name in ["desert", "forest", "foothills"] {
+    for name in ["desert", "forest", "foothills", "glacier"] {
         let count = samples
             .iter()
             .filter(|s| s.height >= WATER_LEVEL as f64 && biomes.name(s.biome) == Some(name))

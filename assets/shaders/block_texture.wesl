@@ -6,8 +6,8 @@
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 
-// textures in blocks.png, one per block type but air
-const ATLAS_CELLS: f32 = 7.0;
+// textures in blocks.png, see `Tile` in block.rs
+const ATLAS_CELLS: f32 = 15.0;
 const TILE_INSET: f32 = 0.002;
 
 // Just the alpha of `block_texel`, at full detail: without screen-space derivatives, so
@@ -37,17 +37,25 @@ fn block_texel(uv: vec2<f32>, vertex_alpha: f32) -> vec4<f32> {
     return material_color * texel;
 }
 
-// What a block's texture averages to: the mean linear colour of each atlas cell's opaque
-// texels, in atlas order. Checked against blocks.png by `material.rs`'s tests.
+// What a tile averages to: the mean linear colour of each atlas cell's opaque texels, in atlas
+// order. `gen_atlas` prints these, and `material.rs`'s tests check them against blocks.png.
 fn block_mean(vertex_alpha: f32) -> vec4<f32> {
-    var means = array<vec3<f32>, 7>(
-        vec3<f32>(0.1181, 0.1182, 0.1182), // stone
-        vec3<f32>(0.5001, 0.5001, 0.5001), // grass
-        vec3<f32>(0.4778, 0.3629, 0.1825), // sand
-        vec3<f32>(0.0659, 0.1014, 0.9148), // water
-        vec3<f32>(0.9453, 0.9921, 0.9921), // snow
-        vec3<f32>(0.0804, 0.0448, 0.0193), // log
-        vec3<f32>(0.2499, 0.2499, 0.2499), // leaves
+    var means = array<vec3<f32>, 15>(
+        vec3<f32>(0.1250, 0.1303, 0.1441), // stone
+        vec3<f32>(0.5016, 0.5016, 0.5016), // grass top
+        vec3<f32>(0.4721, 0.3520, 0.1795), // sand
+        vec3<f32>(0.0643, 0.0980, 0.8945), // water
+        vec3<f32>(0.9499, 0.9789, 0.9951), // snow
+        vec3<f32>(0.0586, 0.0327, 0.0156), // log bark
+        vec3<f32>(0.2500, 0.2500, 0.2500), // leaves
+        vec3<f32>(0.1431, 0.1228, 0.0351), // grass side
+        vec3<f32>(0.1616, 0.0849, 0.0413), // dirt
+        vec3<f32>(0.3259, 0.1941, 0.0795), // log end
+        vec3<f32>(0.1665, 0.1502, 0.1318), // gravel
+        vec3<f32>(0.3799, 0.6297, 0.8646), // ice
+        vec3<f32>(0.5894, 0.4148, 0.1934), // sandstone side
+        vec3<f32>(0.6515, 0.4739, 0.2276), // sandstone top
+        vec3<f32>(0.8942, 0.9485, 0.9850), // snow side
     );
     let atlas_cell = u32(floor(vertex_alpha + 0.5));
     return material_color * vec4<f32>(means[atlas_cell], 1.0);

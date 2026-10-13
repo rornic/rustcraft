@@ -52,9 +52,17 @@ const MOUNTAIN_DETAIL: f64 = 30.0;
 const TEXTURE_WAVELENGTH: f64 = 32.0;
 const MOUNTAIN_TEXTURE: f64 = 16.0;
 
-// Where the ocean ring around the world starts and ends, as a fraction of the half size.
+// Where the ocean ring around the world starts and ends, as a fraction of the half size, east and west.
 const EDGE_FALLOFF_START: f64 = 0.8;
 const EDGE_FALLOFF_END: f64 = 0.97;
+// The same to the north and south, where land runs on to the poles.
+const POLE_FALLOFF_START: f64 = 0.86;
+const POLE_FALLOFF_END: f64 = 0.99;
+// How much of the domain warp bends the north and south coast, little enough that it never pulls land over the world's edge.
+const POLE_COAST_WARP: f64 = 0.3;
+// Land is lifted towards each pole over this stretch of latitude, so an ice cap always stands there.
+const POLAR_UPLIFT_LATITUDE: (f64, f64) = (0.7, 0.88);
+const POLAR_UPLIFT: f64 = 1.0;
 
 // Below this continentalness the sea floor only gets plain detail noise.
 const OPEN_OCEAN: f64 = -0.25;
@@ -66,8 +74,11 @@ const CLIMATE_WAVELENGTH: f64 = 12000.0;
 const CLIMATE_CONTRAST: f64 = 1.6;
 // How much of the temperature is latitude (hot equator, cold poles) rather than noise.
 const LATITUDE_WEIGHT: f64 = 0.6;
-// The poles sit at this fraction of the half size, about where the land gives way to the ocean ring.
-const POLE_LATITUDE: f64 = 0.9;
+// The poles sit at this fraction of the half size, the north and south edges of the world.
+const POLE_LATITUDE: f64 = 1.0;
+// Over this stretch of latitude the climate's noise is squeezed towards freezing, by up to POLAR_CHILL.
+const POLAR_CHILL_LATITUDE: (f64, f64) = (0.7, 0.95);
+const POLAR_CHILL: f64 = 0.9;
 
 // Continentalness to height above sea level: abyssal plain, continental slope, the
 // shelf around each coast, then the coast and inland.
@@ -181,9 +192,10 @@ impl NoiseGenerator {
         let warp_z = self.warp_z.get([x, z]) * WARP_STRENGTH;
         let (wx, wz) = (x + warp_x, z + warp_z);
 
-        let edge = edge_falloff(wx, wz);
+        let edge = edge_falloff(wx, z + warp_z * POLE_COAST_WARP);
         let continentalness = (self.continents.get([wx, wz]) * CONTINENT_CONTRAST - OCEAN_BIAS)
-            .clamp(-1.0, 1.0)
+            .clamp(-1.0, 1.0);
+        let continentalness = (continentalness + POLAR_UPLIFT * smoothstep(POLAR_UPLIFT_LATITUDE.0, POLAR_UPLIFT_LATITUDE.1, wz.abs() / WORLD_HALF_SIZE as f64))
             .lerp(-1.0, edge);
         // Ruggedness and hilliness only shape land and the shallows, so open ocean skips them.
         let ruggedness = if continentalness > OPEN_OCEAN {
@@ -249,7 +261,8 @@ impl NoiseGenerator {
         let noise = (self.temperature.get([x, z]) * CLIMATE_CONTRAST * 0.5 + 0.5).clamp(0.0, 1.0);
         let latitude = (z.abs() / (WORLD_HALF_SIZE as f64 * POLE_LATITUDE)).min(1.0);
         let warmth = (latitude * std::f64::consts::FRAC_PI_2).cos();
-        (noise * (1.0 - LATITUDE_WEIGHT) + warmth * LATITUDE_WEIGHT) as f32
+        let chill = POLAR_CHILL * smoothstep(POLAR_CHILL_LATITUDE.0, POLAR_CHILL_LATITUDE.1, latitude);
+        ((noise * (1.0 - LATITUDE_WEIGHT) + warmth * LATITUDE_WEIGHT) * (1.0 - chill)) as f32
     }
 
     // Ridged multifractal in 0..1: sharp crests where the noise crosses zero, with each
@@ -302,8 +315,9 @@ fn ease_peaks(height: f64) -> f64 {
 
 // 0 inside the world, rising to 1 in the ocean ring at its edge.
 fn edge_falloff(x: f64, z: f64) -> f64 {
-    let distance = x.abs().max(z.abs()) / WORLD_HALF_SIZE as f64;
-    smoothstep(EDGE_FALLOFF_START, EDGE_FALLOFF_END, distance)
+    let half = WORLD_HALF_SIZE as f64;
+    let sides = smoothstep(EDGE_FALLOFF_START, EDGE_FALLOFF_END, x.abs() / half);
+    sides.max(smoothstep(POLE_FALLOFF_START, POLE_FALLOFF_END, z.abs() / half))
 }
 
 fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -356,6 +370,22 @@ mod tests {
     }
 
     #[test]
+    fn test_both_poles_have_land_and_the_edge_is_ocean() {
+        let half = WORLD_HALF_SIZE as f64;
+        for seed in [1, 7, 9, 42, 123] {
+            let noise = NoiseGenerator::new(seed);
+            for sign in [-1.0, 1.0] {
+                let height = |z: f64| (-60..60).map(|i| noise.get(I64Vec2::new(i * 250, (sign * z) as i64))).collect::<Vec<_>>();
+                let cap = height(half * 0.8);
+                let land = cap.iter().filter(|&&h| h > WATER_LEVEL as f64 + 2.0).count();
+                assert!(land > cap.len() / 2, "seed {seed}: only {land} of {} columns at the pole are land", cap.len());
+                let edge = height(half);
+                assert!(edge.iter().all(|&h| h < WATER_LEVEL as f64 - 30.0), "seed {seed}: land at the world's edge");
+            }
+        }
+    }
+
+    #[test]
     fn test_climate_varies_across_the_whole_range() {
         let noise = NoiseGenerator::new(9);
         let samples: Vec<Climate> = (-40..40)
@@ -372,9 +402,9 @@ mod tests {
     fn test_poles_are_colder_than_the_equator() {
         let noise = NoiseGenerator::new(9);
         let mean = |z: f64| (-40..40).map(|i| noise.temperature(i as f64 * 400.0, z)).sum::<f32>() / 80.0;
-        let pole = WORLD_HALF_SIZE as f64 * 0.85;
+        let pole = WORLD_HALF_SIZE as f64 * 0.95;
         assert!(mean(0.0) > 0.7, "equator was {}", mean(0.0));
-        assert!(mean(pole) < 0.3 && mean(-pole) < 0.3, "poles were {} and {}", mean(pole), mean(-pole));
+        assert!(mean(pole) < 0.1 && mean(-pole) < 0.1, "poles were {} and {}", mean(pole), mean(-pole));
     }
 
     #[test]

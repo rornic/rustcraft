@@ -15,7 +15,7 @@ use super::region_store::{RegionStore, SLOPE_SPAN};
 use super::WATER_LEVEL;
 use super::columns::{ColumnGrid, COARSE_CELL};
 use super::trees::{grows_into, trees_near, TreeGround, THIN_TRUNK_CELL, TREE_HEIGHT};
-use crate::block::{BlockType, BLOCK_COUNT};
+use crate::block::{BlockType, Face, Tile, TILE_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
 use crate::util::primitives::Vertex;
@@ -256,7 +256,8 @@ impl LodBlocks {
                 }
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
-                    let mut block = column_block(noise.biomes(), biome, world_y, height, gradient, temperature);
+                    let mut block = under_grass(column_block(noise.biomes(), biome, world_y, height, gradient, temperature), world_y, height, cell);
+                    block = freeze_cell(block, temperature, world_y + cell / 2, cell);
                     if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
                         block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient, temperature);
                     }
@@ -339,7 +340,8 @@ impl LodBlocks {
                 tops[Self::column(size, cx, cz)] = top;
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
-                    let mut block = column_block(biomes, biome, world_y, column_height, combined_gradient, temperature);
+                    let mut block = under_grass(column_block(biomes, biome, world_y, column_height, combined_gradient, temperature), world_y, column_height, cell);
+                    block = freeze_cell(block, temperature, world_y + cell / 2, cell);
                     if block == BlockType::Air && base.y + cy as i64 * cell < top {
                         block = column_block(biomes, biome, top - 1, column_height, combined_gradient, temperature);
                     }
@@ -428,7 +430,15 @@ impl LodBlocks {
         }
         let ground = matches!(
             self.raw(coord),
-            BlockType::Stone | BlockType::Grass | BlockType::Sand | BlockType::Snow | BlockType::Leaves
+            BlockType::Stone
+                | BlockType::Grass
+                | BlockType::Sand
+                | BlockType::Snow
+                | BlockType::Leaves
+                | BlockType::Dirt
+                | BlockType::Gravel
+                | BlockType::Ice
+                | BlockType::Sandstone
         );
         let beside_water = [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
             .iter()
@@ -564,10 +574,32 @@ const SNOW_LINE_PER_DEGREE: f64 = 800.0;
 // At or above this temperature it's too hot for snow, and the heights are bare rock.
 const SNOW_MAX_TEMPERATURE: f32 = 0.62;
 // Below this temperature even the grass is under a layer of snow.
-const SNOWY_GRASS_TEMPERATURE: f32 = 0.15;
+const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
 
-// The lowest the snow line gets, so even the coldest lowlands are grass under their snow.
-const COLDEST_SNOW_LINE: i64 = 60;
+// The lowest the snow line gets, so even the coldest lowlands are snow-covered.
+const COLDEST_SNOW_LINE: i64 = 10;
+
+// Below this temperature the top of the sea freezes, thicker the colder it is.
+pub const FREEZE_TEMPERATURE: f32 = 0.12;
+const ICE_MAX_DEPTH: i64 = 3;
+const ICE_TEMPERATURE_PER_LAYER: f32 = 0.04;
+
+// How many blocks of the sea's surface are ice at this temperature.
+fn ice_depth(temperature: f32) -> i64 {
+    if temperature >= FREEZE_TEMPERATURE {
+        return 0;
+    }
+    (1 + ((FREEZE_TEMPERATURE - temperature) / ICE_TEMPERATURE_PER_LAYER) as i64).min(ICE_MAX_DEPTH)
+}
+
+// A wider LOD cell's water, as ice when it overlaps the frozen top of the sea; its middle is sampled, which is usually below it.
+fn freeze_cell(block: BlockType, temperature: f32, cell_top: i64, cell: i64) -> BlockType {
+    if cell > 1 && block == BlockType::Water && cell_top > WATER_LEVEL - ice_depth(temperature) {
+        BlockType::Ice
+    } else {
+        block
+    }
+}
 
 // Height above the sea where snow starts to settle, lower in the cold.
 fn snow_line(temperature: f32) -> i64 {
@@ -608,9 +640,25 @@ fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64, tempe
             BlockType::Sand
         }
     } else if world_y < WATER_LEVEL {
-        BlockType::Water
+        if world_y >= WATER_LEVEL - ice_depth(temperature) {
+            BlockType::Ice
+        } else {
+            BlockType::Water
+        }
     } else {
         BlockType::Air
+    }
+}
+
+// Grass is only the top layer of the ground, over dirt, and glacier ice over snow. Wider LOD cells are sampled mid-cell, which would turn their tops dirt.
+fn under_grass(block: BlockType, world_y: i64, column_height: i64, cell: i64) -> BlockType {
+    if cell != 1 || world_y >= column_height - 1 {
+        return block;
+    }
+    match block {
+        BlockType::Grass => BlockType::Dirt,
+        BlockType::Ice => BlockType::Snow,
+        other => other,
     }
 }
 
@@ -805,7 +853,7 @@ pub fn generate_chunk(
             let temperature = noise.temperature(world_x as f64, world_z as f64);
 
             for y in 0..chunk_data.size {
-                let block = column_block(biomes, biome, world_y + y as i64, column_height, combined_gradient, temperature);
+                let block = under_grass(column_block(biomes, biome, world_y + y as i64, column_height, combined_gradient, temperature), world_y + y as i64, column_height, 1);
                 if block != BlockType::Air {
                     chunk_data.set_block_at(U16Vec3::new(x, y, z), block);
                 }
@@ -855,7 +903,7 @@ struct MeshBuffers {
 
 impl MeshBuffers {
     fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
-        let uv_scale = 1.0 / (BLOCK_COUNT - 1) as f32;
+        let uv_scale = 1.0 / TILE_COUNT as f32;
 
         let triangle_start: u32 = self.vertices.len() as u32;
         for (v, color) in vs.iter().zip(colors.iter()) {
@@ -1290,7 +1338,8 @@ fn face_span(
     let neighbour = coord + normal;
     let neighbour_block = source.block(neighbour);
     let covered = neighbour_block.is_opaque()
-        || (leaves_cover_leaves && block == BlockType::Leaves && neighbour_block == BlockType::Leaves);
+        || (leaves_cover_leaves && block == BlockType::Leaves && neighbour_block == BlockType::Leaves)
+        || (block == BlockType::Ice && neighbour_block == BlockType::Ice);
     // every face is asked about, and most are hidden, so those leave before any lookups
     if !source.has_surface_tops() || normal.y < 0 {
         return (!covered).then_some(None);
@@ -1318,6 +1367,8 @@ fn mesh_opaque_greedy(
     buffers: &mut MeshBuffers,
     ambient_occlusion: bool,
     solid_leaves: bool,
+    // whether faces draw their own tile, not the one their block's colour is read from
+    textured: bool,
     // how many times the texture repeats across a cell
     uv_tiles: f32,
     grass_tint: &GrassTint,
@@ -1413,11 +1464,11 @@ fn mesh_opaque_greedy(
                     }
 
                     let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
-                    let atlas_cell = (cell.block as usize - 1) as f32;
+                    let tile = if textured { cell.block.tile(Face::of_normal_y(normal.y as f32)) } else { cell.block.lod_tile() };
+                    let atlas_cell = tile.atlas_cell();
                     let color = |ao: f32, position: Vec3| {
                         // leaves share grass's tint, over a darker texture
-                        let tinted = matches!(cell.block, BlockType::Grass | BlockType::Leaves);
-                        let tint = if tinted { grass_tint.at(position) } else { Vec3::ONE };
+                        let tint = if tile.tinted() { grass_tint.at(position) } else { Vec3::ONE };
                         let shade = match cell.block {
                             BlockType::Leaves => source.canopy_shade(position),
                             BlockType::Grass => source.forest_shade(position),
@@ -1577,7 +1628,7 @@ fn mesh_blocks(
                     [shore, depth_factor, if is_top { 1.0 } else { 0.0 }, shore_distance]
                 })
                 .collect();
-            water.push_face(water_face_vertices[i], world_position, (BlockType::Water as usize - 1) as f32, &colors);
+            water.push_face(water_face_vertices[i], world_position, Tile::Water.atlas_cell(), &colors);
         }
     }
 
@@ -1587,23 +1638,25 @@ fn mesh_blocks(
         &mut opaque,
         ambient_occlusion,
         solid_leaves,
+        textured,
         if textured { cell_size as f32 } else { 1.0 },
         grass_tint,
         light,
     );
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly
     const BOX_LIGHT: f32 = 0.8;
-    opaque.boxes = Some((opaque.vertices.len(), cell_size > BOX_TEXTURE_MAX_CELL));
+    let box_textured = cell_size <= BOX_TEXTURE_MAX_CELL;
+    opaque.boxes = Some((opaque.vertices.len(), !box_textured));
     for tree_box in source.tree_boxes() {
         let (centre, extent) = ((tree_box.min + tree_box.max) / 2.0, tree_box.max - tree_box.min);
-        let atlas_cell = (tree_box.block as usize - 1) as f32;
-        let tint = if tree_box.block == BlockType::Leaves { grass_tint.at(centre) } else { Vec3::ONE };
+        let tint = if tree_box.block.lod_tile().tinted() { grass_tint.at(centre) } else { Vec3::ONE };
         // a trunk has no bottom face, it stands on the ground
         let faces = if tree_box.block == BlockType::Log { &face_vertices[..5] } else { &face_vertices[..] };
         for face in faces {
+            let tile = if box_textured { tree_box.block.tile(Face::of_normal_y(face[0].normal[1])) } else { tree_box.block.lod_tile() };
             let positions = std::array::from_fn(|j| (centre + Vec3::from(face[j].position) * extent).to_array());
             let uvs = tiled_uvs(&positions, &std::array::from_fn(|j| face[j].uv), cell_size as f32);
-            opaque.push_tiled_quad(positions, face[0].normal, uvs, [tint.extend(atlas_cell).to_array(); 4], [BOX_LIGHT; 4]);
+            opaque.push_tiled_quad(positions, face[0].normal, uvs, [tint.extend(tile.atlas_cell()).to_array(); 4], [BOX_LIGHT; 4]);
         }
     }
 
@@ -1628,12 +1681,13 @@ mod tests {
     use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
     use bevy::platform::collections::HashMap;
 
-    use crate::block::BlockType;
+    use crate::block::{BlockType, Tile};
 
     use super::{
-        generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
+        under_grass,
+        freeze_cell, generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
         vertex_water_depth, water_depth, BlockSource, ChunkMeshes, ChunkNeighbourhood, GrassTint, LodBlocks, AO_STRENGTH,
-        WATER_LEVEL,
+        FREEZE_TEMPERATURE, WATER_LEVEL,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
@@ -1815,6 +1869,38 @@ mod tests {
     }
 
     #[test]
+    fn test_cold_sea_freezes_from_the_top_and_thicker_when_colder() {
+        let ice_layers = |temperature| {
+            (WATER_LEVEL - 10..WATER_LEVEL).filter(|&y| terrain_block(y, 0, 0.0, temperature) == BlockType::Ice).count()
+        };
+        assert_eq!(0, ice_layers(0.5));
+        assert_eq!(0, ice_layers(FREEZE_TEMPERATURE));
+        assert_eq!(1, ice_layers(FREEZE_TEMPERATURE - 0.01));
+        assert_eq!(3, ice_layers(0.0));
+        assert_eq!(BlockType::Ice, terrain_block(WATER_LEVEL - 1, 0, 0.0, 0.0));
+        assert_eq!(BlockType::Water, terrain_block(WATER_LEVEL - 4, 0, 0.0, 0.0));
+        assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn test_wide_cells_freeze_when_they_reach_the_ice() {
+        let top = WATER_LEVEL;
+        assert_eq!(BlockType::Ice, freeze_cell(BlockType::Water, 0.0, top, 32));
+        assert_eq!(BlockType::Water, freeze_cell(BlockType::Water, 0.0, top - 32, 32));
+        assert_eq!(BlockType::Water, freeze_cell(BlockType::Water, 0.5, top, 32));
+        assert_eq!(BlockType::Stone, freeze_cell(BlockType::Stone, 0.0, top, 32));
+    }
+
+    #[test]
+    fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
+        let ground = WATER_LEVEL + 20;
+        assert_eq!(BlockType::Snow, terrain_block(ground - 1, ground, 0.0, 0.1));
+        assert_eq!(BlockType::Grass, terrain_block(ground - 1, ground, 0.0, 0.5));
+        assert_eq!(BlockType::Snow, under_grass(BlockType::Ice, ground - 5, ground, 1));
+        assert_eq!(BlockType::Ice, under_grass(BlockType::Ice, ground - 1, ground, 1));
+    }
+
+    #[test]
     fn test_terrain_block_floor_and_water() {
         // below the solid floor even a zero-height column is solid
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0, 0.5));
@@ -1853,8 +1939,8 @@ mod tests {
 
     #[test]
     fn test_only_the_top_of_frozen_grass_is_snow() {
-        let at = |y: i64, temperature: f32| terrain_block(y, WATER_LEVEL + 20, 0.0, temperature);
-        let top = WATER_LEVEL + 19;
+        let at = |y: i64, temperature: f32| terrain_block(y, WATER_LEVEL + 7, 0.0, temperature);
+        let top = WATER_LEVEL + 6;
         assert_eq!(BlockType::Snow, at(top, 0.05));
         assert_eq!(BlockType::Grass, at(top, 0.3));
         assert_eq!(BlockType::Grass, at(top - 1, 0.05));
@@ -2082,7 +2168,7 @@ mod tests {
         };
         let tiles = uvs.iter().flatten().fold(0.0f32, |m, &c| m.max(c));
         assert_eq!(16.0, tiles);
-        assert!(colors.iter().all(|c| c[3] == (BlockType::Stone as usize - 1) as f32));
+        assert!(colors.iter().all(|c| c[3] == Tile::Stone.atlas_cell()));
     }
 
     fn top_face_triangles(mesh: &Mesh) -> Vec<f32> {
@@ -2136,13 +2222,39 @@ mod tests {
     }
 
     #[test]
-    fn test_only_grass_is_tinted() {
+    fn test_only_the_grass_top_is_tinted() {
         let mut chunk = ChunkData::default();
         chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
         chunk.set_block_at(U16Vec3::new(10, 4, 10), BlockType::Grass);
         let colours = tints(&mesh_chunk(chunk).opaque);
-        assert_eq!(24, colours.iter().filter(|c| **c == Vec3::ONE).count());
-        assert_eq!(24, colours.iter().filter(|c| **c != Vec3::ONE).count());
+        assert_eq!(44, colours.iter().filter(|c| **c == Vec3::ONE).count());
+        assert_eq!(4, colours.iter().filter(|c| **c != Vec3::ONE).count());
+    }
+
+    #[test]
+    fn test_only_full_detail_grass_below_the_top_layer_is_dirt() {
+        assert_eq!(BlockType::Dirt, under_grass(BlockType::Grass, 10, 20, 1));
+        assert_eq!(BlockType::Grass, under_grass(BlockType::Grass, 19, 20, 1));
+        assert_eq!(BlockType::Grass, under_grass(BlockType::Grass, 10, 20, 4));
+        assert_eq!(BlockType::Stone, under_grass(BlockType::Stone, 10, 20, 1));
+    }
+
+    #[test]
+    fn test_faces_pick_their_tile_and_merge_within_a_tile() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Log);
+        let mesh = mesh_chunk(chunk).opaque;
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            panic!("missing colors");
+        };
+        let count = |tile: Tile| colors.iter().filter(|c| c[3] == tile.atlas_cell()).count();
+        assert_eq!(8, count(Tile::LogEnd));
+        assert_eq!(16, count(Tile::LogBark));
+        let merged = mesh_chunk(floor_chunk()).opaque;
+        let Some(VertexAttributeValues::Float32x4(colors)) = merged.attribute(Mesh::ATTRIBUTE_COLOR) else {
+            panic!("missing colors");
+        };
+        assert!(colors.iter().all(|c| c[3] == Tile::Stone.atlas_cell()));
     }
 
     #[test]
