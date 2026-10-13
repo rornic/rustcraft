@@ -1,7 +1,14 @@
 use std::fmt::Write;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+use bevy::core_pipeline::core_3d::{AlphaMask3d, Opaque3d, Transparent3d};
+use bevy::core_pipeline::prepass::{AlphaMask3dPrepass, Opaque3dPrepass};
+use bevy::pbr::Shadow;
 use bevy::prelude::*;
+use bevy::render::render_phase::{BinnedPhaseItem, BinnedRenderPhase, ViewBinnedRenderPhases, ViewSortedRenderPhases};
+use bevy::render::{Render, RenderApp, RenderSet};
 
 use crate::chunks::chunk_loader::Chunk;
 use crate::chunks::lod::LodNode;
@@ -19,9 +26,47 @@ impl Plugin for DebugOverlayPlugin {
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
         }
-        app.add_systems(Startup, spawn_overlay)
+        let counts = DrawCounts::default();
+        app.insert_resource(counts.clone())
+            .add_systems(Startup, spawn_overlay)
             .add_systems(Update, (toggle_overlay, update_overlay).chain());
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.insert_resource(counts).add_systems(Render, count_draws.in_set(RenderSet::Prepare));
+        }
     }
+}
+
+/// Draws the render world queued last frame, which Bevy only issues one per mesh here.
+#[derive(Resource, Clone, Default)]
+struct DrawCounts {
+    main: Arc<AtomicU32>,
+    prepass: Arc<AtomicU32>,
+    blended: Arc<AtomicU32>,
+    shadow: Arc<AtomicU32>,
+}
+
+// meshes never share a bin, since a bin is keyed on the mesh, so each is a draw
+fn binned_draws<T: BinnedPhaseItem>(phases: &ViewBinnedRenderPhases<T>) -> u32 {
+    let draws = |phase: &BinnedRenderPhase<T>| {
+        phase.batchable_mesh_keys.len() + phase.unbatchable_mesh_values.values().map(|v| v.entities.len()).sum::<usize>()
+    };
+    phases.values().map(draws).sum::<usize>() as u32
+}
+
+#[allow(clippy::too_many_arguments)]
+fn count_draws(
+    counts: Res<DrawCounts>,
+    opaque: Res<ViewBinnedRenderPhases<Opaque3d>>,
+    masked: Res<ViewBinnedRenderPhases<AlphaMask3d>>,
+    opaque_prepass: Res<ViewBinnedRenderPhases<Opaque3dPrepass>>,
+    masked_prepass: Res<ViewBinnedRenderPhases<AlphaMask3dPrepass>>,
+    shadow: Res<ViewBinnedRenderPhases<Shadow>>,
+    blended: Res<ViewSortedRenderPhases<Transparent3d>>,
+) {
+    counts.main.store(binned_draws(&opaque) + binned_draws(&masked), Ordering::Relaxed);
+    counts.prepass.store(binned_draws(&opaque_prepass) + binned_draws(&masked_prepass), Ordering::Relaxed);
+    counts.shadow.store(binned_draws(&shadow), Ordering::Relaxed);
+    counts.blended.store(blended.values().map(|phase| phase.items.len()).sum::<usize>() as u32, Ordering::Relaxed);
 }
 
 #[derive(Component)]
@@ -66,6 +111,7 @@ fn update_overlay(
     player: Query<&GlobalTransform, With<Player>>,
     chunks: Query<(), With<Chunk>>,
     lod_nodes: Query<&LodNode>,
+    counts: Res<DrawCounts>,
     drawn: Query<(&Mesh3d, &ViewVisibility)>,
     meshes: Res<Assets<Mesh>>,
     mut overlay: Query<(&mut Text, &Visibility), With<DebugOverlay>>,
@@ -101,14 +147,15 @@ fn update_overlay(
         );
     }
 
-    let (mut draw_calls, mut vertices) = (0usize, 0usize);
+    let mut vertices = 0usize;
     for (mesh, visible) in &drawn {
         if visible.get() {
-            draw_calls += 1;
             vertices += meshes.get(&mesh.0).map_or(0, Mesh::count_vertices);
         }
     }
-    let _ = writeln!(out, "draw calls: ~{draw_calls} (visible meshes, excl. shadows)");
+    let load = |count: &AtomicU32| count.load(Ordering::Relaxed);
+    let (main, prepass, blended, shadow) = (load(&counts.main), load(&counts.prepass), load(&counts.blended), load(&counts.shadow));
+    let _ = writeln!(out, "draw calls: {} (main {main}, depth {prepass}, water/clouds {blended}, shadows {shadow})", main + prepass + blended + shadow);
     let _ = writeln!(out, "vertices: {vertices}");
 
     let mut per_level = vec![chunks.iter().count()];
