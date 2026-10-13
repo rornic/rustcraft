@@ -1037,7 +1037,7 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
 
 // Ambient occlusion is barely visible on cells this many blocks across or more, but stops
 // their faces merging, so coarser block LODs leave it out.
-const AO_MAX_CELL_SIZE: i64 = 2;
+const AO_MAX_CELL_SIZE: i64 = 4;
 
 // Cells wider than this draw their block's mean colour instead of its texture, which tiles a
 // cell's width of times over a face, since one stretched over a coarse cell would read as a
