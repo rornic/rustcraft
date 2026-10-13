@@ -105,7 +105,7 @@ impl BlockSource for ChunkNeighbourhood<'_> {
     }
 }
 
-const SKIRT_CELLS: i32 = 1;
+const SKIRT_CELLS: i32 = 2;
 
 struct LodBlocks {
     size: i32,
@@ -457,12 +457,28 @@ impl BlockSource for LodBlocks {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         let block = self.raw(coord);
         let outside = |c: i32| c < 0 || c >= self.size;
-        if (outside(coord.x) || outside(coord.z)) && is_solid(block) {
-            for dy in 1..=SKIRT_CELLS {
-                let above = self.raw(coord + IVec3::new(0, dy, 0));
-                if !is_solid(above) {
-                    return above;
+        if outside(coord.x) || outside(coord.z) {
+            // The wall hangs from this node's own surface edge, so it's there whatever the cell
+            // beyond holds: that is sampled at this node's resolution, and a coarser neighbour
+            // that draws its ground lower would be left with a gap.
+            let inner = IVec3::new(coord.x.clamp(0, self.size - 1), coord.y, coord.z.clamp(0, self.size - 1));
+            for cell in [inner, coord] {
+                if is_solid(self.raw(cell)) {
+                    for dy in 1..=SKIRT_CELLS {
+                        let above = self.raw(cell + IVec3::new(0, dy, 0));
+                        if !is_solid(above) {
+                            return above;
+                        }
+                    }
                 }
+            }
+            // The ground may run on up into the node above, where there's no air to find, so
+            // cells within the skirt's depth of the column's ground top count too. A buried
+            // node's ground is far above it, so it grows no walls.
+            let ground = self.tops[Self::column(self.size, inner.x, inner.z)];
+            let bottom = self.base_y + inner.y as i64 * self.cell;
+            if is_solid(self.raw(inner)) && bottom + self.cell > ground - SKIRT_CELLS as i64 * self.cell {
+                return BlockType::Air;
             }
         }
         block
@@ -2279,14 +2295,38 @@ mod tests {
     #[test]
     fn test_lod_border_exposes_surface_cells_as_skirt() {
         let lod = flat_lod(8);
-        // the border's top solid cell reads as open, so the edge draws a wall
+        // the border's top two solid cells read as open, so the edge draws a wall
         assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 7, 4)));
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 6, 4)));
         assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 7, 16)));
         // deeper border cells and every interior cell read as they are
-        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 6, 4)));
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 5, 4)));
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
         // below the node isn't a horizontal border, so no skirt
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
+    }
+
+    #[test]
+    fn test_lod_skirt_hangs_from_the_nodes_own_ground_not_its_neighbours() {
+        // ground reaching the top of the node, where there's no air above to find
+        let size = 16;
+        let padded = (size + 2) as usize;
+        let mut cells = vec![BlockType::Air; padded * padded * padded];
+        for x in -1..=size {
+            for z in -1..=size {
+                for y in -1..=size {
+                    cells[LodBlocks::index(size, IVec3::new(x, y, z))] = BlockType::Stone;
+                }
+            }
+        }
+        // the ground's top is in the node above, 3 cells over the top row
+        let lod = LodBlocks::new(size, cells.clone(), vec![size as i64 + 3; padded * padded], 0, 1);
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 8, 4)));
+        // ground ending in the top row: the cells within two of it have walls, though the top row is solid
+        let lod = LodBlocks::new(size, cells, vec![size as i64 + 1; padded * padded], 0, 1);
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 16, 4)));
+        assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 15, 4)));
+        assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 14, 4)));
     }
 
     #[test]
@@ -2505,6 +2545,94 @@ mod tests {
                 checked += exact.len();
             }
             assert!(checked > 0, "no trees checked at level {level}");
+        }
+    }
+
+    // Triangles of a node's opaque mesh in world space, placed as `lod_transform` does.
+    fn world_triangles(regions: &Arc<RegionStore>, key: LodKey) -> Vec<[Vec3; 3]> {
+        let Some(meshes) = super::generate_lod_mesh(regions.clone(), key) else {
+            return Vec::new();
+        };
+        let cell = key.cell_size() as f32;
+        let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell - 0.5);
+        let positions = meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
+        let Some(Indices::U32(indices)) = meshes.opaque.indices() else {
+            return Vec::new();
+        };
+        indices
+            .chunks(3)
+            .map(|t| [0, 1, 2].map(|k| origin + Vec3::from(positions[t[k] as usize]) * cell))
+            .collect()
+    }
+
+    // Whether the ray from `from` along `direction` meets the triangle, either side.
+    fn ray_hits(from: Vec3, direction: Vec3, [a, b, c]: [Vec3; 3]) -> bool {
+        let (e1, e2) = (b - a, c - a);
+        let p = direction.cross(e2);
+        let det = e1.dot(p);
+        if det.abs() < 1e-9 {
+            return false;
+        }
+        let t = from - a;
+        let u = t.dot(p) / det;
+        let q = t.cross(e1);
+        let v = direction.dot(q) / det;
+        u >= 0.0 && v >= 0.0 && u + v <= 1.0 && e2.dot(q) / det > 0.0
+    }
+
+    // How many oblique rays down across the seam between a node and its coarser neighbour pass
+    // through every triangle of both, seeing the sky through a crack.
+    fn seam_leaks(regions: &Arc<RegionStore>, fine: LodKey, coarse: LodKey) -> (usize, usize) {
+        // the nodes above and below too, where the ground crosses into them
+        let mut triangles = Vec::new();
+        for dy in -1..=1 {
+            for key in [fine, coarse] {
+                triangles.extend(world_triangles(regions, LodKey { coord: key.coord + I64Vec3::new(0, dy, 0), ..key }));
+            }
+        }
+        let seam_x = coarse.min_block().x as f32;
+        let (z0, z1) = (fine.min_block().z as f32, (fine.min_block().z + fine.width() * 16) as f32);
+        let mut sampler = regions.sampler();
+        let (mut rays, mut leaks) = (0, 0);
+        for direction in [Vec3::new(0.35, -1.0, 0.1), Vec3::new(-0.35, -1.0, 0.1), Vec3::new(0.0, -1.0, 0.45), Vec3::new(0.2, -1.0, -0.3)] {
+            let direction = direction.normalize();
+            // clear of the node's z edges, past which the next node isn't loaded here
+            let mut z = z0 + 8.713;
+            while z < z1 - 8.0 {
+                for dx in [-2.7f32, -1.77, -0.93, 0.21, 0.83, 1.61, 2.9] {
+                    let x = seam_x + dx;
+                    let y = sampler.height(x as i64, z as i64) as f32;
+                    // from well above any hill the ray might otherwise start inside of
+                    let from = Vec3::new(x, y, z) - direction * (300.0 / -direction.y);
+                    rays += 1;
+                    if !triangles.iter().any(|&t| ray_hits(from, direction, t)) {
+                        leaks += 1;
+                    }
+                }
+                z += 2.07;
+            }
+        }
+        (leaks, rays)
+    }
+
+    #[test]
+    fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let mut sampler = regions.sampler();
+        // stretches of land a few thousand blocks apart, with a fine node beside a coarser one
+        let spots: Vec<(i64, i64)> = (0..8).map(|i| (-3000 + (i % 4) * 1900 + (i * 137) % 400, -3000 + (i / 4) * 1900 + (i * 211) % 400)).collect();
+        for fine_level in 1..=4u8 {
+            let (mut leaks, mut rays) = (0, 0);
+            for &(bx, bz) in &spots {
+                let h = sampler.height(bx, bz) as i64;
+                let coarse = LodKey::containing(ChunkCoordinate(I64Vec3::new(bx, h, bz).div_euclid(I64Vec3::splat(16))), fine_level + 1);
+                let fine_chunk = I64Vec3::new(coarse.min_block().x - 8, h, coarse.min_block().z + 8).div_euclid(I64Vec3::splat(16));
+                let fine = LodKey::containing(ChunkCoordinate(fine_chunk), fine_level);
+                let (l, r) = seam_leaks(&regions, fine, coarse);
+                leaks += l;
+                rays += r;
+            }
+            assert_eq!(0, leaks, "{leaks} of {rays} rays slipped through seams between levels {fine_level} and {}", fine_level + 1);
         }
     }
 
