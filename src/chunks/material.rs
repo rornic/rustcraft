@@ -14,7 +14,7 @@ use bevy::{
     },
 };
 
-use crate::block::BlockType;
+use crate::block::Tile;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::settings::DebugSettings;
 
@@ -154,7 +154,7 @@ impl Material for ChunkMaterial {
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = Some(Face::Front);
         // the main and shadow passes both sway leaves, see `foliage.wesl`
-        let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), BlockType::Leaves as u32 - 1);
+        let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), Tile::Leaves.atlas_cell() as u32);
         let mut defs = vec![leaf_cell, water_level()];
         // compiled in or out, so the switches leave no trace of the code they turn off
         if key.bind_group_data.still_leaves {
