@@ -1,27 +1,26 @@
 use std::time::{Duration, Instant};
 
 use bevy::{
-    asset::{Assets, Handle},
+    asset::Handle,
     ecs::{
         component::Component,
         entity::Entity,
         query::{With, Without},
         system::{Commands, Query, Res, ResMut, Resource},
     },
-    hierarchy::{BuildChildren, ChildBuild, DespawnRecursiveExt, Parent},
+    hierarchy::{DespawnRecursiveExt, Parent},
     math::{Dir3, I64Vec3, Vec3},
-    pbr::MeshMaterial3d,
-    prelude::Mesh3d,
-    render::{camera::Camera, mesh::Mesh, primitives::Aabb, view::Visibility},
+    render::camera::Camera,
     tasks::{AsyncComputeTaskPool, Task},
-    transform::components::{GlobalTransform, Transform},
-    utils::{futures, HashMap},
+    transform::components::GlobalTransform,
+    utils::{futures, HashMap, HashSet},
 };
 
 use super::{
     chunk::{ChunkCoordinate, ChunkData},
     generate::generator::{generate_chunk, generate_chunk_mesh, ChunkMeshes},
-    lod::{GenerateLodMesh, LodLayout, LodLoader},
+    group::{GroupedChunk, MeshedChunk},
+    lod::{GenerateLodMesh, LodKey, LodLayout, LodLoader},
     material::{ChunkMaterial, WaterMaterial},
 };
 use crate::{player::PlayerLook, world::World};
@@ -56,6 +55,12 @@ pub struct ChunkLoader {
     max_in_flight_generating: usize,
     // see `DebugSettings::solid_leaves`
     solid_leaves: bool,
+    // the entity drawing each group of chunks, see `group::ChunkGroup`
+    pub(super) groups: HashMap<LodKey, Entity>,
+    // meshed chunks' meshes, until the rest of their group is ready to merge with them
+    pub(super) held: HashMap<ChunkCoordinate, ChunkMeshes>,
+    // groups with a held mesh, not yet being merged
+    pub(super) waiting: HashSet<LodKey>,
 }
 
 // A fixed per-frame item budget tuned at one render distance silently falls behind at a
@@ -120,7 +125,22 @@ impl ChunkLoader {
                 render_distance,
             ),
             solid_leaves,
+            groups: HashMap::new(),
+            held: HashMap::new(),
+            waiting: HashSet::new(),
         }
+    }
+
+    pub fn material(&self) -> Handle<ChunkMaterial> {
+        self.material.clone_weak()
+    }
+
+    pub fn water_material(&self) -> Handle<WaterMaterial> {
+        self.water_material.clone_weak()
+    }
+
+    pub fn group_entity(&self, key: LodKey) -> Option<Entity> {
+        self.groups.get(&key).copied()
     }
 
     pub fn anchor(&self) -> ChunkCoordinate {
@@ -268,8 +288,7 @@ pub fn load_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
     mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkMesh)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    chunk_loader: ResMut<ChunkLoader>,
+    mut chunk_loader: ResMut<ChunkLoader>,
 ) {
     let task_pool = AsyncComputeTaskPool::get();
     let start = Instant::now();
@@ -282,28 +301,20 @@ pub fn load_chunks(
                 // in advance how many will fit, and a completed task's mesh can't be
                 // polled a second time next frame if we deferred using it here.
                 if let Some(chunk_meshes) = futures::check_ready(task) {
-                    let (t, aabb) = chunk_components(chunk.coord);
-                    // hidden until refresh_lod_visibility fades it in, so it never
-                    // flashes up over the LOD node it's replacing
-                    commands.entity(entity).insert((
-                        Mesh3d(meshes.add(chunk_meshes.opaque)),
-                        MeshMaterial3d(chunk_loader.material.clone_weak()),
-                        t,
-                        aabb,
-                        Visibility::Hidden,
-                    ));
-                    if let Some(water_mesh) = chunk_meshes.water {
-                        let (_, water_aabb) = chunk_components(chunk.coord);
-                        commands.entity(entity).with_children(|parent| {
-                            parent.spawn((
-                                Mesh3d(meshes.add(water_mesh)),
-                                MeshMaterial3d(chunk_loader.water_material.clone_weak()),
-                                Transform::default(),
-                                water_aabb,
-                            ));
-                        });
+                    let key = LodKey::containing(chunk.coord, 1);
+                    let mut chunk_entity = commands.entity(entity);
+                    chunk_entity.remove::<GenerateChunkMesh>();
+                    // buried chunks mesh to nothing, and are left without a mesh or a draw
+                    if chunk_meshes.has_geometry() {
+                        if chunk_loader.groups.contains_key(&key) {
+                            // reloaded after its group was drawn, whose mesh already has it
+                            chunk_entity.insert(GroupedChunk);
+                        } else {
+                            chunk_entity.insert(MeshedChunk);
+                            chunk_loader.held.insert(chunk.coord, chunk_meshes);
+                            chunk_loader.waiting.insert(key);
+                        }
                     }
-                    commands.entity(entity).remove::<GenerateChunkMesh>();
                 }
             }
             None => {
@@ -344,6 +355,7 @@ pub fn unload_chunks(
     lods: Res<LodLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
 ) {
+    let mut unloaded = HashSet::new();
     for (entity, chunk) in chunks_query.iter() {
         // matches the neighbour-data padding shell generated beyond render_distance
         if chunk_distance(chunk.coord, chunk_loader.spawn_queue.anchor)
@@ -354,7 +366,19 @@ pub fn unload_chunks(
             // which must be cleaned up along with the chunk itself.
             commands.entity(entity).despawn_recursive();
             chunk_loader.chunk_to_entity.remove(&chunk.coord);
+            chunk_loader.held.remove(&chunk.coord);
             world.clear_chunk(chunk.coord);
+            unloaded.insert(LodKey::containing(chunk.coord, 1));
+        }
+    }
+
+    // a group goes once all its chunks have, since one reloaded in the meantime is still in its mesh
+    for key in unloaded {
+        if key.chunks().all(|chunk| !chunk_loader.chunk_to_entity.contains_key(&chunk)) {
+            chunk_loader.waiting.remove(&key);
+            if let Some(group) = chunk_loader.groups.remove(&key) {
+                commands.entity(group).despawn_recursive();
+            }
         }
     }
 }
@@ -380,13 +404,6 @@ fn chunk_distance(chunk: ChunkCoordinate, other: ChunkCoordinate) -> f32 {
 
 fn offset_distance(offset: I64Vec3) -> f32 {
     offset.as_vec3().length()
-}
-
-fn chunk_components(chunk: ChunkCoordinate) -> (Transform, Aabb) {
-    let pos = chunk_world_pos(chunk);
-    let t = Transform::from_translation(Vec3::new(pos.x, pos.y, pos.z));
-    let aabb = Aabb::from_min_max(Vec3::new(0.0, 0.0, 0.0), Vec3::new(16.0, 16.0, 16.0));
-    (t, aabb)
 }
 
 // pure data: depends only on render_distance (which never changes at runtime), so

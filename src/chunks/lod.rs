@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bevy::{
     asset::{Assets, Handle},
@@ -21,8 +24,9 @@ use bevy::{
 
 use super::{
     chunk::{ChunkCoordinate, CHUNK_SIZE},
-    chunk_loader::{Chunk, ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
+    chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
     fade::{fade_out_and_despawn, set_shown, Fade},
+    group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk},
     generate::{
         columns::COARSE_CELL,
         generator::{generate_lod_mesh, ChunkMeshes},
@@ -131,8 +135,8 @@ impl LodLayout {
 const LOD_TASKS_PER_THREAD: usize = 32;
 // The spawn queue is re-sorted this often, since nodes drift between covered and gap as terrain loads.
 const LOD_RESORT_INTERVAL: f32 = 2.0;
-// Nodes known to have nothing to draw are added straight away without a task, up to this many a frame.
-const LOD_EMPTY_NODES_PER_FRAME: usize = 2048;
+// Nodes known to have nothing to draw are added straight away without a task or an entity, up to this many a frame.
+const LOD_EMPTY_NODES_PER_FRAME: usize = 8192;
 const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -179,6 +183,31 @@ impl LodKey {
             level: self.level - 1,
             coord: self.coord * 2
                 + I64Vec3::new((i & 1) as i64, ((i >> 1) & 1) as i64, ((i >> 2) & 1) as i64),
+        })
+    }
+
+    /// This node and each one above it, up to `top`.
+    pub fn self_and_ancestors(self, top: u8) -> impl Iterator<Item = LodKey> {
+        std::iter::successors(Some(self), move |key| (key.level < top).then(|| key.parent()))
+    }
+
+    /// Whether the level-1 node `group` lies within this one.
+    pub fn contains_group(self, group: LodKey) -> bool {
+        match self.level {
+            0 => group.coord == self.coord.div_euclid(I64Vec3::splat(2)),
+            level => group.coord.div_euclid(I64Vec3::splat(1 << (level - 1))) == self.coord,
+        }
+    }
+
+    /// The level-1 nodes within this one, or just it if it's level 1.
+    pub fn groups_in(self) -> impl Iterator<Item = LodKey> {
+        let width = 1i64 << self.level.saturating_sub(1);
+        let min = if self.level == 0 { self.coord.div_euclid(I64Vec3::splat(2)) } else { self.coord * width };
+        let count = if self.level == 0 { 1 } else { width };
+        (0..count).flat_map(move |x| {
+            (0..count).flat_map(move |y| {
+                (0..count).map(move |z| LodKey { level: 1, coord: min + I64Vec3::new(x, y, z) })
+            })
         })
     }
 
@@ -381,10 +410,17 @@ pub struct LodLoader {
     layout: LodLayout,
     band: LodBand,
     anchor: Option<ChunkCoordinate>,
-    selected: HashSet<LodKey>,
+    selected: Arc<HashSet<LodKey>>,
     // level-1 nodes over the full-detail area, drawn while its chunks aren't ready
-    stand_ins: HashSet<LodKey>,
-    nodes: HashMap<LodKey, Entity>,
+    stand_ins: Arc<HashSet<LodKey>>,
+    // the walk choosing nodes for a new anchor, which runs off the main thread
+    selecting: Option<Task<LodSelection>>,
+    // counts layout changes, which make a walk under the old one out of date
+    generation: u32,
+    // each node's entity, or none for one with nothing to draw, which needs no entity at all
+    nodes: HashMap<LodKey, Option<Entity>>,
+    // how many nodes exist at or below each key, so areas are walked only where nodes are
+    populated: HashMap<LodKey, u32>,
     // farthest first, so popping yields the nearest
     to_spawn: Vec<LodKey>,
     retiring: Vec<LodKey>,
@@ -395,7 +431,49 @@ pub struct LodLoader {
     water_material: Handle<WaterMaterial>,
 }
 
+// Levels `LodLoader::populated` counts up through, however far the layout reaches.
+const POPULATED_LEVELS: u8 = 16;
+
 impl LodLoader {
+    fn add_node(&mut self, key: LodKey, entity: Option<Entity>) {
+        if self.nodes.insert(key, entity).is_none() {
+            for ancestor in key.self_and_ancestors(POPULATED_LEVELS) {
+                *self.populated.entry(ancestor).or_insert(0) += 1;
+            }
+        }
+    }
+
+    fn remove_node(&mut self, key: LodKey) -> Option<Option<Entity>> {
+        let entity = self.nodes.remove(&key)?;
+        for ancestor in key.self_and_ancestors(POPULATED_LEVELS) {
+            if let Some(count) = self.populated.get_mut(&ancestor) {
+                *count -= 1;
+                if *count == 0 {
+                    self.populated.remove(&ancestor);
+                }
+            }
+        }
+        Some(entity)
+    }
+
+    /// The nodes that exist at or below `area`, found without visiting keys that hold none.
+    fn nodes_under(&self, area: LodKey) -> Vec<(LodKey, Entity)> {
+        let mut found = Vec::new();
+        let mut pending = vec![area];
+        while let Some(key) = pending.pop() {
+            if !self.populated.contains_key(&key) {
+                continue;
+            }
+            if let Some(&Some(entity)) = self.nodes.get(&key) {
+                found.push((key, entity));
+            }
+            if key.level > 1 {
+                pending.extend(key.children());
+            }
+        }
+        found
+    }
+
     pub fn layout(&self) -> LodLayout {
         self.layout
     }
@@ -407,6 +485,7 @@ impl LodLoader {
         if layout.render_distance() != self.layout.render_distance() {
             self.layout = layout;
             self.anchor = None;
+            self.generation += 1;
         }
     }
 
@@ -427,7 +506,7 @@ impl LodLoader {
         while key.level < self.layout.max_level {
             key = key.parent();
             if self.selected.contains(&key) {
-                return self.nodes.get(&key).is_some_and(|e| !pending.contains(*e));
+                return node_ready(&self.nodes, pending, key);
             }
         }
         true
@@ -447,9 +526,12 @@ impl LodLoader {
                 max_y: (world_height as i64 + CHUNK_SIZE as i64 - 1) / CHUNK_SIZE as i64,
             },
             anchor: None,
-            selected: HashSet::new(),
-            stand_ins: HashSet::new(),
+            selected: Arc::new(HashSet::new()),
+            stand_ins: Arc::new(HashSet::new()),
+            selecting: None,
+            generation: 0,
             nodes: HashMap::new(),
+            populated: HashMap::new(),
             to_spawn: Vec::new(),
             retiring: Vec::new(),
             dirty_areas: Vec::new(),
@@ -464,6 +546,7 @@ type PendingChunk = Or<(
     With<GenerateChunkData>,
     With<DirtyChunk>,
     With<GenerateChunkMesh>,
+    With<MeshedChunk>,
 )>;
 
 /// How far along a full-detail chunk is, as far as LODs are concerned.
@@ -486,7 +569,7 @@ impl ChunkState {
 pub struct ChunkStates<'w, 's> {
     loader: Res<'w, ChunkLoader>,
     pending: Query<'w, 's, (), PendingChunk>,
-    drawn: Query<'w, 's, (), (With<Chunk>, With<Mesh3d>)>,
+    drawn: Query<'w, 's, (), With<GroupedChunk>>,
 }
 
 impl ChunkStates<'_, '_> {
@@ -524,20 +607,60 @@ fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec
     queued.into_iter().map(|(.., key)| key).collect()
 }
 
+/// The nodes chosen for an anchor, and how they differ from those chosen before.
+pub struct LodSelection {
+    generation: u32,
+    anchor: ChunkCoordinate,
+    selected: HashSet<LodKey>,
+    stand_ins: HashSet<LodKey>,
+    // keys that entered or left either set, or none for a first selection
+    changed: Vec<LodKey>,
+}
+
 pub fn update_lod_selection(
     mut lods: ResMut<LodLoader>,
     chunks: ChunkStates,
     pending_lods: Query<(), With<GenerateLodMesh>>,
 ) {
-    let anchor = chunks.loader.anchor();
-    if lods.anchor == Some(anchor) {
-        return;
+    if let Some(mut task) = lods.selecting.take() {
+        match futures::check_ready(&mut task) {
+            // one chosen under a layout since replaced is thrown away
+            Some(done) if done.generation == lods.generation => apply_selection(&mut lods, done, &chunks, &pending_lods),
+            Some(_) => {}
+            None => lods.selecting = Some(task),
+        }
     }
 
-    let (selected, stand_ins) = select_lods_and_stand_ins(anchor, lods.layout, lods.band);
+    // the walk is the slow part, so it runs off the main thread, a camera move behind
+    let anchor = chunks.loader.anchor();
+    if lods.selecting.is_some() || lods.anchor == Some(anchor) {
+        return;
+    }
+    let (layout, band, generation) = (lods.layout, lods.band, lods.generation);
+    let previous = lods.anchor.map(|_| (lods.selected.clone(), lods.stand_ins.clone()));
+    lods.selecting = Some(AsyncComputeTaskPool::get().spawn(async move {
+        let (selected, stand_ins) = select_lods_and_stand_ins(anchor, layout, band);
+        // whether a node or chunk shows depends on the anchor only through these two sets, so
+        // only where they changed needs rechecking
+        let changed = previous
+            .map(|(old_selected, old_stand_ins)| {
+                selected
+                    .symmetric_difference(&old_selected)
+                    .chain(stand_ins.symmetric_difference(&old_stand_ins))
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        LodSelection { generation, anchor, selected, stand_ins, changed }
+    }));
+}
+
+fn apply_selection(lods: &mut LodLoader, done: LodSelection, chunks: &ChunkStates, pending_lods: &Query<(), With<GenerateLodMesh>>) {
+    let LodSelection { anchor, selected, stand_ins, changed, .. } = done;
+    let first = lods.anchor.is_none();
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
-    let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+    let node_ready = |key: LodKey| node_ready(nodes, pending_lods, key);
     let state = LodState {
         anchor,
         layout: lods.layout,
@@ -547,27 +670,43 @@ pub fn update_lod_selection(
         node_ready: &node_ready,
         chunk_state: &|chunk| chunks.get(chunk),
     };
-    let to_spawn = spawn_order(
-        &state,
-        selected
-            .iter()
-            .chain(stand_ins.iter().filter(|&&key| !state.covered(key)))
-            .filter(|&key| !nodes.contains_key(key))
-            .copied(),
-    );
-    let retiring = lods
-        .nodes
-        .keys()
-        .filter(|&key| !selected.contains(key))
-        .copied()
-        .collect();
 
+    // The first selection, and one for a new layout, start from scratch and check everything.
+    // After that only the keys that changed can need spawning or retiring, so nothing walks
+    // every node, of which there can be hundreds of thousands.
+    let wanted = |key: &LodKey| selected.contains(key) || (stand_ins.contains(key) && !state.covered(*key));
+    let (to_spawn, retiring) = if first {
+        let to_spawn = spawn_order(
+            &state,
+            selected
+                .iter()
+                .chain(stand_ins.iter().filter(|&&key| !state.covered(key)))
+                .filter(|&key| !nodes.contains_key(key))
+                .copied(),
+        );
+        let retiring = nodes.keys().filter(|&key| !selected.contains(key)).copied().collect();
+        (to_spawn, retiring)
+    } else {
+        // new arrivals go on the end, so are spawned first until the queue is next sorted
+        let mut to_spawn = std::mem::take(&mut lods.to_spawn);
+        to_spawn.extend(spawn_order(&state, changed.iter().copied().filter(|key| wanted(key) && !nodes.contains_key(key))));
+        let mut retiring = std::mem::take(&mut lods.retiring);
+        retiring.retain(|key| !selected.contains(key) && nodes.contains_key(key));
+        let queued: HashSet<LodKey> = retiring.iter().copied().collect();
+        retiring.extend(changed.iter().copied().filter(|key| !selected.contains(key) && nodes.contains_key(key) && !queued.contains(key)));
+        (to_spawn, retiring)
+    };
+
+    if first {
+        lods.refresh_all = true;
+    } else {
+        lods.dirty_areas.extend(changed);
+    }
     lods.anchor = Some(anchor);
-    lods.selected = selected;
-    lods.stand_ins = stand_ins;
+    lods.selected = Arc::new(selected);
+    lods.stand_ins = Arc::new(stand_ins);
     lods.to_spawn = to_spawn;
     lods.retiring = retiring;
-    lods.refresh_all = true;
 }
 
 pub fn spawn_lods(
@@ -587,7 +726,7 @@ pub fn spawn_lods(
             let nodes = &lods.nodes;
             let node_exists = |key: LodKey| nodes.contains_key(&key);
             let node_ready =
-                |key: LodKey| nodes.get(&key).is_some_and(|e| !pending.contains(*e));
+                |key: LodKey| node_ready(nodes, &pending, key);
             let state = LodState {
                 anchor,
                 layout: lods.layout,
@@ -622,10 +761,7 @@ pub fn spawn_lods(
         }
         // nothing to mesh, so the node is ready as soon as it exists
         if known_empty(key, &world.region_store) {
-            let entity = commands
-                .spawn((LodNode { key }, lod_transform(key), Visibility::Hidden))
-                .id();
-            lods.nodes.insert(key, entity);
+            lods.add_node(key, None);
             if stand_in {
                 lods.retiring.push(key);
             }
@@ -649,12 +785,17 @@ pub fn spawn_lods(
                 Visibility::Hidden,
             ))
             .id();
-        lods.nodes.insert(key, entity);
+        lods.add_node(key, Some(entity));
         if stand_in {
             lods.retiring.push(key);
         }
         in_flight += 1;
     }
+}
+
+// Whether the node at `key` exists and has its mesh, or has nothing to draw.
+fn node_ready(nodes: &HashMap<LodKey, Option<Entity>>, pending: &Query<(), With<GenerateLodMesh>>, key: LodKey) -> bool {
+    nodes.get(&key).is_some_and(|slot| slot.map_or(true, |entity| !pending.contains(entity)))
 }
 
 // Whether `key` is known to have nothing to draw, going by regions or coarse columns
@@ -712,6 +853,7 @@ pub fn load_lods(
             continue;
         };
 
+        let has_mesh = result.is_some();
         if let Some(chunk_meshes) = result {
             commands.entity(entity).insert((
                 Mesh3d(meshes.add(chunk_meshes.opaque)),
@@ -730,7 +872,13 @@ pub fn load_lods(
                 });
             }
         }
-        commands.entity(entity).remove::<GenerateLodMesh>();
+        if has_mesh {
+            commands.entity(entity).remove::<GenerateLodMesh>();
+        } else {
+            // meshed to nothing, so it needs no entity
+            commands.entity(entity).despawn();
+            lods.add_node(node.key, None);
+        }
         lods.dirty_areas.push(node.key);
 
         if start.elapsed() >= LOD_APPLY_TIME_BUDGET {
@@ -755,7 +903,7 @@ pub fn retire_lods(
     {
         let nodes = &lods.nodes;
         let node_exists = |key: LodKey| nodes.contains_key(&key);
-        let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+        let node_ready = |key: LodKey| node_ready(nodes, &pending_lods, key);
         let state = LodState {
             anchor,
             layout: lods.layout,
@@ -779,7 +927,7 @@ pub fn retire_lods(
     lods.retiring
         .retain(|key| !retired.contains(key) && !lods.selected.contains(key));
     for key in retired {
-        if let Some(entity) = lods.nodes.remove(&key) {
+        if let Some(Some(entity)) = lods.remove_node(key) {
             let visible = visibility
                 .get(entity)
                 .is_ok_and(|v| *v != Visibility::Hidden);
@@ -796,8 +944,9 @@ pub fn refresh_lod_visibility(
     time: Res<Time>,
     chunk_loader: Res<ChunkLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
-    all_chunks: Query<(Entity, &Chunk), With<Mesh3d>>,
-    new_chunks: Query<(Entity, &Chunk), Added<Mesh3d>>,
+    all_groups: Query<(Entity, &ChunkGroup), With<BuiltGroup>>,
+    new_groups: Query<(Entity, &ChunkGroup), Added<BuiltGroup>>,
+    built_groups: Query<(), With<BuiltGroup>>,
     // only nodes with something to draw - nodes still loading are shown when their mesh lands
     all_nodes: Query<(Entity, &LodNode), With<Mesh3d>>,
     mut visibility: Query<(&mut Visibility, Option<&Fade>)>,
@@ -810,7 +959,7 @@ pub fn refresh_lod_visibility(
     let lods = &mut *lods;
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
-    let node_ready = |key: LodKey| nodes.get(&key).is_some_and(|e| !pending_lods.contains(*e));
+    let node_ready = |key: LodKey| node_ready(nodes, &pending_lods, key);
     let state = LodState {
         anchor,
         layout: lods.layout,
@@ -830,37 +979,36 @@ pub fn refresh_lod_visibility(
     let node_shown = |key: LodKey| state.node_visible(key) && node_ready(key);
 
     if lods.refresh_all {
-        for (entity, chunk) in all_chunks.iter() {
-            set(entity, state.chunk_visible(chunk.coord));
+        for (entity, group) in all_groups.iter() {
+            set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
         }
         for (entity, node) in all_nodes.iter() {
             set(entity, node_shown(node.key));
         }
     } else {
         for &area in &lods.dirty_areas {
-            for chunk in area.chunks() {
-                if let Some(entity) = chunk_loader.chunk_entity(chunk) {
-                    set(entity, state.chunk_visible(chunk));
-                }
+            // a group is drawn whole, so one chunk of it says whether it shows
+            let in_area = |group: LodKey| {
+                chunk_loader.group_entity(group).filter(|&e| built_groups.contains(e)).map(|e| (group, e))
+            };
+            let width = 1usize << (3 * area.level.saturating_sub(1) as usize).min(40);
+            let groups: Vec<(LodKey, Entity)> = if width <= chunk_loader.groups.len() {
+                LodKey::groups_in(area).filter_map(in_area).collect()
+            } else {
+                chunk_loader.groups.keys().filter(|&&group| area.contains_group(group)).filter_map(|&group| in_area(group)).collect()
+            };
+            for (group, entity) in groups {
+                set(entity, state.chunk_visible(ChunkCoordinate(group.min_chunk())));
             }
-            let mut level_keys = vec![area];
-            loop {
-                for &key in &level_keys {
-                    if let Some(&entity) = nodes.get(&key) {
-                        set(entity, node_shown(key));
-                    }
-                }
-                if level_keys[0].level <= 1 {
-                    break;
-                }
-                level_keys = level_keys.iter().flat_map(|key| key.children()).collect();
+            for (key, entity) in lods.nodes_under(area) {
+                set(entity, node_shown(key));
             }
         }
     }
 
-    // newly meshed chunks arrive hidden, and fade in unless a node still covers them
-    for (entity, chunk) in new_chunks.iter() {
-        set(entity, state.chunk_visible(chunk.coord));
+    // newly built groups arrive hidden, and fade in unless a node still covers them
+    for (entity, group) in new_groups.iter() {
+        set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
     }
 
     lods.refresh_all = false;
@@ -870,11 +1018,13 @@ pub fn refresh_lod_visibility(
 #[cfg(test)]
 mod tests {
     use bevy::{
+        asset::Handle,
+        ecs::entity::Entity,
         math::I64Vec3,
         utils::{HashMap, HashSet},
     };
 
-    use super::{select_lods, ChunkState, LodBand, LodKey, LodLayout, LodState};
+    use super::{select_lods, select_lods_and_stand_ins, ChunkState, LodBand, LodKey, LodLayout, LodLoader, LodState};
     use crate::chunks::chunk::ChunkCoordinate;
 
     const BAND: LodBand = LodBand {
@@ -1394,6 +1544,98 @@ mod tests {
         assert!(!with_state(anchor, &selected, &none, &ready, true, |s| s
             .chunk_visible(c)));
     }
+    fn loader() -> LodLoader {
+        LodLoader::new(layout(4), 1024, Handle::default(), Handle::default())
+    }
+
+    fn key(level: u8, x: i64, y: i64, z: i64) -> LodKey {
+        LodKey { level, coord: I64Vec3::new(x, y, z) }
+    }
+
+    #[test]
+    fn test_nodes_under_finds_only_existing_nodes_within_the_area() {
+        let mut lods = loader();
+        let inside = [key(1, 5, 1, 6), key(2, 2, 0, 3), key(3, 1, 0, 1)];
+        // the same area's neighbours and ancestors
+        let outside = [key(3, 2, 0, 1), key(1, 8, 0, 8), key(4, 0, 0, 0)];
+        for (i, k) in inside.iter().chain(&outside).enumerate() {
+            lods.add_node(*k, Some(Entity::from_raw(i as u32)));
+        }
+        let found: HashSet<LodKey> = lods.nodes_under(key(3, 1, 0, 1)).into_iter().map(|(k, _)| k).collect();
+        // (1, 5, 1, 6) lies in (2, 2, 0, 3), which lies in (3, 1, 0, 1)
+        assert_eq!(inside.into_iter().collect::<HashSet<_>>(), found);
+    }
+
+    #[test]
+    fn test_removing_nodes_empties_the_population() {
+        let mut lods = loader();
+        lods.add_node(key(1, 3, 2, 3), Some(Entity::from_raw(0)));
+        lods.add_node(key(2, 1, 1, 1), Some(Entity::from_raw(1)));
+        assert!(lods.remove_node(key(1, 3, 2, 3)).is_some());
+        assert!(lods.remove_node(key(1, 3, 2, 3)).is_none());
+        assert!(lods.nodes_under(key(3, 0, 0, 0)).len() == 1);
+        lods.remove_node(key(2, 1, 1, 1));
+        assert!(lods.populated.is_empty());
+        assert!(lods.nodes_under(key(4, 0, 0, 0)).is_empty());
+    }
+
+    #[test]
+    fn test_nodes_without_entities_still_exist_but_are_not_found_to_refresh() {
+        let mut lods = loader();
+        lods.add_node(key(1, 2, 0, 2), None);
+        lods.add_node(key(2, 1, 0, 1), Some(Entity::from_raw(7)));
+        assert!(lods.nodes.contains_key(&key(1, 2, 0, 2)));
+        let found: Vec<LodKey> = lods.nodes_under(key(3, 0, 0, 0)).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(vec![key(2, 1, 0, 1)], found);
+        // an entity-less node later meshing to nothing, or the reverse, counts once
+        lods.add_node(key(1, 2, 0, 2), None);
+        lods.remove_node(key(1, 2, 0, 2));
+        lods.remove_node(key(2, 1, 0, 1));
+        assert!(lods.populated.is_empty());
+    }
+
+    #[test]
+    fn test_adding_a_node_twice_counts_it_once() {
+        let mut lods = loader();
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(0)));
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(1)));
+        lods.remove_node(key(2, 0, 0, 0));
+        assert!(lods.populated.is_empty());
+    }
+
+    #[test]
+    fn test_contains_group_matches_groups_in() {
+        for area in [key(1, -3, 2, 5), key(2, 1, -1, 0), key(4, -2, 1, 3)] {
+            let inside: HashSet<LodKey> = LodKey::groups_in(area).collect();
+            for x in -40..40 {
+                for z in -40..40 {
+                    for y in [-8, 0, 7] {
+                        let group = key(1, x, y, z);
+                        assert_eq!(inside.contains(&group), area.contains_group(group), "{area:?} {group:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_full_detail_changes_only_where_the_stand_ins_change() {
+        let layout = layout(3);
+        for (from, to) in [((100, 5, 100), (101, 5, 100)), ((100, 5, 100), (100, 6, 100)), ((-3, 8, 70), (-3, 8, 69))] {
+            let (a, b) = (chunk(from.0, from.1, from.2), chunk(to.0, to.1, to.2));
+            let (_, before) = select_lods_and_stand_ins(a, layout, BAND);
+            let (_, after) = select_lods_and_stand_ins(b, layout, BAND);
+            let changed: HashSet<LodKey> = before.symmetric_difference(&after).copied().collect();
+            for x in -80..80 {
+                for z in -80..80 {
+                    for y in [0, 5, 8, 15] {
+                        let c = chunk(from.0 + x, y, from.2 + z);
+                        if layout.full_detail(c, a) != layout.full_detail(c, b) {
+                            assert!(changed.contains(&LodKey::containing(c, 1)), "{c:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
-
-
