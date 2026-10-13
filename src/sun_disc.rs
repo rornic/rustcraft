@@ -43,7 +43,7 @@ impl Material for SunDiscMaterial {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Add
+        AlphaMode::Premultiplied
     }
 }
 
@@ -56,7 +56,7 @@ fn spawn_sun_disc(
         Mesh3d(meshes.add(Rectangle::new(2.0, 2.0))),
         MeshMaterial3d(materials.add(SunDiscMaterial {})),
         Transform::default(),
-        // the vertex shader places it, so its mesh bounds mean nothing
+        // the vertex shader covers the screen, so its mesh bounds mean nothing
         NoFrustumCulling,
         NotShadowCaster,
         NotShadowReceiver,
