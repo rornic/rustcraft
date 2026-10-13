@@ -63,6 +63,8 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, coarse, view_bindings::globals.time), 1.0);
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
+    // a mesh fading out sits a little farther than it is, so what replaces it wins where they coincide
+    out.position.z *= 1.0 - material_fade.z;
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
     out.uv = vertex.uv;
 #ifdef VERTEX_UVS_B

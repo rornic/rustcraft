@@ -20,9 +20,13 @@ const FADE_STEPS: usize = 16;
 /// The dither window that draws every pixel.
 pub const FULLY_VISIBLE: Vec4 = Vec4::new(0.0, 1.0, 0.0, 0.0);
 
+// A mesh fading out is drawn this fraction farther than it is, so the one replacing it wins where
+// their surfaces coincide, as a LOD node's skirts and flat ground do with full detail.
+const FADE_DEPTH_PUSH: f32 = 0.0005;
+
 // The window drawn at `step` of a fade out: one more level of the dither is gone each step.
 fn fade_window(step: usize) -> Vec4 {
-    Vec4::new((step + 1) as f32 / FADE_STEPS as f32, 1.0, 0.0, 0.0)
+    Vec4::new((step + 1) as f32 / FADE_STEPS as f32, 1.0, FADE_DEPTH_PUSH, 0.0)
 }
 
 #[derive(Resource)]
