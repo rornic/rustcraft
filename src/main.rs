@@ -2,7 +2,8 @@ use rustcraft::settings::Settings;
 
 use bevy::core_pipeline::bloom::Bloom;
 use bevy::core_pipeline::dof::{DepthOfField, DepthOfFieldMode};
-use bevy::core_pipeline::smaa::{Smaa, SmaaPreset};
+use bevy::core_pipeline::experimental::taa::TemporalAntiAliasing;
+use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
 use bevy::prelude::*;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
@@ -67,9 +68,11 @@ fn setup_scene(
                 intensity: 0.05,
                 ..Bloom::NATURAL
             },
-            // SMAA instead, for the thin faces and one-block steps that shimmer at a distance
+            // TAA for the thin faces and one-block steps that shimmer at a distance
             Msaa::Off,
-            Smaa { preset: SmaaPreset::High },
+            DepthPrepass,
+            MotionVectorPrepass,
+            TemporalAntiAliasing::default(),
             DistanceFog {
                 color: scene_colour(HORIZON_COLOR).with_alpha(FOG_MAX_OPACITY).into(),
                 falloff: FogFalloff::Linear {
@@ -134,6 +137,7 @@ fn main() {
                     }),
                     ..default()
                 }),
+            bevy::core_pipeline::experimental::taa::TemporalAntiAliasPlugin,
             MaterialPlugin::<ChunkMaterial>::default(),
             // light passes through water, so it casts no shadow
             MaterialPlugin::<WaterMaterial> {
