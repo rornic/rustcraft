@@ -60,6 +60,8 @@ const COVERAGE_POINTS: usize = 7;
 /// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
 /// is. Meshing draws it as a thin box instead, see `generator::Trunk`.
 pub const THIN_TRUNK_CELL: i64 = 4;
+// How many stacked boxes a crown is drawn as in cells too wide to hold it.
+const CROWN_LAYERS: i64 = 3;
 // How far in leaves are nibbled from the edge of a crown.
 const NIBBLE: f64 = 0.9;
 
@@ -195,22 +197,36 @@ impl Tree {
         inside >= COVERAGE_POINTS
     }
 
-    /// The crown as one box, in blocks, for cells too wide to hold it: where its leaves reach,
-    /// roughly, not cell by cell. Broadleaf crowns are the big round blob, and pines a box as wide
-    /// as their tiers are on average.
-    pub fn crown_box(&self) -> (DVec3, DVec3) {
-        let axis = self.base.as_dvec3() + self.axis();
-        let (centre, half) = match self.kind {
-            TreeKind::Broadleaf => {
-                (axis + self.crown.centre - self.axis(), DVec3::new(self.crown.radius * 1.15, self.crown.radius * self.crown.squash * 1.1, self.crown.radius * 1.15))
+    /// The crown as a few stacked boxes, in blocks from `base`'s lower corner, for cells too wide
+    /// to hold it: each layer is as wide as the leaves reach there, so a crown keeps its dome or
+    /// tiers instead of being one cuboid.
+    pub fn crown_boxes(&self) -> Vec<(DVec3, DVec3)> {
+        let mut leaves = Vec::new();
+        for y in 0..=TREE_HEIGHT {
+            for x in -TREE_REACH..=TREE_REACH {
+                for z in -TREE_REACH..=TREE_REACH {
+                    if self.in_leaves(DVec3::new(x as f64, y as f64, z as f64)) {
+                        leaves.push(I64Vec3::new(x, y, z));
+                    }
+                }
             }
-            TreeKind::Pine => {
-                let (bottom, top) = ((self.trunk / 4) as f64, (self.trunk + 1) as f64);
-                let wide = (0.6 + self.spread) * 0.65;
-                (axis + DVec3::Y * (bottom + top) / 2.0, DVec3::new(wide, (top - bottom) / 2.0, wide))
-            }
+        }
+        let (Some(low), Some(high)) = (leaves.iter().map(|l| l.y).min(), leaves.iter().map(|l| l.y).max()) else {
+            return Vec::new();
         };
-        (centre - half, centre + half)
+        let height = high - low + 1;
+        let layer = |y: i64| ((y - low) * CROWN_LAYERS / height) as usize;
+        let mut bounds: [Option<(I64Vec3, I64Vec3)>; CROWN_LAYERS as usize] = [None; CROWN_LAYERS as usize];
+        for leaf in &leaves {
+            let (min, max) = bounds[layer(leaf.y)].get_or_insert((*leaf, *leaf));
+            *min = min.min(*leaf);
+            *max = max.max(*leaf);
+        }
+        bounds
+            .into_iter()
+            .flatten()
+            .map(|(min, max)| ((self.base + min).as_dvec3(), (self.base + max + I64Vec3::ONE).as_dvec3()))
+            .collect()
     }
 
     // Whether the point `offset` from the trunk's base is among the leaves.
