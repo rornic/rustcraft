@@ -124,6 +124,16 @@ fn setup_scene(
     commands.spawn(settings);
 }
 
+// the stats runs are unfocused, which Bevy otherwise throttles to 60 fps
+fn winit_settings() -> bevy::winit::WinitSettings {
+    use bevy::winit::{UpdateMode, WinitSettings};
+    if std::env::var("RC_STATS").is_ok() {
+        WinitSettings { focused_mode: UpdateMode::Continuous, unfocused_mode: UpdateMode::Continuous }
+    } else {
+        WinitSettings::game()
+    }
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -148,6 +158,7 @@ fn main() {
             CloudPlugin,
             DebugOverlayPlugin,
         ))
+        .insert_resource(winit_settings())
         .insert_resource(ClearColor(scene_colour(HORIZON_COLOR).into()))
         .add_systems(Startup, setup_scene.after(spawn_clouds))
         .add_systems(

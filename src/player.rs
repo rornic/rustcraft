@@ -13,7 +13,7 @@ use bevy::{
         query::{With, Without},
         system::{Commands, Local, Query, Res, ResMut},
     },
-    hierarchy::Parent,
+    ecs::hierarchy::ChildOf,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
     math::{Dir3, I64Vec3, Vec3},
     pbr::{DistanceFog, FogFalloff},
@@ -52,10 +52,10 @@ impl Default for PlayerMovement {
 pub fn player_move(
     time: Res<Time>,
     mut player_query: Query<(&PlayerMovement, &mut Transform)>,
-    camera_query: Query<(&Parent, &Transform), (With<Camera>, Without<PlayerMovement>)>,
+    camera_query: Query<(&ChildOf, &Transform), (With<Camera>, Without<PlayerMovement>)>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
-    let (parent, camera_transform) = camera_query.get_single().expect("camera does not exist");
+    let (parent, camera_transform) = camera_query.single().expect("camera does not exist");
     let (player_movement, player_transform) = &mut player_query
         .get_mut(parent.get())
         .expect("player does not exist");
@@ -106,11 +106,11 @@ impl Default for PlayerLook {
 pub fn player_look(
     time: Res<Time>,
     mut player_query: Query<(&PlayerLook, &mut Transform)>,
-    mut camera_query: Query<(&Parent, &mut Transform), (With<Camera>, Without<PlayerLook>)>,
+    mut camera_query: Query<(&ChildOf, &mut Transform), (With<Camera>, Without<PlayerLook>)>,
     mut motion_evr: EventReader<MouseMotion>,
 ) {
     let (parent, camera_transform) = &mut camera_query
-        .get_single_mut()
+        .single_mut()
         .expect("camera does not exist");
     let (player_look, player_transform) = &mut player_query
         .get_mut(parent.get())
@@ -140,7 +140,7 @@ pub fn update_underwater_effects(
     mut camera_query: Query<
         (
             Entity,
-            &Parent,
+            &ChildOf,
             &Transform,
             &mut DistanceFog,
             &mut DepthOfField,
@@ -152,7 +152,7 @@ pub fn update_underwater_effects(
     mut dry_defaults: Local<Option<(DistanceFog, DepthOfField, ColorGrading, Color, Option<Skybox>)>>,
 ) {
     let (camera, parent, camera_transform, mut fog, mut dof, mut color_grading, skybox) =
-        camera_query.get_single_mut().expect("camera does not exist");
+        camera_query.single_mut().expect("camera does not exist");
     let player_transform = player_query.get(parent.get()).expect("player does not exist");
 
     let world_pos = player_transform.translation + camera_transform.translation;

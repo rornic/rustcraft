@@ -59,7 +59,8 @@ pub fn block_atlas(path: &str) -> Image {
 // light and weighting colour by alpha so cut-out texels don't darken what's left.
 fn mip_tiles(image: &mut Image, levels: u32) {
     let (mut width, mut height) = (image.width() as usize, image.height() as usize);
-    let mut level = image.data.clone();
+    let data = image.data.get_or_insert_with(Vec::new);
+    let mut level = data.clone();
     for _ in 1..levels {
         let (next_width, next_height) = (width / 2, height / 2);
         let mut next = Vec::with_capacity(next_width * next_height * 4);
@@ -81,7 +82,7 @@ fn mip_tiles(image: &mut Image, levels: u32) {
                 next.extend_from_slice(&[colour[0], colour[1], colour[2], (alpha / 4.0 * 255.0).round() as u8]);
             }
         }
-        image.data.extend_from_slice(&next);
+        data.extend_from_slice(&next);
         level = next;
         (width, height) = (next_width, next_height);
     }

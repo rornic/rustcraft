@@ -9,8 +9,8 @@ pub mod material;
 use bevy::{
     app::{App, Plugin, Update},
     asset::{Assets, Handle},
-    core::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
-    ecs::{schedule::IntoSystemConfigs, system::Commands},
+    app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
+    ecs::{schedule::IntoScheduleConfigs, system::Commands},
 };
 
 use crate::settings::{DebugSettings, RendererSettings};
@@ -59,11 +59,15 @@ pub fn task_pool_plugin() -> TaskPoolPlugin {
                 min_threads: 1,
                 max_threads: 1,
                 percent: 0.0,
+                on_thread_spawn: None,
+                on_thread_destroy: None,
             },
             async_compute: TaskPoolThreadAssignmentPolicy {
                 min_threads: 1,
                 max_threads: usize::MAX,
                 percent: 0.6,
+                on_thread_spawn: None,
+                on_thread_destroy: None,
             },
             ..Default::default()
         },

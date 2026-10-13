@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bevy::{
     math::{I64Vec3, U16Vec3, UVec3, Vec3},
-    utils::HashMap,
+    platform::collections::HashMap,
 };
 
 use crate::block::BlockType;

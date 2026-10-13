@@ -328,7 +328,7 @@ fn drift_clouds(
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut tiles: Query<(&CloudTile, &mut Transform)>,
 ) {
-    let Ok(camera) = camera.get_single() else {
+    let Ok(camera) = camera.single() else {
         return;
     };
     let camera = camera.translation().xz();

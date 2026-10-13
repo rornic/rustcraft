@@ -10,7 +10,7 @@ use bevy::math::{I64Vec3, Vec2};
 use bevy::render::mesh::{Indices, VertexAttributeValues};
 use rustcraft::chunks::generate::generator::generate_lod_mesh;
 use bevy::prelude::*;
-use bevy::utils::HashMap;
+use bevy::platform::collections::HashMap;
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use rustcraft::chunks::chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh};
 use rustcraft::chunks::group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk};

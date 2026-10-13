@@ -1,7 +1,7 @@
 use std::{fmt::Debug, sync::Arc};
 
+use bevy::prelude::Resource;
 use bevy::{
-    ecs::system::Resource,
     math::{I64Vec3, U16Vec3, Vec3},
 };
 

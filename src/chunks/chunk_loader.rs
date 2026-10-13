@@ -1,19 +1,21 @@
 use std::time::{Duration, Instant};
 
+use bevy::prelude::Resource;
 use bevy::{
     asset::Handle,
     ecs::{
         component::Component,
         entity::Entity,
         query::{With, Without},
-        system::{Commands, Query, Res, ResMut, Resource},
+        system::{Commands, Query, Res, ResMut},
     },
-    hierarchy::{DespawnRecursiveExt, Parent},
+    ecs::hierarchy::ChildOf,
     math::{Dir3, I64Vec3, Vec3},
     render::camera::Camera,
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::GlobalTransform,
-    utils::{futures, HashMap, HashSet},
+    tasks::futures,
+    platform::collections::{HashMap, HashSet},
 };
 
 use super::{
@@ -156,7 +158,7 @@ pub fn gather_chunks(
     mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
     mut world: ResMut<World>,
-    camera_query: Query<(&Parent, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
+    camera_query: Query<(&ChildOf, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
     generating_chunks_query: Query<&Chunk, With<GenerateChunkData>>,
 ) {
     let mut in_flight = generating_chunks_query.iter().count();
@@ -164,7 +166,7 @@ pub fn gather_chunks(
         return;
     }
 
-    let (_, camera) = camera_query.get_single().expect("could not find camera");
+    let (_, camera) = camera_query.single().expect("could not find camera");
 
     let camera_pos = camera.translation();
     let camera_chunk = world.block_to_chunk_coordinate(I64Vec3::new(
@@ -364,7 +366,7 @@ pub fn unload_chunks(
         {
             // recursive: chunks with water spawn a child entity for the water mesh,
             // which must be cleaned up along with the chunk itself.
-            commands.entity(entity).despawn_recursive();
+            commands.entity(entity).despawn();
             chunk_loader.chunk_to_entity.remove(&chunk.coord);
             chunk_loader.held.remove(&chunk.coord);
             world.clear_chunk(chunk.coord);
@@ -377,7 +379,7 @@ pub fn unload_chunks(
         if key.chunks().all(|chunk| !chunk_loader.chunk_to_entity.contains_key(&chunk)) {
             chunk_loader.waiting.remove(&key);
             if let Some(group) = chunk_loader.groups.remove(&key) {
-                commands.entity(group).despawn_recursive();
+                commands.entity(group).despawn();
             }
         }
     }

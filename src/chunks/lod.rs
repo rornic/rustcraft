@@ -3,15 +3,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bevy::prelude::Resource;
 use bevy::{
     asset::{Assets, Handle},
     ecs::{
         component::Component,
         entity::Entity,
         query::{Added, Or, With},
-        system::{Commands, Local, Query, Res, ResMut, Resource, SystemParam},
+        system::{Commands, Local, Query, Res, ResMut, SystemParam},
     },
-    hierarchy::{BuildChildren, ChildBuild},
+    
     math::{I64Vec2, I64Vec3, Vec3},
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
@@ -19,7 +20,8 @@ use bevy::{
     tasks::{AsyncComputeTaskPool, Task},
     time::Time,
     transform::components::Transform,
-    utils::{futures, HashMap, HashSet},
+    tasks::futures,
+    platform::collections::{HashMap, HashSet},
 };
 
 use super::{
@@ -1050,7 +1052,7 @@ mod tests {
         asset::Handle,
         ecs::entity::Entity,
         math::I64Vec3,
-        utils::{HashMap, HashSet},
+        platform::collections::{HashMap, HashSet},
     };
 
     use super::{select_lods, select_lods_and_stand_ins, ChunkState, LodBand, LodKey, LodLayout, LodLoader, LodState};

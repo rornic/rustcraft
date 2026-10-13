@@ -1,11 +1,12 @@
+use bevy::prelude::Resource;
 use bevy::{
     asset::{Assets, Handle},
     ecs::{
         component::Component,
         entity::Entity,
-        system::{Commands, Query, Res, Resource},
+        system::{Commands, Query, Res},
     },
-    hierarchy::{Children, DespawnRecursiveExt},
+    ecs::hierarchy::Children,
     math::Vec4,
     pbr::MeshMaterial3d,
     render::view::Visibility,
@@ -124,7 +125,7 @@ pub fn fade_out_and_despawn(commands: &mut Commands, entity: Entity, visible: bo
             despawn: true,
         });
     } else {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -142,7 +143,7 @@ pub fn apply_fades(
         let progress = (now - fade.start) / materials.seconds.max(f32::EPSILON);
         let (chunk, water) = if progress >= 1.0 {
             if fade.out && fade.despawn {
-                commands.entity(entity).despawn_recursive();
+                commands.entity(entity).despawn();
                 continue;
             }
             if fade.out {

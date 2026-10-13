@@ -45,10 +45,10 @@ struct DrawCounts {
     shadow: Arc<AtomicU32>,
 }
 
-// meshes never share a bin, since a bin is keyed on the mesh, so each is a draw
+// a multi-draw batch set is one draw call however many meshes it holds
 fn binned_draws<T: BinnedPhaseItem>(phases: &ViewBinnedRenderPhases<T>) -> u32 {
     let draws = |phase: &BinnedRenderPhase<T>| {
-        phase.batchable_mesh_keys.len() + phase.unbatchable_mesh_values.values().map(|v| v.entities.len()).sum::<usize>()
+        phase.multidrawable_meshes.len() + phase.batchable_meshes.len() + phase.unbatchable_meshes.values().map(|v| v.entities.len()).sum::<usize>()
     };
     phases.values().map(draws).sum::<usize>() as u32
 }
@@ -116,7 +116,7 @@ fn update_overlay(
     meshes: Res<Assets<Mesh>>,
     mut overlay: Query<(&mut Text, &Visibility), With<DebugOverlay>>,
 ) {
-    let Ok((mut text, visibility)) = overlay.get_single_mut() else {
+    let Ok((mut text, visibility)) = overlay.single_mut() else {
         return;
     };
     *since_refresh += time.delta_secs();
@@ -133,7 +133,7 @@ fn update_overlay(
         .unwrap_or(0.0);
     let _ = writeln!(out, "fps: {fps:.0}");
 
-    if let (Some(world), Ok(player)) = (&world, player.get_single()) {
+    if let (Some(world), Ok(player)) = (&world, player.single()) {
         let pos = player.translation();
         let noise = world.region_store.noise();
         let (x, z) = (pos.x as f64, pos.z as f64);

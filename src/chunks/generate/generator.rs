@@ -1626,7 +1626,7 @@ mod tests {
     use bevy::math::{I64Vec3, IVec3, U16Vec3};
     use bevy::math::Vec3;
     use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
-    use bevy::utils::HashMap;
+    use bevy::platform::collections::HashMap;
 
     use crate::block::BlockType;
 

@@ -6,7 +6,7 @@ use bevy::{
         query::{Or, With},
         system::{Commands, Query, Res, ResMut},
     },
-    hierarchy::{BuildChildren, ChildBuild},
+    
     math::Vec3,
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
@@ -17,7 +17,7 @@ use bevy::{
     },
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::Transform,
-    utils::futures,
+    tasks::futures,
 };
 
 use super::{
@@ -142,7 +142,7 @@ pub fn load_groups(
             }
         }
         for &chunk in &build.chunks {
-            if let Some(mut chunk) = commands.get_entity(chunk) {
+            if let Ok(mut chunk) = commands.get_entity(chunk) {
                 chunk.remove::<MeshedChunk>().try_insert(GroupedChunk);
             }
         }

@@ -43,7 +43,7 @@ pub fn update_horizon(
     mut lods: ResMut<LodLoader>,
     mut camera: Query<(&GlobalTransform, &mut DistanceFog, &mut Projection), With<Camera3d>>,
 ) {
-    let Ok((transform, mut fog, mut projection)) = camera.get_single_mut() else {
+    let Ok((transform, mut fog, mut projection)) = camera.single_mut() else {
         return;
     };
     let wanted = render_distance_at(lods.set_render_distance_chunks(), transform.translation().y);
