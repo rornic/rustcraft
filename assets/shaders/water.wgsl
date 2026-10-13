@@ -190,6 +190,8 @@ fn fragment(
     let ocean = smoothstep(DEEP_OCEAN_START, DEEP_OCEAN_END, raw_depth);
     let ocean_lit = DEEP_OCEAN_COLOR * mix(0.7, 1.0, brightness);
     color = vec4<f32>(mix(color.rgb, ocean_lit, ocean), color.a);
+    // open ocean is solid, or the seabed's terraces show through its dark colour
+    alpha = mix(alpha, 1.0, ocean);
 
     // Foam's noise sampling (up to 6 hash lookups per pixel between the 3 octaves
     // and the frame crossfade) is the most expensive part of this shader, for

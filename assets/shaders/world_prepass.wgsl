@@ -1,7 +1,7 @@
 // ChunkMaterial's depth-only passes, chiefly the sun's shadow maps: Bevy's own prepass
 // shader can't see the atlas, so leaves would cast solid shadows without this.
 
-#import bevy_pbr::{mesh_functions, prepass_io, view_transformations::position_world_to_clip}
+#import bevy_pbr::{mesh_functions, mesh_view_bindings::view, prepass_bindings, prepass_io, view_transformations::position_world_to_clip}
 #import bevy_render::globals::Globals
 #import "shaders/block_texture.wgsl"::{block_alpha, material_fade}
 #import "shaders/dither.wgsl"::dither_threshold
@@ -10,8 +10,8 @@
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
 @group(0) @binding(1) var<uniform> globals: Globals;
 
-// Bevy's prepass vertex shader, for meshes that are never skinned or morphed and with no
-// motion vectors, with leaves swaying just as in the main pass. Block meshes always carry
+// Bevy's prepass vertex shader, for meshes that are never skinned or morphed, with leaves
+// swaying just as in the main pass (the sway isn't in the motion vectors). Block meshes always carry
 // vertex colours, see `MeshBuffers`.
 @vertex
 fn vertex(vertex: prepass_io::Vertex) -> prepass_io::VertexOutput {
@@ -41,6 +41,11 @@ fn vertex(vertex: prepass_io::Vertex) -> prepass_io::VertexOutput {
 #endif
 #ifdef NORMAL_PREPASS_OR_DEFERRED_PREPASS
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
+#endif
+#ifdef MOTION_VECTOR_PREPASS
+    let previous_world_from_local = mesh_functions::get_previous_world_from_local(vertex.instance_index);
+    let previous = mesh_functions::mesh_position_local_to_world(previous_world_from_local, vec4<f32>(vertex.position, 1.0));
+    out.previous_world_position = vec4<f32>(swayed(previous.xyz, vertex.color.a, coarse, globals.time), 1.0);
 #endif
 #ifdef VERTEX_OUTPUT_INSTANCE_INDEX
     out.instance_index = vertex.instance_index;
@@ -89,6 +94,11 @@ fn fragment(in: prepass_io::VertexOutput) -> prepass_io::FragmentOutput {
     // the sun's shadow maps clamp depth so casters behind their near plane still count
 #ifdef DEPTH_CLAMP_ORTHO
     out.frag_depth = in.clip_position_unclamped.z;
+#endif
+#ifdef MOTION_VECTOR_PREPASS
+    let clip = view.unjittered_clip_from_world * in.world_position;
+    let previous_clip = prepass_bindings::previous_view_uniforms.clip_from_world * in.previous_world_position;
+    out.motion_vector = (clip.xy / clip.w - previous_clip.xy / previous_clip.w) * vec2(0.5, -0.5);
 #endif
     return out;
 }
