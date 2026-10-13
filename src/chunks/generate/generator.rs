@@ -11,7 +11,7 @@ use bevy::{
 use super::biome::{grass_tint, BiomeId, Biomes};
 use super::light::{SkyLight, MAX_LIGHT};
 use super::noise::NoiseGenerator;
-use super::region_store::RegionStore;
+use super::region_store::{RegionStore, SLOPE_SPAN};
 use super::WATER_LEVEL;
 use super::columns::{ColumnGrid, COARSE_CELL};
 use super::trees::{grows_into, trees_near, TreeGround, THIN_TRUNK_CELL, TREE_HEIGHT};
@@ -144,6 +144,7 @@ const CANOPY_SHADE_SPAN: f32 = 20.0;
 // The ground a coarse node's trees stand on, read from its grid of columns.
 struct GridGround<'a> {
     grid: &'a ColumnGrid,
+    noise: &'a NoiseGenerator,
     base: I64Vec2,
     cell: i64,
     size: i32,
@@ -156,26 +157,35 @@ impl GridGround<'_> {
     }
 }
 
+// Whether a tree grows, and where, is decided from the noise at its exact position, as the
+// regions full detail reads are made from it, or levels would grow different trees. Only its
+// base stands on the ground this node draws.
 impl TreeGround for GridGround<'_> {
     fn trees(&mut self, x: i64, z: i64) -> f64 {
-        let (cx, cz) = self.column(x, z);
-        self.grid.trees(cx, cz)
+        // stored as a byte
+        (self.noise.sample(x as f64, z as f64).trees * 255.0).round() / 255.0
     }
 
     fn height(&mut self, x: i64, z: i64) -> f64 {
-        let (cx, cz) = self.column(x, z);
-        self.grid.height(cx, cz)
+        // stored as a float
+        self.noise.sample(x as f64, z as f64).height as f32 as f64
     }
 
-    // the grid's slope is already summed over both axes
     fn gradient(&mut self, x: i64, z: i64) -> (f64, f64) {
-        let (cx, cz) = self.column(x, z);
-        (self.grid.gradient(cx, cz), 0.0)
+        let span = SLOPE_SPAN;
+        let scale = 1.0 / span as f64;
+        let gradient_x = self.height(x + span, z) - self.height(x - span, z);
+        let gradient_z = self.height(x, z + span) - self.height(x, z - span);
+        (gradient_x * scale, gradient_z * scale)
     }
 
     fn biome(&mut self, x: i64, z: i64) -> BiomeId {
+        self.noise.sample(x as f64, z as f64).biome
+    }
+
+    fn base_height(&mut self, x: i64, z: i64) -> i64 {
         let (cx, cz) = self.column(x, z);
-        self.grid.biome(cx, cz)
+        self.grid.height(cx, cz).round() as i64
     }
 }
 
@@ -240,7 +250,7 @@ impl LodBlocks {
             let span = (size + 1) as i64 * cell;
             if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
                 let min = I64Vec2::new(base.x, base.z) - cell;
-                let mut ground = GridGround { grid: &grid, base: I64Vec2::new(base.x, base.z), cell, size };
+                let mut ground = GridGround { grid: &grid, noise, base: I64Vec2::new(base.x, base.z), cell, size };
                 for tree in trees_near(noise, &mut ground, min, min + span + cell) {
                     // each tree's boxes are drawn by the one node its base is in
                     let at = (tree.base - base).div_euclid(I64Vec3::splat(cell));
@@ -2453,6 +2463,53 @@ mod tests {
         assert_eq!(0, blocks.cells.iter().filter(|&&c| c == BlockType::Leaves || c == BlockType::Log).count());
         assert!(blocks.boxes.is_empty());
         assert!(blocks.forest.iter().any(|&f| f > 0.0) && blocks.forest.iter().all(|&f| (0.0..=1.0).contains(&f)));
+    }
+
+    // Where trees grow within a node's own area, as full detail decides, and as the node's grid does.
+    fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Vec<(i64, i64)>, Vec<(i64, i64)>) {
+        use crate::chunks::generate::trees::trees_near;
+        use bevy::math::I64Vec2;
+        let (cell, base, size) = (key.cell_size(), key.min_block(), crate::chunks::chunk::CHUNK_SIZE as i32);
+        let span = (size + 1) as i64 * cell;
+        let min = I64Vec2::new(base.x, base.z) - cell;
+        let own = |t: &crate::chunks::generate::trees::Tree| {
+            (base.x..base.x + size as i64 * cell).contains(&t.base.x) && (base.z..base.z + size as i64 * cell).contains(&t.base.z)
+        };
+        let mut heights = regions.sampler();
+        let mut exact: Vec<_> = trees_near(regions.noise(), &mut heights, min, min + span + cell)
+            .iter()
+            .filter(|t| own(t))
+            .map(|t| (t.base.x, t.base.z))
+            .collect();
+        let grid = regions.column_grid(key);
+        let mut ground = super::GridGround { grid: &grid, noise: regions.noise(), base: I64Vec2::new(base.x, base.z), cell, size };
+        let mut coarse: Vec<_> = trees_near(regions.noise(), &mut ground, min, min + span + cell)
+            .iter()
+            .filter(|t| own(t))
+            .map(|t| (t.base.x, t.base.z))
+            .collect();
+        exact.sort();
+        coarse.sort();
+        (exact, coarse)
+    }
+
+    #[test]
+    fn test_every_level_grows_the_trees_full_detail_does() {
+        use bevy::math::I64Vec2;
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        for level in [2u8, 3, 4, 5] {
+            // nodes over a forested stretch, found from the full-detail trees
+            let mut heights = regions.sampler();
+            let trees = crate::chunks::generate::trees::trees_near(regions.noise(), &mut heights, I64Vec2::splat(-500), I64Vec2::splat(500));
+            let mut checked = 0;
+            for tree in trees.iter().step_by(trees.len() / 8 + 1) {
+                let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), level);
+                let (exact, coarse) = tree_spots(&regions, key);
+                assert_eq!(exact, coarse, "level {level} node {key:?}");
+                checked += exact.len();
+            }
+            assert!(checked > 0, "no trees checked at level {level}");
+        }
     }
 
     #[test]

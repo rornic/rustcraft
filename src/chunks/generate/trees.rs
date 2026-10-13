@@ -13,6 +13,12 @@ pub trait TreeGround {
     fn height(&mut self, x: i64, z: i64) -> f64;
     fn gradient(&mut self, x: i64, z: i64) -> (f64, f64);
     fn biome(&mut self, x: i64, z: i64) -> BiomeId;
+
+    /// The height a tree's base stands at, which a coarse node sets to the ground it draws, so
+    /// trees sit on it, while the rest above stay exact, so the same trees grow at every level.
+    fn base_height(&mut self, x: i64, z: i64) -> i64 {
+        self.height(x, z).round() as i64
+    }
 }
 
 impl TreeGround for HeightSampler<'_> {
@@ -320,7 +326,7 @@ fn tree_in_cell(noise: &NoiseGenerator, heights: &mut impl TreeGround, cx: i64, 
     } else {
         (TreeKind::Broadleaf, 10 + (growth * 6.0) as i64, 5.0 + growth * 2.0)
     };
-    Some(Tree::new(kind, I64Vec3::new(x, height, z), trunk, spread, seed))
+    Some(Tree::new(kind, I64Vec3::new(x, heights.base_height(x, z), z), trunk, spread, seed))
 }
 
 // splitmix64 over a seed and two coordinates
