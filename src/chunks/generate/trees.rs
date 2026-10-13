@@ -47,9 +47,11 @@ const MAX_GRADIENT: f64 = 1.5;
 const LOBES: usize = 3;
 // Trunks this tall are two blocks thick.
 const THICK_TRUNK: i64 = 12;
-// Cells this wide or wider judge leaves by coverage, and with this many of 27 points inside.
+// Cells this wide or wider judge leaves by coverage: a quarter of a 3 x 3 x 3 spread of points
+// inside. Cells wider than a crown, `WIDE_CELL` and up, only have to catch a couple of a finer
+// spread, or crowns would fill under a quarter of them and vanish.
 const COVERAGE_CELL: i64 = 4;
-const COVERAGE_POINTS: usize = 7;
+const WIDE_CELL: i64 = 16;
 // Cells this wide or wider leave out the trunk.
 const MAX_TRUNK_CELL: i64 = 8;
 // How far in leaves are nibbled from the edge of a crown.
@@ -169,21 +171,23 @@ impl Tree {
         }
     }
 
-    // Whether enough of the cell centred `offset` from the trunk's base is among the leaves,
-    // judged from a 3 x 3 x 3 spread of points through it.
+    // Whether enough of the cell centred `offset` from the trunk's base is among the leaves.
     fn leaf_coverage(&self, offset: DVec3, size: i64) -> bool {
-        let step = size as f64 / 3.0;
+        let (across, least) = if size >= WIDE_CELL { (5, 2) } else { (3, 7) };
+        let step = size as f64 / across as f64;
+        let half = (across - 1) as f64 / 2.0;
         let mut inside = 0;
-        for x in -1..=1 {
-            for y in -1..=1 {
-                for z in -1..=1 {
-                    if self.in_leaves(offset + DVec3::new(x as f64, y as f64, z as f64) * step) {
+        for x in 0..across {
+            for y in 0..across {
+                for z in 0..across {
+                    let point = DVec3::new(x as f64 - half, y as f64 - half, z as f64 - half) * step;
+                    if self.in_leaves(offset + point) {
                         inside += 1;
                     }
                 }
             }
         }
-        inside >= COVERAGE_POINTS
+        inside >= least
     }
 
     // Whether the point `offset` from the trunk's base is among the leaves.
