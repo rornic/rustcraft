@@ -9,8 +9,8 @@ pub mod material;
 use bevy::{
     app::{App, Plugin, Update},
     asset::{Assets, Handle},
-    core::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
-    ecs::{schedule::IntoSystemConfigs, system::Commands},
+    app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
+    ecs::{schedule::IntoScheduleConfigs, system::Commands},
 };
 
 use crate::settings::{DebugSettings, RendererSettings};
@@ -59,11 +59,15 @@ pub fn task_pool_plugin() -> TaskPoolPlugin {
                 min_threads: 1,
                 max_threads: 1,
                 percent: 0.0,
+                on_thread_spawn: None,
+                on_thread_destroy: None,
             },
             async_compute: TaskPoolThreadAssignmentPolicy {
                 min_threads: 1,
                 max_threads: usize::MAX,
                 percent: 0.6,
+                on_thread_spawn: None,
+                on_thread_destroy: None,
             },
             ..Default::default()
         },
@@ -78,6 +82,7 @@ pub fn insert_terrain_resources(
     world_height: u64,
     chunk_material: Handle<ChunkMaterial>,
     water_material: Handle<WaterMaterial>,
+    solid_water_material: Handle<WaterMaterial>,
     chunk_materials: &mut Assets<ChunkMaterial>,
     water_materials: &mut Assets<WaterMaterial>,
 ) {
@@ -86,6 +91,7 @@ pub fn insert_terrain_resources(
         renderer.lod_fade_seconds,
         chunk_material.clone(),
         water_material.clone(),
+        solid_water_material.clone(),
         chunk_materials,
         water_materials,
     ));
@@ -94,6 +100,7 @@ pub fn insert_terrain_resources(
         world_height,
         chunk_material.clone(),
         water_material.clone(),
+        solid_water_material,
     ));
     commands.insert_resource(ChunkLoader::new(
         layout,

@@ -3,13 +3,15 @@ use std::f64::consts::TAU;
 use bevy::{
     asset::{Asset, RenderAssetUsages},
     image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
-    pbr::{MaterialPipeline, MaterialPipelineKey, NotShadowCaster, NotShadowReceiver},
+    pbr::{MaterialPipeline, MaterialPipelineKey},
+    light::{NotShadowCaster, NotShadowReceiver},
+    shader::ShaderRef,
     prelude::*,
     reflect::TypePath,
     render::{
         mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology},
         render_resource::{
-            AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderRef, SpecializedMeshPipelineError,
+            AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
             TextureDimension, TextureFormat,
         },
     },
@@ -47,12 +49,7 @@ pub struct CloudPlugin;
 
 impl Plugin for CloudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<CloudMaterial> {
-            // clouds are far above anything they could shade, see `CLOUD_BASE`
-            prepass_enabled: false,
-            shadows_enabled: false,
-            ..default()
-        })
+        app.add_plugins(MaterialPlugin::<CloudMaterial>::default())
         .add_systems(Startup, spawn_clouds)
         .add_systems(Update, drift_clouds);
     }
@@ -65,8 +62,17 @@ pub struct CloudMaterial {
 }
 
 impl Material for CloudMaterial {
+    // clouds are far above anything they could shade, see `CLOUD_BASE`
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
     fn fragment_shader() -> ShaderRef {
-        "shaders/clouds.wgsl".into()
+        "shaders/clouds.wesl".into()
     }
 
     // blended meshes draw by their origin's distance, which means nothing for a tile this wide, and put clouds under water
@@ -79,7 +85,7 @@ impl Material for CloudMaterial {
     }
 
     fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
+        _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
@@ -90,7 +96,7 @@ impl Material for CloudMaterial {
 }
 
 /// The cloud pattern, for the land's shader to cast clouds' shadows with, see
-/// `cloud_shadow.wgsl`. Spawned by `spawn_clouds`.
+/// `cloud_shadow.wesl`. Spawned by `spawn_clouds`.
 #[derive(Resource, Clone)]
 pub struct CloudLayer {
     /// The pattern, one texel a cell, cloud where it's 1.
@@ -328,7 +334,7 @@ fn drift_clouds(
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut tiles: Query<(&CloudTile, &mut Transform)>,
 ) {
-    let Ok(camera) = camera.get_single() else {
+    let Ok(camera) = camera.single() else {
         return;
     };
     let camera = camera.translation().xz();
@@ -434,7 +440,7 @@ mod tests {
         let mut pattern = vec![false; PATTERN * PATTERN];
         pattern[3 * PATTERN + 200] = true;
         let image = pattern_image(&pattern);
-        let data = image.data.as_slice();
+        let data = image.data.as_deref().unwrap();
         assert_eq!(255, data[200 * PATTERN + 3]);
         assert_eq!(1, data.iter().filter(|&&v| v > 0).count());
     }

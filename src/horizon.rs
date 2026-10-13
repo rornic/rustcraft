@@ -1,12 +1,11 @@
 use bevy::{
-    core_pipeline::core_3d::Camera3d,
+    camera::{Camera3d, Projection},
     ecs::{
         query::With,
         system::{Query, Res, ResMut},
     },
     math::FloatExt,
     pbr::{DistanceFog, FogFalloff},
-    render::camera::Projection,
     time::Time,
     transform::components::GlobalTransform,
 };
@@ -37,13 +36,13 @@ pub fn render_distance_at(set_distance: f32, height: f32) -> f32 {
 }
 
 /// Draws terrain further out the higher the camera climbs, and moves the fog with it: half
-/// fogged where the farthest LOD level starts, fully fogged at the edge, see `fog.wgsl`.
+/// fogged where the farthest LOD level starts, fully fogged at the edge, see `fog.wesl`.
 pub fn update_horizon(
     time: Res<Time>,
     mut lods: ResMut<LodLoader>,
     mut camera: Query<(&GlobalTransform, &mut DistanceFog, &mut Projection), With<Camera3d>>,
 ) {
-    let Ok((transform, mut fog, mut projection)) = camera.get_single_mut() else {
+    let Ok((transform, mut fog, mut projection)) = camera.single_mut() else {
         return;
     };
     let wanted = render_distance_at(lods.set_render_distance_chunks(), transform.translation().y);

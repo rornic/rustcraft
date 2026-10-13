@@ -5,9 +5,9 @@ use bevy::{
     ecs::bundle::Bundle,
     image::Image,
     math::{Quat, Vec3},
-    pbr::{CascadeShadowConfigBuilder, DirectionalLight},
+    light::{CascadeShadowConfigBuilder, DirectionalLight},
+    camera::Exposure,
     render::{
-        camera::Exposure,
         render_resource::{
             Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension,
         },
@@ -47,7 +47,7 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
         DirectionalLight {
             color: SUN_COLOR,
             illuminance: SUN_BRIGHTNESS / Exposure::default().exposure(),
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..Default::default()
         },
         Transform::default().looking_to(-SUN_DIRECTION, Vec3::Y),
@@ -85,14 +85,14 @@ pub fn gradient_skybox(images: &mut Assets<Image>) -> Skybox {
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
-    image.reinterpret_stacked_2d_as_array(6);
+    image.reinterpret_stacked_2d_as_array(6).expect("the skybox image stacks six square faces");
     image.texture_view_descriptor = Some(TextureViewDescriptor {
         dimension: Some(TextureViewDimension::Cube),
         ..Default::default()
     });
 
     Skybox {
-        image: images.add(image),
+        image: Some(images.add(image)),
         // cancels out camera exposure, which the terrain shaders also cancel
         brightness: SKY_TEXTURE_RANGE / Exposure::default().exposure(),
         rotation: Quat::IDENTITY,

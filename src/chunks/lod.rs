@@ -3,29 +3,32 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bevy::prelude::Resource;
 use bevy::{
     asset::{Assets, Handle},
     ecs::{
         component::Component,
         entity::Entity,
         query::{Added, Or, With},
-        system::{Commands, Local, Query, Res, ResMut, Resource, SystemParam},
+        system::{Commands, Local, Query, Res, ResMut, SystemParam},
     },
-    hierarchy::{BuildChildren, ChildBuild},
+    
     math::{I64Vec2, I64Vec3, Vec3},
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
-    render::{mesh::Mesh, primitives::Aabb, view::Visibility},
+    camera::{primitives::Aabb, visibility::Visibility},
+    render::mesh::Mesh,
     tasks::{AsyncComputeTaskPool, Task},
     time::Time,
     transform::components::Transform,
-    utils::{futures, HashMap, HashSet},
+    tasks::futures,
+    platform::collections::{HashMap, HashSet},
 };
 
 use super::{
     chunk::{ChunkCoordinate, CHUNK_SIZE},
     chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
-    fade::{fade_out_and_despawn, set_shown, Fade},
+    fade::{fade_out_and_despawn, set_shown, Fade, SolidWater},
     group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk},
     generate::{
         columns::COARSE_CELL,
@@ -429,6 +432,7 @@ pub struct LodLoader {
     refresh_all: bool,
     material: Handle<ChunkMaterial>,
     water_material: Handle<WaterMaterial>,
+    solid_water_material: Handle<WaterMaterial>,
 }
 
 // Levels `LodLoader::populated` counts up through, however far the layout reaches.
@@ -546,6 +550,7 @@ impl LodLoader {
         world_height: u64,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
+        solid_water_material: Handle<WaterMaterial>,
     ) -> Self {
         Self {
             set_layout: layout,
@@ -567,6 +572,7 @@ impl LodLoader {
             refresh_all: false,
             material,
             water_material,
+            solid_water_material,
         }
     }
 }
@@ -869,6 +875,10 @@ fn lod_aabb() -> Aabb {
     Aabb::from_min_max(Vec3::splat(-0.5), Vec3::splat(size - 0.5))
 }
 
+// From this level up, water draws with the opaque meshes. Blended meshes are drawn one at a time,
+// where Bevy batches opaque ones into a few draws, and water this far out is nearly opaque anyway.
+const SOLID_WATER_LEVEL: u8 = 2;
+
 pub fn load_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
@@ -886,18 +896,22 @@ pub fn load_lods(
         if let Some(chunk_meshes) = result {
             commands.entity(entity).insert((
                 Mesh3d(meshes.add(chunk_meshes.opaque)),
-                MeshMaterial3d(lods.material.clone_weak()),
+                MeshMaterial3d(lods.material.clone()),
                 lod_aabb(),
             ));
             if let Some(water_mesh) = chunk_meshes.water {
-                let water_material = lods.water_material.clone_weak();
+                let solid = node.key.level >= SOLID_WATER_LEVEL;
+                let water_material = if solid { &lods.solid_water_material } else { &lods.water_material }.clone();
                 commands.entity(entity).with_children(|parent| {
-                    parent.spawn((
+                    let mut water = parent.spawn((
                         Mesh3d(meshes.add(water_mesh)),
                         MeshMaterial3d(water_material),
                         Transform::default(),
                         lod_aabb(),
                     ));
+                    if solid {
+                        water.insert(SolidWater);
+                    }
                 });
             }
         }
@@ -1050,7 +1064,7 @@ mod tests {
         asset::Handle,
         ecs::entity::Entity,
         math::I64Vec3,
-        utils::{HashMap, HashSet},
+        platform::collections::{HashMap, HashSet},
     };
 
     use super::{select_lods, select_lods_and_stand_ins, ChunkState, LodBand, LodKey, LodLayout, LodLoader, LodState};
@@ -1574,7 +1588,7 @@ mod tests {
             .chunk_visible(c)));
     }
     fn loader() -> LodLoader {
-        LodLoader::new(layout(4), 1024, Handle::default(), Handle::default())
+        LodLoader::new(layout(4), 1024, Handle::default(), Handle::default(), Handle::default())
     }
 
     fn key(level: u8, x: i64, y: i64, z: i64) -> LodKey {
@@ -1588,7 +1602,7 @@ mod tests {
         // the same area's neighbours and ancestors
         let outside = [key(3, 2, 0, 1), key(1, 8, 0, 8), key(4, 0, 0, 0)];
         for (i, k) in inside.iter().chain(&outside).enumerate() {
-            lods.add_node(*k, Some(Entity::from_raw(i as u32)));
+            lods.add_node(*k, Some(Entity::from_raw_u32(i as u32).unwrap()));
         }
         let found: HashSet<LodKey> = lods.nodes_under(key(3, 1, 0, 1)).into_iter().map(|(k, _)| k).collect();
         // (1, 5, 1, 6) lies in (2, 2, 0, 3), which lies in (3, 1, 0, 1)
@@ -1598,8 +1612,8 @@ mod tests {
     #[test]
     fn test_removing_nodes_empties_the_population() {
         let mut lods = loader();
-        lods.add_node(key(1, 3, 2, 3), Some(Entity::from_raw(0)));
-        lods.add_node(key(2, 1, 1, 1), Some(Entity::from_raw(1)));
+        lods.add_node(key(1, 3, 2, 3), Some(Entity::from_raw_u32(0).unwrap()));
+        lods.add_node(key(2, 1, 1, 1), Some(Entity::from_raw_u32(1).unwrap()));
         assert!(lods.remove_node(key(1, 3, 2, 3)).is_some());
         assert!(lods.remove_node(key(1, 3, 2, 3)).is_none());
         assert!(lods.nodes_under(key(3, 0, 0, 0)).len() == 1);
@@ -1612,7 +1626,7 @@ mod tests {
     fn test_nodes_without_entities_still_exist_but_are_not_found_to_refresh() {
         let mut lods = loader();
         lods.add_node(key(1, 2, 0, 2), None);
-        lods.add_node(key(2, 1, 0, 1), Some(Entity::from_raw(7)));
+        lods.add_node(key(2, 1, 0, 1), Some(Entity::from_raw_u32(7).unwrap()));
         assert!(lods.nodes.contains_key(&key(1, 2, 0, 2)));
         let found: Vec<LodKey> = lods.nodes_under(key(3, 0, 0, 0)).into_iter().map(|(k, _)| k).collect();
         assert_eq!(vec![key(2, 1, 0, 1)], found);
@@ -1626,8 +1640,8 @@ mod tests {
     #[test]
     fn test_adding_a_node_twice_counts_it_once() {
         let mut lods = loader();
-        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(0)));
-        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw(1)));
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw_u32(0).unwrap()));
+        lods.add_node(key(2, 0, 0, 0), Some(Entity::from_raw_u32(1).unwrap()));
         lods.remove_node(key(2, 0, 0, 0));
         assert!(lods.populated.is_empty());
     }

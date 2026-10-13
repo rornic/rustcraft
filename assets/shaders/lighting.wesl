@@ -1,6 +1,6 @@
 // The sun and sky's light, shared by everything lit outdoors.
 
-#import bevy_pbr::mesh_view_bindings as view_bindings
+import bevy_pbr::render::mesh_view_bindings as view_bindings;
 
 // Light falling on a face from the open sky, cool against the warm sun: faces up get
 // the sky's blue, faces down only what the ground bounces back.
@@ -19,9 +19,6 @@ fn direct_sun(normal: vec3<f32>) -> vec3<f32> {
         return vec3<f32>(0.0);
     }
     let sun = &view_bindings::lights.directional_lights[0];
-    if (*sun).skip != 0u {
-        return vec3<f32>(0.0);
-    }
     let radiance = (*sun).color.rgb * view_bindings::view.exposure;
     return radiance * max(dot(normal, (*sun).direction_to_light), 0.0);
 }

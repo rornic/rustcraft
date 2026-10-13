@@ -4,10 +4,11 @@ use bevy::{
     pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     reflect::TypePath,
+    shader::{ShaderDefVal, ShaderRef},
     render::{
         mesh::MeshVertexBufferLayoutRef,
         render_resource::{
-            AsBindGroup, Face, RenderPipelineDescriptor, ShaderDefVal, ShaderRef,
+            AsBindGroup, Face, RenderPipelineDescriptor,
             SpecializedMeshPipelineError,
         },
     },
@@ -17,7 +18,7 @@ use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::settings::DebugSettings;
 
-// Sea level, where `fog.wgsl` turns from fog across the land to murk all round.
+// Sea level, where `fog.wesl` turns from fog across the land to murk all round.
 pub(crate) fn water_level() -> ShaderDefVal {
     ShaderDefVal::Int("WATER_LEVEL".into(), WATER_LEVEL as i32)
 }
@@ -59,7 +60,8 @@ pub fn block_atlas(path: &str) -> Image {
 // light and weighting colour by alpha so cut-out texels don't darken what's left.
 fn mip_tiles(image: &mut Image, levels: u32) {
     let (mut width, mut height) = (image.width() as usize, image.height() as usize);
-    let mut level = image.data.clone();
+    let data = image.data.get_or_insert_with(Vec::new);
+    let mut level = data.clone();
     for _ in 1..levels {
         let (next_width, next_height) = (width / 2, height / 2);
         let mut next = Vec::with_capacity(next_width * next_height * 4);
@@ -81,7 +83,7 @@ fn mip_tiles(image: &mut Image, levels: u32) {
                 next.extend_from_slice(&[colour[0], colour[1], colour[2], (alpha / 4.0 * 255.0).round() as u8]);
             }
         }
-        image.data.extend_from_slice(&next);
+        data.extend_from_slice(&next);
         level = next;
         (width, height) = (next_width, next_height);
     }
@@ -118,21 +120,21 @@ impl From<&ChunkMaterial> for DebugSettings {
 impl Material for ChunkMaterial {
     // sways leaves in the wind
     fn vertex_shader() -> ShaderRef {
-        "shaders/world.wgsl".into()
+        "shaders/world.wesl".into()
     }
 
     fn fragment_shader() -> ShaderRef {
-        "shaders/world.wgsl".into()
+        "shaders/world.wesl".into()
     }
 
     // sways leaves just as the main pass does, so they keep to their shadows
     fn prepass_vertex_shader() -> ShaderRef {
-        "shaders/world_prepass.wgsl".into()
+        "shaders/world_prepass.wesl".into()
     }
 
     // cuts the holes in leaves out of their shadows too
     fn prepass_fragment_shader() -> ShaderRef {
-        "shaders/world_prepass.wgsl".into()
+        "shaders/world_prepass.wesl".into()
     }
 
     // solid leaves have no holes to cut, so are drawn as opaque
@@ -145,13 +147,13 @@ impl Material for ChunkMaterial {
     }
 
     fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
+        _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = Some(Face::Front);
-        // the main and shadow passes both sway leaves, see `foliage.wgsl`
+        // the main and shadow passes both sway leaves, see `foliage.wesl`
         let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), BlockType::Leaves as u32 - 1);
         let mut defs = vec![leaf_cell, water_level()];
         // compiled in or out, so the switches leave no trace of the code they turn off
@@ -176,23 +178,39 @@ pub struct WaterMaterial {
     // the dither window drawn, see `fade::FadeMaterials`
     #[uniform(3)]
     pub fade: Vec4,
+    // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
+    pub solid: bool,
 }
 
 impl Material for WaterMaterial {
+    // light passes through water, so it casts no shadow
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    // its waves would put a prepass's depth off the main pass's
+    fn enable_prepass() -> bool {
+        false
+    }
+
     fn vertex_shader() -> ShaderRef {
-        "shaders/water.wgsl".into()
+        "shaders/water.wesl".into()
     }
 
     fn fragment_shader() -> ShaderRef {
-        "shaders/water.wgsl".into()
+        "shaders/water.wesl".into()
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Blend
+        if self.solid {
+            AlphaMode::Opaque
+        } else {
+            AlphaMode::Blend
+        }
     }
 
     fn specialize(
-        _pipeline: &MaterialPipeline<Self>,
+        _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
@@ -216,14 +234,14 @@ mod tests {
         let levels = tile.ilog2() as usize + 1;
         assert_eq!(levels as u32, atlas.texture_descriptor.mip_level_count);
         let texels: usize = (0..levels).map(|l| (atlas.width() as usize >> l) * (tile >> l)).sum();
-        assert_eq!(texels * 4, atlas.data.len());
+        assert_eq!(texels * 4, atlas.data.as_ref().unwrap().len());
         // the last level has one texel for each of the atlas's tiles
         assert_eq!(atlas.width() as usize / tile, atlas.width() as usize >> (levels - 1));
     }
 
-    // `block_mean`'s colours in block_texture.wgsl, in atlas order
+    // `block_mean`'s colours in block_texture.wesl, in atlas order
     fn shader_means() -> Vec<[f32; 3]> {
-        let shader = std::fs::read_to_string("assets/shaders/block_texture.wgsl").unwrap();
+        let shader = std::fs::read_to_string("assets/shaders/block_texture.wesl").unwrap();
         shader
             .lines()
             .filter_map(|line| line.trim().strip_prefix("vec3<f32>(")?.split(')').next())
