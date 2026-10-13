@@ -1045,10 +1045,6 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
     SkyLight::new(min, span, sky_above(top, 1), opacity)
 }
 
-// Ambient occlusion is barely visible on cells this many blocks across or more, but stops
-// their faces merging, so coarser block LODs leave it out.
-const AO_MAX_CELL_SIZE: i64 = 4;
-
 // Cells wider than this draw their block's mean colour instead of its texture, which tiles a
 // cell's width of times over a face, since one stretched over a coarse cell would read as a
 // giant block. Past a few blocks a tile is under a pixel and mipmaps down to the mean anyway.
@@ -1068,7 +1064,7 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
     });
     let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
     // untextured leaves are drawn solid, so hide the leaves behind them
-    let meshes = mesh_blocks(&blocks, cell_size, cell_size <= AO_MAX_CELL_SIZE, textured, !textured, &tint, &light);
+    let meshes = mesh_blocks(&blocks, cell_size, true, textured, !textured, &tint, &light);
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
     }
