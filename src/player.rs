@@ -1,9 +1,6 @@
 use std::sync::LazyLock;
 
 use bevy::{
-    core_pipeline::{
-                Skybox,
-    },
     ecs::{
         bundle::Bundle,
         component::Component,
@@ -15,7 +12,8 @@ use bevy::{
     ecs::hierarchy::ChildOf,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
     math::{Dir3, I64Vec3, Vec3},
-    pbr::{DistanceFog, FogFalloff},
+    light::AtmosphereEnvironmentMapLight,
+    pbr::{AtmosphereSettings, DistanceFog, FogFalloff},
     prelude::{default, ClearColor, Color, Transform},
     camera::Camera,
     post_process::dof::{DepthOfField, DepthOfFieldMode},
@@ -129,7 +127,16 @@ pub fn player_look(
     }
 }
 
-// Snapshots whichever DistanceFog/DepthOfField/ClearColor/Skybox were active right before the camera
+pub struct DryDefaults {
+    fog: DistanceFog,
+    dof: DepthOfField,
+    color_grading: ColorGrading,
+    clear_color: Color,
+    atmosphere: Option<AtmosphereSettings>,
+    environment: Option<AtmosphereEnvironmentMapLight>,
+}
+
+// Snapshots whichever DistanceFog/DepthOfField/ClearColor/atmosphere were active right before the camera
 // entered water, and restores that exact snapshot on exit, instead of hardcoding "dry" defaults
 // that could drift out of sync with setup_scene's render-distance-derived fog settings.
 #[allow(clippy::type_complexity)]
@@ -146,13 +153,14 @@ pub fn update_underwater_effects(
             &mut DistanceFog,
             &mut DepthOfField,
             &mut ColorGrading,
-            Option<&Skybox>,
+            Option<&AtmosphereSettings>,
+            Option<&AtmosphereEnvironmentMapLight>,
         ),
         With<Camera>,
     >,
-    mut dry_defaults: Local<Option<(DistanceFog, DepthOfField, ColorGrading, Color, Option<Skybox>)>>,
+    mut dry_defaults: Local<Option<DryDefaults>>,
 ) {
-    let (camera, parent, camera_transform, mut fog, mut dof, mut color_grading, skybox) =
+    let (camera, parent, camera_transform, mut fog, mut dof, mut color_grading, atmosphere, environment) =
         camera_query.single_mut().expect("camera does not exist");
     let player_transform = player_query.get(parent.parent()).expect("player does not exist");
 
@@ -165,15 +173,16 @@ pub fn update_underwater_effects(
 
     if world.get_block_at(block_coord) == BlockType::Water {
         if dry_defaults.is_none() {
-            *dry_defaults = Some((
-                fog.clone(),
-                *dof,
-                color_grading.clone(),
-                clear_color.0,
-                skybox.cloned(),
-            ));
-            // the skybox isn't fogged, so it's taken off to show the underwater colour
-            commands.entity(camera).remove::<Skybox>();
+            *dry_defaults = Some(DryDefaults {
+                fog: fog.clone(),
+                dof: *dof,
+                color_grading: color_grading.clone(),
+                clear_color: clear_color.0,
+                atmosphere: atmosphere.cloned(),
+                environment: environment.cloned(),
+            });
+            // the sky isn't fogged, so it's taken off to show the underwater colour
+            commands.entity(camera).remove::<(AtmosphereSettings, AtmosphereEnvironmentMapLight)>();
         }
         // Matches ClearColor to the fog color, same trick setup_scene uses above water (its
         // ClearColor equals the dry fog's color) - otherwise empty/unloaded space shows the old
@@ -197,15 +206,16 @@ pub fn update_underwater_effects(
         color_grading.global.temperature = -0.4;
         color_grading.global.post_saturation = 0.85;
         clear_color.0 = underwater_color;
-    } else if let Some((dry_fog, dry_dof, dry_color_grading, dry_clear_color, dry_skybox)) =
-        dry_defaults.take()
-    {
-        *fog = dry_fog;
-        *dof = dry_dof;
-        *color_grading = dry_color_grading;
-        clear_color.0 = dry_clear_color;
-        if let Some(skybox) = dry_skybox {
-            commands.entity(camera).insert(skybox);
+    } else if let Some(dry) = dry_defaults.take() {
+        *fog = dry.fog;
+        *dof = dry.dof;
+        *color_grading = dry.color_grading;
+        clear_color.0 = dry.clear_color;
+        if let Some(atmosphere) = dry.atmosphere {
+            commands.entity(camera).insert(atmosphere);
+        }
+        if let Some(environment) = dry.environment {
+            commands.entity(camera).insert(environment);
         }
     }
 }

@@ -62,8 +62,8 @@ pub fn displayed(scene: LinearRgba) -> LinearRgba {
     LinearRgba::from_vec3(displayed_rgb(scene.to_vec3())).with_alpha(scene.alpha)
 }
 
-/// The scene colour to draw for `display` to show on screen after tonemapping: for things
-/// like the sky and fog that were picked to look a certain way rather than be lit.
+/// The scene colour to draw for `display` to show on screen after tonemapping: for
+/// the underwater murk, which is picked to look a certain way rather than be lit.
 pub fn scene_colour(display: Color) -> LinearRgba {
     let display = display.to_linear();
     let target = display.to_vec3();
