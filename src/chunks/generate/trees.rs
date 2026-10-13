@@ -49,9 +49,11 @@ const LOBES: usize = 3;
 const THICK_TRUNK: i64 = 12;
 // Cells this wide or wider judge leaves by coverage: a quarter of a 3 x 3 x 3 spread of points
 // inside. Cells wider than a crown, `WIDE_CELL` and up, only have to catch a couple of a finer
-// spread, or crowns would fill under a quarter of them and vanish.
+// spread, or crowns would fill under a quarter of them and vanish. A spread has to be finer than
+// a crown, so it gets finer again at `WIDER_CELL`.
 const COVERAGE_CELL: i64 = 4;
 const WIDE_CELL: i64 = 16;
+const WIDER_CELL: i64 = 32;
 /// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
 /// is. Meshing draws it as a thin box instead, see `generator::Trunk`.
 pub const THIN_TRUNK_CELL: i64 = 4;
@@ -174,7 +176,11 @@ impl Tree {
 
     // Whether enough of the cell centred `offset` from the trunk's base is among the leaves.
     fn leaf_coverage(&self, offset: DVec3, size: i64) -> bool {
-        let (across, least) = if size >= WIDE_CELL { (5, 2) } else { (3, 7) };
+        let (across, least) = match size {
+            s if s >= WIDER_CELL => (9, 2),
+            s if s >= WIDE_CELL => (5, 2),
+            _ => (3, 7),
+        };
         let step = size as f64 / across as f64;
         let half = (across - 1) as f64 / 2.0;
         let mut inside = 0;

@@ -125,7 +125,7 @@ const CANOPY_COVER: f64 = 1.6;
 const CANOPY_MIN_COVER: f64 = 0.5;
 const CANOPY_HEIGHTS: (i64, i64) = (12, 28);
 // Coarse cells up to this wide hold real trees, and wider ones a canopy sheet over dense forest.
-const TREE_MAX_CELL: i64 = 16;
+const TREE_MAX_CELL: i64 = 32;
 // Leaves at the foot of a canopy are this much darker than at its top, over this many blocks.
 const CANOPY_SHADE: f32 = 0.45;
 const CANOPY_SHADE_SPAN: f32 = 20.0;
@@ -2321,7 +2321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_lone_tree_is_still_there_in_every_cell_up_to_sixteen_wide() {
+    fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
         use crate::chunks::generate::trees::trees_near;
         use bevy::math::I64Vec2;
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
@@ -2332,7 +2332,7 @@ mod tests {
         };
         let tree = trees.iter().find(|t| trees.iter().filter(|o| near(t, o)).count() == 1).expect("no lone tree");
         let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
-        for level in [1u8, 2, 3, 4] {
+        for level in [1u8, 2, 3, 4, 5] {
             let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), level);
             let blocks = LodBlocks::sample(&regions, key);
             let leaves = blocks.cells.iter().filter(|&&c| c == BlockType::Leaves).count();
@@ -2351,7 +2351,7 @@ mod tests {
             (a.base.x - b.base.x).abs() < 40 && (a.base.z - b.base.z).abs() < 40
         };
         let tree = trees.iter().find(|t| trees.iter().filter(|o| near(t, o)).count() == 1).expect("no lone tree");
-        for level in [2u8, 3, 4] {
+        for level in [2u8, 3, 4, 5] {
             let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), level);
             let blocks = LodBlocks::sample(&regions, key);
             let cell = key.cell_size() as f32;
