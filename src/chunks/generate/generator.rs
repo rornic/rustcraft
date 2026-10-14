@@ -1097,6 +1097,8 @@ struct MeshBuffers {
     lights: Vec<f32>,
     // whether faces draw their block's mean colour instead of its texture, see `world.wesl`
     untextured: bool,
+    // grass sides' vertices and their shade without the grass's tint, see `tint_grass_sides`
+    grass_sides: Vec<(usize, f32)>,
     // where tree boxes start and how they draw, which is on their own terms
     boxes: Option<(usize, f32)>,
 }
@@ -1200,6 +1202,21 @@ impl MeshBuffers {
         }
     }
 
+    // Grass sides carry the grass's tint, which the dirt in their tile mustn't take, so their shade
+    // without it goes in place of how they draw. A block a pixel or so tall shows its side's tile
+    // averaged, mostly dirt, so far off they turn to the tinted grass top, see `world.wesl`.
+    fn tint_grass_sides(&mut self, grass_tint: &GrassTint) {
+        let side = Tile::GrassSide.atlas_cell();
+        for (i, (vertex, color)) in self.vertices.iter().zip(&mut self.colors).enumerate() {
+            if color[3] == side {
+                let shade = color[0];
+                let tinted = grass_tint.at(Vec3::from(vertex.position)) * shade;
+                color[..3].copy_from_slice(&tinted.to_array());
+                self.grass_sides.push((i, shade));
+            }
+        }
+    }
+
     fn build_mesh(self) -> Mesh {
         let mut mesh = Mesh::new(
             bevy::render::mesh::PrimitiveTopology::TriangleList,
@@ -1224,7 +1241,7 @@ impl MeshBuffers {
         );
         if !self.lights.is_empty() {
             assert_eq!(self.lights.len(), self.vertices.len(), "only some vertices carry light");
-            let lights = self
+            let mut lights: Vec<[f32; 2]> = self
                 .lights
                 .into_iter()
                 .enumerate()
@@ -1233,6 +1250,9 @@ impl MeshBuffers {
                     _ => [l, if self.untextured { UNTEXTURED } else { TEXTURED }],
                 })
                 .collect();
+            for (i, shade) in self.grass_sides {
+                lights[i][1] = -shade;
+            }
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(lights));
         }
         mesh
@@ -1886,6 +1906,7 @@ fn mesh_blocks(
         grass_tint,
         light,
     );
+    opaque.tint_grass_sides(grass_tint);
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly
     const BOX_LIGHT: f32 = 0.8;
     // past them, so wide a box would show through to its back where leaves' holes line up, so
@@ -2470,13 +2491,44 @@ mod tests {
     }
 
     #[test]
-    fn test_only_the_grass_top_is_tinted() {
+    fn test_only_grass_tops_and_sides_are_tinted() {
         let mut chunk = ChunkData::default();
         chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
         chunk.set_block_at(U16Vec3::new(10, 4, 10), BlockType::Grass);
         let colours = tints(&mesh_chunk(chunk).opaque);
-        assert_eq!(44, colours.iter().filter(|c| **c == Vec3::ONE).count());
-        assert_eq!(4, colours.iter().filter(|c| **c != Vec3::ONE).count());
+        assert_eq!(28, colours.iter().filter(|c| **c == Vec3::ONE).count());
+        assert_eq!(20, colours.iter().filter(|c| **c != Vec3::ONE).count());
+    }
+
+    #[test]
+    fn test_grass_top_cell_matches_world_shader() {
+        let shader = std::fs::read_to_string("assets/shaders/world.wesl").unwrap();
+        assert!(shader.contains(&format!("const GRASS_TOP_CELL: f32 = {:.1};", Tile::GrassTop.atlas_cell())));
+    }
+
+    #[test]
+    fn test_grass_sides_carry_their_untinted_shade() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(10, 4, 10), BlockType::Grass);
+        chunk.set_block_at(U16Vec3::new(11, 4, 10), BlockType::Grass);
+        let mesh = mesh_chunk(chunk).opaque;
+        let (Some(VertexAttributeValues::Float32x4(colors)), Some(VertexAttributeValues::Float32x2(modes))) =
+            (mesh.attribute(Mesh::ATTRIBUTE_COLOR), mesh.attribute(Mesh::ATTRIBUTE_UV_1))
+        else {
+            panic!("mesh lacks colours or uv_b");
+        };
+        let side = Tile::GrassSide.atlas_cell();
+        let mut sides = 0;
+        for (color, mode) in colors.iter().zip(modes) {
+            if color[3] == side {
+                sides += 1;
+                // the shade is ambient occlusion here, so between dark and full
+                assert!(mode[1] < 0.0 && mode[1] >= -1.0, "{mode:?}");
+            } else {
+                assert_eq!(super::TEXTURED, mode[1]);
+            }
+        }
+        assert!(sides > 0);
     }
 
     #[test]
@@ -2649,7 +2701,8 @@ mod tests {
         assert_eq!(4, key.cell_size());
         let mesh = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
         let flags = untextured_flags(&mesh);
-        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 0.0));
+        // grass sides mark their shade instead, see `MeshBuffers::tint_grass_sides`
+        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 0.0 || f < 0.0));
         // a face one cell wide spans four tiles, so none comes out a tile wide
         let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap();
         let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else { panic!() };

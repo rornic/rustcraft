@@ -59,6 +59,13 @@ const FLATTEN_START: f32 = 1024.0;
 const FLATTEN_END: f32 = 4096.0;
 const FLATTEN_MAX: f32 = 0.85;
 
+// `Tile::GrassTop`'s atlas cell
+const GRASS_TOP_CELL: f32 = 1.0;
+// Blocks per pixel at which grass sides start turning to the grass on top, and are wholly it:
+// four pixels tall, as the tile's green fringe is about a quarter of it, to under two.
+const GRASS_SIDE_FADE_START: f32 = 0.25;
+const GRASS_SIDE_FADE_END: f32 = 0.6;
+
 // The normal to light by: turned toward up with distance, which evens out the sun's and sky's contrast between faces.
 fn lit_normal(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
     let flatten = FLATTEN_MAX * smoothstep(FLATTEN_START, FLATTEN_END, distance(world_position, view_bindings::view.world_position));
@@ -109,6 +116,8 @@ fn fragment(
     let normal = normalize(in.world_normal);
 
     var color = block_texel(in.uv, in.color.a);
+    // blocks per pixel up the face, worked out here as derivatives need uniform control flow
+    let block_rate = length(vec2<f32>(dpdx(in.uv.y), dpdy(in.uv.y)));
     // coarse LOD cells, where a stretched texture would read as one giant block, and wide
     // tree boxes, which keep it: leaves come out solid, and their shadows match, see
     // `world_prepass.wesl`. How a face draws is `generator::TEXTURED` and so on.
@@ -129,7 +138,17 @@ fn fragment(
     }
 }
     // ambient occlusion and grass/leaf tint
-    color = vec4<f32>(color.rgb * in.color.rgb, color.a);
+    var tinted = color.rgb * in.color.rgb;
+@if(VERTEX_UVS_B) {
+    // grass sides carry the grass's tint for their top, and their shade alone for their tile,
+    // see `MeshBuffers::tint_grass_sides`: once blocks are a few pixels tall their tile averages
+    // out to mostly dirt, while the grass on top of them would fill the pixel, so they turn to it
+    if in.uv_b.y < 0.0 {
+        let grass_top = block_mean(GRASS_TOP_CELL).rgb * in.color.rgb;
+        tinted = mix(color.rgb * -in.uv_b.y, grass_top, smoothstep(GRASS_SIDE_FADE_START, GRASS_SIDE_FADE_END, block_rate));
+    }
+}
+    color = vec4<f32>(tinted, color.a);
 
     // block meshes carry smoothed sky light, all but those with no faces at all
     var sky = 1.0;
