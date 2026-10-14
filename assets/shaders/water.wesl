@@ -72,11 +72,19 @@ const DEEP_SWELL_SHARES: array<f32, 5> = array<f32, 5>(1.0, 0.8, 0.45, 0.15, 0.0
 // Each wave fades out between these many of its wavelengths from the camera, where LOD
 // cells grow too wide to carry it. By distance alone, so meshes side by side agree.
 const SWELL_FADE: vec2<f32> = vec2<f32>(14.0, 28.0);
-// All waves are laid on the water bent by up to this many blocks, over patches this many
-// across, drifting this fast, so their crests curve and wander instead of running straight.
-const WARP: f32 = 7.0;
-const WARP_SIZE: f32 = 90.0;
-const WARP_DRIFT: vec2<f32> = vec2<f32>(0.6, -0.4);
+// All waves are laid on the water swirled at two scales, each bending it by up to so many
+// blocks over patches so many across, drifting so fast, so their crests curve and wander
+// instead of running straight across the world. Kept gentle enough that the water's never
+// stretched by more than about half: past that it folds over and crests double back.
+const SWIRLS: i32 = 2;
+const SWIRL_REACH: array<f32, 2> = array<f32, 2>(36.0, 9.0);
+const SWIRL_SIZE: array<f32, 2> = array<f32, 2>(420.0, 110.0);
+const SWIRL_DRIFT: array<vec2<f32>, 2> = array<vec2<f32>, 2>(vec2<f32>(0.25, -0.15), vec2<f32>(0.6, -0.4));
+// And each wave slips in and out of step with the others from place to place, by up to this
+// many of its cycles over patches this many of its wavelengths across, so where they meet
+// they never line up into the same rows twice.
+const PHASE_DRIFT: f32 = 0.6;
+const PHASE_SCALE: f32 = 10.0;
 const FOAM_FADE_END: f32 = 192.0;
 const FOAM_FADE_START: f32 = 144.0;
 
@@ -127,9 +135,19 @@ struct FragmentOutput {
 // Where waves are laid on the water at `xz`, bent by drifting noise. A pure function of
 // position and time, as everything the mesh moves by is, so neighbouring quads agree.
 fn warped(xz: vec2<f32>, time: f32) -> vec2<f32> {
-    let p = xz / WARP_SIZE + WARP_DRIFT * time / WARP_SIZE;
-    let bend = vec2<f32>(smooth_noise(p), smooth_noise(p + vec2<f32>(17.3, 31.1))) * 2.0 - 1.0;
-    return xz + bend * WARP;
+    var at = xz;
+    for (var i = 0; i < SWIRLS; i++) {
+        let p = (xz + SWIRL_DRIFT[i] * time) / SWIRL_SIZE[i] + vec2<f32>(f32(i) * 53.7, 0.0);
+        let bend = vec2<f32>(smooth_noise(p), smooth_noise(p + vec2<f32>(17.3, 31.1))) * 2.0 - 1.0;
+        at += bend * SWIRL_REACH[i];
+    }
+    return at;
+}
+
+// How far out of step wave `index`, `length` blocks long, has slipped at `xz`, in radians.
+fn phase_drift(xz: vec2<f32>, index: i32, length: f32) -> f32 {
+    let p = xz / (PHASE_SCALE * length) + vec2<f32>(f32(index) * 37.1, f32(index) * 11.7);
+    return (smooth_noise(p) * 2.0 - 1.0) * PHASE_DRIFT * 6.2831853;
 }
 
 // How rough the wind leaves the water at `xz`, a share of the waves' full size.
@@ -163,7 +181,8 @@ fn swell(xz: vec2<f32>, time: f32, distance: f32, size: f32, deep: f32) -> Swell
         let direction = vec2<f32>(cos(angle), sin(angle));
         let k = 6.2831853 / SWELL_LENGTHS[i];
         let speed = sqrt(9.8 / k) * SWELL_PACE;
-        let shape = swell_shape(k * (dot(direction, at) - speed * time));
+        let drift = phase_drift(xz, i, SWELL_LENGTHS[i]);
+        let shape = swell_shape(k * (dot(direction, at) - speed * time) + drift);
         let fade = 1.0 - smoothstep(SWELL_FADE.x * SWELL_LENGTHS[i], SWELL_FADE.y * SWELL_LENGTHS[i], distance);
         let height = SWELL_HEIGHTS[i] * size * (1.0 + (DEEP_SWELL - 1.0) * DEEP_SWELL_SHARES[i] * deep);
         out.height += height * shape.x * fade;
@@ -222,9 +241,15 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     return out;
 }
 
+// 0..1 for the whole-number cell `p` is in. Integer mixing, since the usual fract(sin)
+// hash loses its precision at world coordinates in the thousands and turns into stripes.
 fn hash2(p: vec2<f32>) -> f32 {
-    let h = dot(p, vec2<f32>(127.1, 311.7));
-    return fract(sin(h) * 43758.5453123);
+    let cell = vec2<i32>(floor(p));
+    var h = (bitcast<u32>(cell.x) * 0x8da6b343u) ^ (bitcast<u32>(cell.y) * 0xd8163841u);
+    h = (h ^ (h >> 15u)) * 0x2c1b3c6du;
+    h = (h ^ (h >> 12u)) * 0x297a2d39u;
+    h = h ^ (h >> 15u);
+    return f32(h) / 4294967295.0;
 }
 
 // Value noise, 0..1, smooth across whole-number cells.
@@ -289,7 +314,7 @@ fn ripples(xz: vec2<f32>, time: f32, footprint: f32) -> vec3<f32> {
         // deep water waves travel at sqrt(g / k), here in blocks a second with a game's gravity
         let speed = sqrt(9.8 / k);
         let direction = RIPPLE_DIRECTIONS[i];
-        let phase = k * (dot(direction, at) - speed * time);
+        let phase = k * (dot(direction, at) - speed * time) + phase_drift(xz, i + SWELLS, RIPPLE_LENGTHS[i]);
         let shown = 1.0 - smoothstep(RIPPLE_MIN_PIXELS * 0.5, RIPPLE_MIN_PIXELS, RIPPLE_LENGTHS[i] / footprint);
         let fine = 1.0 - shown;
         let steepness = RIPPLE_STEEPNESS[i] * gusty;
