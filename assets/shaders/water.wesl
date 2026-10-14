@@ -46,14 +46,28 @@ const FOAM_DENSITY: f32 = 1.2;
 const FOAM_CELL_SIZE: f32 = 0.125;
 const FOAM_FRAME_RATE: f32 = 1.2;
 
-const WAVE_AMPLITUDE: f32 = 0.15;
-const WAVE_SPEED: f32 = 1.0;
-const WAVE_FREQ: f32 = 0.35;
-// Waves fade out (mostly to avoid distant shimmer/aliasing) further out than foam
-// does - foam's noise sampling is the expensive part per-pixel, so it gets cut
-// earlier purely for performance, well before its fine detail would matter anyway.
-const WAVE_FADE_END: f32 = 256.0;
-const WAVE_FADE_START: f32 = 192.0;
+// The swell the mesh rises and falls with: waves from around the wind's direction, each
+// at an angle off it in radians, a wavelength and a height in blocks, crest to trough
+// about twice that. Their crests are sharp and troughs broad, see `swell_shape`.
+const SWELLS: i32 = 5;
+const WIND: vec2<f32> = vec2<f32>(0.8, 0.6);
+const SWELL_ANGLES: array<f32, 5> = array<f32, 5>(0.0, 0.45, -0.6, 1.05, -0.25);
+const SWELL_LENGTHS: array<f32, 5> = array<f32, 5>(71.0, 43.0, 29.0, 17.0, 11.0);
+const SWELL_HEIGHTS: array<f32, 5> = array<f32, 5>(0.55, 0.38, 0.25, 0.15, 0.08);
+// How peaked crests are: 0 is a sine wave.
+const SWELL_SHARPNESS: f32 = 1.2;
+// Swell runs slower than deep water waves of its length would, for a calmer sea.
+const SWELL_PACE: f32 = 0.55;
+// Swell builds up from this depth in blocks to its full height at this one.
+const SWELL_DEPTH: vec2<f32> = vec2<f32>(0.5, 6.0);
+// Each wave fades out between these many of its wavelengths from the camera, where LOD
+// cells grow too wide to carry it. By distance alone, so meshes side by side agree.
+const SWELL_FADE: vec2<f32> = vec2<f32>(14.0, 28.0);
+// All waves are laid on the water bent by up to this many blocks, over patches this many
+// across, drifting this fast, so their crests curve and wander instead of running straight.
+const WARP: f32 = 7.0;
+const WARP_SIZE: f32 = 90.0;
+const WARP_DRIFT: vec2<f32> = vec2<f32>(0.6, -0.4);
 const FOAM_FADE_END: f32 = 192.0;
 const FOAM_FADE_START: f32 = 144.0;
 
@@ -101,13 +115,60 @@ struct FragmentOutput {
   @location(0) color: vec4<f32>
 }
 
-// Two travelling sine waves, summed - a cheap stand-in for a proper Gerstner wave
-// that's enough to read as gentle open-water ripples at this scale. Deliberately a
-// pure function of world position + time (no per-block depth scaling) so that two
-// neighbouring water quads always agree on displacement at their shared edge.
-fn wave_height(xz: vec2<f32>, time: f32) -> f32 {
-    return sin(xz.x * WAVE_FREQ + time * WAVE_SPEED)
-        + sin(xz.y * WAVE_FREQ * 1.3 - time * WAVE_SPEED * 0.8);
+// Where waves are laid on the water at `xz`, bent by drifting noise. A pure function of
+// position and time, as everything the mesh moves by is, so neighbouring quads agree.
+fn warped(xz: vec2<f32>, time: f32) -> vec2<f32> {
+    let p = xz / WARP_SIZE + WARP_DRIFT * time / WARP_SIZE;
+    let bend = vec2<f32>(smooth_noise(p), smooth_noise(p + vec2<f32>(17.3, 31.1))) * 2.0 - 1.0;
+    return xz + bend * WARP;
+}
+
+// How rough the wind leaves the water at `xz`, a share of the waves' full size.
+fn gust(xz: vec2<f32>, time: f32) -> f32 {
+    return mix(GUST_RANGE.x, GUST_RANGE.y, smooth_noise((xz - GUST_DRIFT * time) / GUST_SIZE));
+}
+
+// A peaked wave's height at `phase`, about -0.6..1, and its rate of change with the phase.
+fn swell_shape(phase: f32) -> vec2<f32> {
+    let peak = exp(SWELL_SHARPNESS * (sin(phase) - 1.0));
+    // less its mean, so the water's level stays put
+    let mean = 0.42;
+    return vec2<f32>((peak - mean) / (1.0 - mean), peak * SWELL_SHARPNESS * cos(phase) / (1.0 - mean));
+}
+
+// The swell at `xz`, `distance` blocks from the camera: its height, and its slope,
+// d(height)/dx and d(height)/dz. The slope left out by waves faded with distance comes back
+// as `lost`, to roughen the surface by instead.
+struct Swell {
+    height: f32,
+    slope: vec2<f32>,
+    lost: f32,
+}
+
+fn swell(xz: vec2<f32>, time: f32, distance: f32, size: f32) -> Swell {
+    var out = Swell(0.0, vec2<f32>(0.0), 0.0);
+    let at = warped(xz, time);
+    let wind_angle = atan2(WIND.y, WIND.x);
+    for (var i = 0; i < SWELLS; i++) {
+        let angle = wind_angle + SWELL_ANGLES[i];
+        let direction = vec2<f32>(cos(angle), sin(angle));
+        let k = 6.2831853 / SWELL_LENGTHS[i];
+        let speed = sqrt(9.8 / k) * SWELL_PACE;
+        let shape = swell_shape(k * (dot(direction, at) - speed * time));
+        let fade = 1.0 - smoothstep(SWELL_FADE.x * SWELL_LENGTHS[i], SWELL_FADE.y * SWELL_LENGTHS[i], distance);
+        let height = SWELL_HEIGHTS[i] * size;
+        out.height += height * shape.x * fade;
+        let steepness = height * k * shape.y;
+        out.slope += direction * steepness * fade;
+        out.lost += 0.5 * height * height * k * k * (1.0 - fade);
+    }
+    return out;
+}
+
+// How much of its full size the swell has at a vertex or fragment: calmer over shallows
+// and gone at the shore, see the vertex shader.
+fn swell_size(shore_factor: f32, depth: f32, xz: vec2<f32>, time: f32) -> f32 {
+    return (1.0 - shore_factor) * smoothstep(SWELL_DEPTH.x, SWELL_DEPTH.y, depth) * gust(xz, time);
 }
 
 @vertex
@@ -122,21 +183,21 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     out.world_normal = mesh_functions::mesh_normal_local_to_world(vertex.normal, vertex.instance_index);
 
 @if(VERTEX_COLORS) {
-    // is_top (B channel) is a flat 0/1 flag, not depth-scaled - see generator.rs for
-    // why uniform amplitude across every top face is required to avoid seams.
+    // is_top (B channel) is a flat 0/1 flag: only the surface moves.
     //
-    // shore_factor (R channel) instead damps amplitude toward 0 right at the shore:
-    // land's wall geometry is static, so an undamped wave can lift water's edge
-    // above the adjacent land block and tear the seam there. This is safe to vary
-    // per-vertex (unlike depth) because shore_factor is provably identical at any
-    // shared edge between two water quads - see vertex_shore_factor in generator.rs.
+    // shore_factor (R channel) damps the swell toward 0 right at the shore: land's wall
+    // geometry is static, so an undamped wave can lift water's edge above the adjacent
+    // land block and tear the seam there. It and the depth (G channel), averaged over
+    // the columns round each corner, are the same at any corner two water quads share
+    // - see vertex_shore_factor and vertex_water_depth in generator.rs - so the swell
+    // can vary with them without tearing quads apart.
     let is_top = vertex.color.b;
     let shore_factor = vertex.color.r;
+    let depth = vertex.color.g * CHUNK_SIZE;
     let time = view_bindings::globals.time;
     let cam_dist = distance(world_position.xyz, view_bindings::view.world_position.xyz);
-    let dist_fade = 1.0 - smoothstep(WAVE_FADE_START, WAVE_FADE_END, cam_dist);
-    let amplitude = WAVE_AMPLITUDE * (1.0 - shore_factor) * dist_fade;
-    world_position.y += wave_height(world_position.xz, time) * amplitude * is_top;
+    let size = swell_size(shore_factor, depth, world_position.xz, time);
+    world_position.y += swell(world_position.xz, time, cam_dist, size).height * is_top;
     out.color = vertex.color;
 }
 
@@ -207,16 +268,17 @@ fn scene_colour(display: vec3<f32>) -> vec3<f32> {
 fn ripples(xz: vec2<f32>, time: f32, footprint: f32) -> vec3<f32> {
     var slope = vec2<f32>(0.0);
     var lost = 0.0;
-    let gust = mix(GUST_RANGE.x, GUST_RANGE.y, smooth_noise((xz - GUST_DRIFT * time) / GUST_SIZE));
+    let gusty = gust(xz, time);
+    let at = warped(xz, time);
     for (var i = 0; i < RIPPLES; i++) {
         let k = 6.2831853 / RIPPLE_LENGTHS[i];
         // deep water waves travel at sqrt(g / k), here in blocks a second with a game's gravity
         let speed = sqrt(9.8 / k);
         let direction = RIPPLE_DIRECTIONS[i];
-        let phase = k * (dot(direction, xz) - speed * time);
+        let phase = k * (dot(direction, at) - speed * time);
         let shown = 1.0 - smoothstep(RIPPLE_MIN_PIXELS * 0.5, RIPPLE_MIN_PIXELS, RIPPLE_LENGTHS[i] / footprint);
         let fine = 1.0 - shown;
-        let steepness = RIPPLE_STEEPNESS[i] * gust;
+        let steepness = RIPPLE_STEEPNESS[i] * gusty;
         slope += direction * steepness * cos(phase) * fine;
         lost += 0.5 * steepness * steepness * shown;
     }
@@ -369,8 +431,14 @@ fn fragment(
     if above {
         let time = view_bindings::globals.time;
         let ripple = ripples(world_position.xz, time, footprint);
-        let surface = normalize(vec3<f32>(-ripple.x, 1.0, -ripple.y));
-        let variance = CALM_SLOPE_VARIANCE + ripple.z;
+        var size = 1.0;
+@if(VERTEX_COLORS) {
+        size = swell_size(in.color.r, in.color.g * CHUNK_SIZE, world_position.xz, time);
+}
+        let waves = swell(world_position.xz, time, dist, size);
+        let slope = ripple.xy + waves.slope;
+        let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
+        let variance = CALM_SLOPE_VARIANCE + ripple.z + waves.lost;
         let sky = reflected_sky(world_position, reflect(-to_eye, surface));
         let reflected = fresnel(dot(surface, to_eye));
         let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(world_position);
