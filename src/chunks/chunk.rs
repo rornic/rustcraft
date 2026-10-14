@@ -158,6 +158,17 @@ impl ChunkData {
         self.runs.iter().all(|r| r.block == BlockType::Air)
     }
 
+    /// Whether every block hides what's behind it, so the chunk shows nothing past its own faces.
+    pub fn opaque(&self) -> bool {
+        self.runs.iter().all(|r| r.block.is_opaque())
+    }
+
+    /// Bytes held on the heap for the chunk's blocks and trees.
+    pub fn heap_size(&self) -> usize {
+        self.runs.capacity() * size_of::<Run>() + self.trees.heap_size()
+    }
+
+
     // Replaces the old `blocks().iter()` contract (the underlying map never stored Air):
     // yields every non-air block's coordinate and type, in no particular order.
     pub fn iter_non_air(&self) -> impl Iterator<Item = (U16Vec3, BlockType)> + '_ {

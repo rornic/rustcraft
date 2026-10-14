@@ -277,11 +277,14 @@ pub fn mark_chunks(
             .into_iter()
             .all(|adj| world.is_chunk_generated(adj))
         {
-            commands.entity(entity).insert(GenerateChunkMesh {
-                coord: chunk.coord,
-                task: None,
-            });
             commands.entity(entity).remove::<DirtyChunk>();
+            // most chunks underground: meshing them would only find every face covered
+            if !world.is_chunk_buried(chunk.coord) {
+                commands.entity(entity).insert(GenerateChunkMesh {
+                    coord: chunk.coord,
+                    task: None,
+                });
+            }
         }
     });
 }

@@ -92,6 +92,12 @@ impl World {
             .unwrap_or(false)
     }
 
+    /// Whether the chunk and the chunks against its faces are all opaque, so it has no faces to draw.
+    pub fn is_chunk_buried(&self, chunk_coord: ChunkCoordinate) -> bool {
+        let opaque = |coord| self.chunks.get(&coord).is_some_and(|data| data.opaque());
+        opaque(chunk_coord) && chunk_coord.adjacent().into_iter().all(opaque)
+    }
+
     pub fn chunk_to_world(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
         chunk_coord.centre()
     }
@@ -135,7 +141,8 @@ mod tests {
     use bevy::math::I64Vec3;
 
     use super::World;
-    use crate::chunks::chunk::ChunkCoordinate;
+    use crate::block::BlockType;
+    use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
 
     #[test]
     fn test_block_to_chunk_coordinate() {
@@ -144,6 +151,38 @@ mod tests {
         assert_eq!(ChunkCoordinate(I64Vec3::new(0, 1, 2)), chunk(5, 16, 47));
         // negative blocks belong to the chunk below, not chunk 0
         assert_eq!(ChunkCoordinate(I64Vec3::new(-1, -1, -2)), chunk(-5, -16, -17));
+    }
+
+    #[test]
+    fn test_chunk_is_buried_only_when_it_and_its_face_neighbours_are_opaque() {
+        let filled = |block| {
+            let mut data = ChunkData::default();
+            for x in 0..data.size {
+                for y in 0..data.size {
+                    for z in 0..data.size {
+                        data.set_block_at(bevy::math::U16Vec3::new(x, y, z), block);
+                    }
+                }
+            }
+            data
+        };
+        let mut world = World::new(16);
+        let centre = ChunkCoordinate(I64Vec3::ZERO);
+        world.insert_chunk(centre, filled(BlockType::Stone));
+        // its diagonal neighbours don't matter, as faces only meet the chunks against them
+        for side in centre.adjacent() {
+            world.insert_chunk(side, filled(BlockType::Dirt));
+        }
+        assert!(world.is_chunk_buried(centre));
+
+        // ice and leaves show what's behind them
+        world.insert_chunk(ChunkCoordinate(I64Vec3::Y), filled(BlockType::Ice));
+        assert!(!world.is_chunk_buried(centre));
+        world.insert_chunk(ChunkCoordinate(I64Vec3::Y), ChunkData::default());
+        assert!(!world.is_chunk_buried(centre));
+        // nor is a chunk buried by one not generated yet
+        world.clear_chunk(ChunkCoordinate(I64Vec3::Y));
+        assert!(!world.is_chunk_buried(centre));
     }
 
     #[test]
