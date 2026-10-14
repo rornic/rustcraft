@@ -1,12 +1,6 @@
-use std::sync::Arc;
-
-use bevy::{
-    math::{I64Vec3, U16Vec3, UVec3, Vec3},
-    platform::collections::HashMap,
-};
+use bevy::math::{I64Vec3, U16Vec3, Vec3};
 
 use crate::block::BlockType;
-use crate::util::octree::{NodeId, Octree};
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ChunkCoordinate(pub I64Vec3);
@@ -24,6 +18,11 @@ impl From<I64Vec3> for ChunkCoordinate {
 }
 
 impl ChunkCoordinate {
+    /// The centre of the chunk, in blocks.
+    pub fn centre(self) -> Vec3 {
+        (self.0.as_vec3() + Vec3::splat(0.5)) * CHUNK_SIZE as f32
+    }
+
     pub fn adjacent(&self) -> Vec<ChunkCoordinate> {
         vec![
             ChunkCoordinate(self.0 + I64Vec3::new(0, 0, 1)),
@@ -217,86 +216,13 @@ impl ChunkData {
     }
 }
 
-const REGION_DEPTH: u8 = 8;
-
-pub struct ChunkOctree {
-    regions: HashMap<I64Vec3, Octree<ChunkData>>,
-    cache: HashMap<ChunkCoordinate, NodeId>,
-    pub chunk_size: u16,
-}
-
-impl Default for ChunkOctree {
-    fn default() -> Self {
-        let chunk_size = 16;
-        Self {
-            regions: HashMap::new(),
-            cache: HashMap::new(),
-            chunk_size,
-        }
-    }
-}
-
-impl ChunkOctree {
-    pub fn get_chunk_data(&self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
-        let &id = self.cache.get(&coord)?;
-        let (region, _) = Self::region_and_cell(coord);
-        self.regions.get(&region)?.get(id).cloned()
-    }
-
-    pub fn set_chunk_data(
-        &mut self,
-        coord: ChunkCoordinate,
-        chunk_data: ChunkData,
-    ) -> Arc<ChunkData> {
-        let (region, cell) = Self::region_and_cell(coord);
-        let chunk_data = Arc::new(chunk_data);
-        let id = self
-            .regions
-            .entry(region)
-            .or_insert_with(|| Octree::new(REGION_DEPTH))
-            .insert(cell, chunk_data.clone());
-        self.cache.insert(coord, id);
-        chunk_data
-    }
-
-    pub fn clear_chunk(&mut self, coord: ChunkCoordinate) {
-        let Some(id) = self.cache.remove(&coord) else {
-            return;
-        };
-        let (region, _) = Self::region_and_cell(coord);
-        if let Some(octree) = self.regions.get_mut(&region) {
-            octree.remove(id);
-            if octree.is_empty() {
-                self.regions.remove(&region);
-            }
-        }
-    }
-
-    fn region_and_cell(coord: ChunkCoordinate) -> (I64Vec3, UVec3) {
-        let side = 1i64 << REGION_DEPTH;
-        (
-            coord.0.div_euclid(I64Vec3::splat(side)),
-            coord.0.rem_euclid(I64Vec3::splat(side)).as_uvec3(),
-        )
-    }
-
-    pub fn chunk_centre(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
-        let chunk_size = self.chunk_size as f32;
-        Vec3::new(
-            chunk_coord.0.x as f32 * chunk_size + chunk_size / 2.0,
-            chunk_coord.0.y as f32 * chunk_size + chunk_size / 2.0,
-            chunk_coord.0.z as f32 * chunk_size + chunk_size / 2.0,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bevy::math::{I64Vec3, U16Vec3, Vec3};
 
     use crate::block::BlockType;
 
-    use super::{neighbor_26_index, ChunkCoordinate, ChunkData, ChunkOctree};
+    use super::{neighbor_26_index, ChunkCoordinate, ChunkData};
 
     #[test]
     fn test_neighbors_26_returns_26_unique_coordinates() {
@@ -426,155 +352,9 @@ mod tests {
     }
 
     #[test]
-    fn test_set_get_chunk_data() {
-        let mut octree = ChunkOctree::default();
-
-        let mut chunk_data = ChunkData::default();
-        chunk_data.set_block_at(U16Vec3::new(5, 4, 9), BlockType::Sand);
-        octree.set_chunk_data(ChunkCoordinate(I64Vec3::new(3, 2, 1)), chunk_data);
-
-        let queried_chunk_data = octree
-            .get_chunk_data(ChunkCoordinate(I64Vec3::new(3, 2, 1)))
-            .unwrap();
-
-        assert_eq!(
-            BlockType::Sand,
-            queried_chunk_data.get_block_at(U16Vec3::new(5, 4, 9))
-        );
-        assert_eq!(
-            BlockType::Air,
-            queried_chunk_data.get_block_at(U16Vec3::new(0, 4, 9))
-        );
-    }
-
-    #[test]
-    fn test_set_get_chunk_data_far_from_origin() {
-        let mut octree = ChunkOctree::default();
-
-        let mut chunk_data = ChunkData::default();
-        chunk_data.set_block_at(U16Vec3::new(2, 3, 4), BlockType::Sand);
-        octree.set_chunk_data(ChunkCoordinate(I64Vec3::new(10_000, -5_000, 20_000)), chunk_data);
-
-        let queried_chunk_data = octree
-            .get_chunk_data(ChunkCoordinate(I64Vec3::new(10_000, -5_000, 20_000)))
-            .unwrap();
-
-        assert_eq!(
-            BlockType::Sand,
-            queried_chunk_data.get_block_at(U16Vec3::new(2, 3, 4))
-        );
-    }
-
-    #[test]
-    fn test_clear_chunk_then_get_returns_none() {
-        let mut octree = ChunkOctree::default();
-        let coord = ChunkCoordinate(I64Vec3::new(3, 2, 1));
-
-        octree.set_chunk_data(coord, ChunkData::default());
-        assert!(octree.get_chunk_data(coord).is_some());
-
-        octree.clear_chunk(coord);
-
-        assert!(octree.get_chunk_data(coord).is_none());
-    }
-
-    #[test]
-    fn test_clear_chunk_leaves_no_cache_entry() {
-        let mut octree = ChunkOctree::default();
-        let coord = ChunkCoordinate(I64Vec3::new(3, 2, 1));
-
-        octree.set_chunk_data(coord, ChunkData::default());
-        octree.clear_chunk(coord);
-
-        assert!(!octree.cache.contains_key(&coord));
-    }
-
-    #[test]
-    fn test_set_get_chunk_data_beyond_old_world_bounds() {
-        let mut octree = ChunkOctree::default();
-        // well past the old single tree's +-32,768 chunk limit
-        let coords = [
-            ChunkCoordinate(I64Vec3::new(10_000_000, 0, -10_000_000)),
-            ChunkCoordinate(I64Vec3::new(-10_000_000, -3, 10_000_000)),
-        ];
-
-        for (i, &coord) in coords.iter().enumerate() {
-            let mut chunk_data = ChunkData::default();
-            chunk_data.set_block_at(U16Vec3::new(i as u16, 0, 0), BlockType::Sand);
-            octree.set_chunk_data(coord, chunk_data);
-        }
-
-        for (i, &coord) in coords.iter().enumerate() {
-            let chunk_data = octree.get_chunk_data(coord).unwrap();
-            assert_eq!(
-                BlockType::Sand,
-                chunk_data.get_block_at(U16Vec3::new(i as u16, 0, 0))
-            );
-        }
-    }
-
-    #[test]
-    fn test_neighbouring_chunks_across_region_boundary() {
-        let mut octree = ChunkOctree::default();
-        // -1 and 0 sit in different regions on every axis
-        let below = ChunkCoordinate(I64Vec3::new(-1, -1, -1));
-        let above = ChunkCoordinate(I64Vec3::new(0, 0, 0));
-
-        let mut chunk_data = ChunkData::default();
-        chunk_data.set_block_at(U16Vec3::new(1, 1, 1), BlockType::Sand);
-        octree.set_chunk_data(below, chunk_data);
-        octree.set_chunk_data(above, ChunkData::default());
-
-        assert_eq!(2, octree.regions.len());
-        assert_eq!(
-            BlockType::Sand,
-            octree
-                .get_chunk_data(below)
-                .unwrap()
-                .get_block_at(U16Vec3::new(1, 1, 1))
-        );
-        assert_eq!(
-            BlockType::Air,
-            octree
-                .get_chunk_data(above)
-                .unwrap()
-                .get_block_at(U16Vec3::new(1, 1, 1))
-        );
-    }
-
-    #[test]
-    fn test_clear_last_chunk_drops_region() {
-        let mut octree = ChunkOctree::default();
-        let a = ChunkCoordinate(I64Vec3::new(3, 2, 1));
-        let b = ChunkCoordinate(I64Vec3::new(4, 2, 1));
-
-        octree.set_chunk_data(a, ChunkData::default());
-        octree.set_chunk_data(b, ChunkData::default());
-        assert_eq!(1, octree.regions.len());
-
-        octree.clear_chunk(a);
-        assert_eq!(1, octree.regions.len());
-        assert!(octree.get_chunk_data(b).is_some());
-
-        octree.clear_chunk(b);
-        assert!(octree.regions.is_empty());
-    }
-
-    #[test]
     fn test_chunk_centre() {
-        let octree = ChunkOctree::default();
-
-        assert_eq!(
-            Vec3::new(8.0, 8.0, 8.0),
-            octree.chunk_centre(ChunkCoordinate(I64Vec3::new(0, 0, 0)))
-        );
-        assert_eq!(
-            Vec3::new(-8.0, -8.0, 8.0),
-            octree.chunk_centre(ChunkCoordinate(I64Vec3::new(-1, -1, 0)))
-        );
-        assert_eq!(
-            Vec3::new(-680.0, 360.0, -1592.0),
-            octree.chunk_centre(ChunkCoordinate(I64Vec3::new(-43, 22, -100)))
-        )
+        assert_eq!(Vec3::new(8.0, 8.0, 8.0), ChunkCoordinate(I64Vec3::new(0, 0, 0)).centre());
+        assert_eq!(Vec3::new(-8.0, -8.0, 8.0), ChunkCoordinate(I64Vec3::new(-1, -1, 0)).centre());
+        assert_eq!(Vec3::new(-680.0, 360.0, -1592.0), ChunkCoordinate(I64Vec3::new(-43, 22, -100)).centre());
     }
 }
