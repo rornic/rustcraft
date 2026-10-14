@@ -1,4 +1,4 @@
-use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3};
+use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3, Vec2, Vec3};
 
 use super::biome::BiomeId;
 use super::generator::column_block;
@@ -60,10 +60,12 @@ const COVERAGE_POINTS: usize = 7;
 /// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
 /// is. Meshing draws it as a thin box instead, see `generator::Trunk`.
 pub const THIN_TRUNK_CELL: i64 = 4;
-// How many stacked boxes a crown is drawn as in cells too wide to hold it.
-const CROWN_LAYERS: i64 = 3;
 // How far in leaves are nibbled from the edge of a crown.
 const NIBBLE: f64 = 0.9;
+// How far each tree's leaves stray from the grass's tint, so a forest isn't one flat green:
+// brighter or darker by up to this much, and warmer or cooler by up to this much.
+const TINT_BRIGHTNESS: f32 = 0.22;
+const TINT_WARMTH: f32 = 0.18;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TreeKind {
@@ -134,6 +136,35 @@ impl Tree {
         Self { kind, base, trunk, spread, seed, crown, lobes }
     }
 
+    /// The tree's own tint over the grass's, the same at every level of detail.
+    pub fn tint(&self) -> Vec3 {
+        let h = hash(self.seed, 31, 59);
+        let unit = |shift: u32| ((h >> shift) & 0xffff) as f32 / 65535.0 * 2.0 - 1.0;
+        let warm = Vec3::new(1.0, 0.35, -1.0) * TINT_WARMTH * unit(16);
+        (1.0 + TINT_BRIGHTNESS * unit(0)) * (Vec3::ONE + warm)
+    }
+
+    /// Whether the crown is over the point `x`, `z` across the world, in blocks, seen from above.
+    pub fn shades(&self, x: f64, z: f64) -> bool {
+        // from the trunk's base, as `in_leaves` takes it, where a block's index is its middle
+        let offset = DVec3::new(x - 0.5 - self.base.x as f64, 0.0, z - 0.5 - self.base.z as f64);
+        let under = |blob: &Blob| (offset - blob.centre.with_y(0.0)).length_squared() <= blob.radius * blob.radius;
+        match self.kind {
+            TreeKind::Broadleaf => under(&self.crown) || self.lobes.iter().any(under),
+            // the lowest tier is the widest
+            TreeKind::Pine => (offset - self.axis()).length_squared() <= (0.6 + self.spread).powi(2),
+        }
+    }
+
+    /// The top of the crown, in blocks.
+    pub fn crown_top(&self) -> f64 {
+        let top = match self.kind {
+            TreeKind::Broadleaf => self.crown.centre.y + self.crown.radius * self.crown.squash,
+            TreeKind::Pine => (self.trunk + 1) as f64,
+        };
+        self.base.y as f64 + top + 1.0
+    }
+
     pub fn width(&self) -> i64 {
         if self.trunk >= THICK_TRUNK { 2 } else { 1 }
     }
@@ -197,10 +228,10 @@ impl Tree {
         inside >= COVERAGE_POINTS
     }
 
-    /// The crown as a few stacked boxes, in blocks from `base`'s lower corner, for cells too wide
-    /// to hold it: each layer is as wide as the leaves reach there, so a crown keeps its dome or
-    /// tiers instead of being one cuboid.
-    pub fn crown_boxes(&self) -> Vec<(DVec3, DVec3)> {
+    /// The crown as `layers` stacked boxes, in blocks from `base`'s lower corner, for cells too
+    /// wide to hold it: each layer is as wide as the leaves reach there, so a crown keeps its dome
+    /// or tiers instead of being one cuboid.
+    pub fn crown_boxes(&self, layers: i64) -> Vec<(DVec3, DVec3)> {
         let mut leaves = Vec::new();
         for y in 0..=TREE_HEIGHT {
             for x in -TREE_REACH..=TREE_REACH {
@@ -215,8 +246,8 @@ impl Tree {
             return Vec::new();
         };
         let height = high - low + 1;
-        let layer = |y: i64| ((y - low) * CROWN_LAYERS / height) as usize;
-        let mut bounds: [Option<(I64Vec3, I64Vec3)>; CROWN_LAYERS as usize] = [None; CROWN_LAYERS as usize];
+        let layer = |y: i64| ((y - low) * layers / height) as usize;
+        let mut bounds: Vec<Option<(I64Vec3, I64Vec3)>> = vec![None; layers as usize];
         for leaf in &leaves {
             let (min, max) = bounds[layer(leaf.y)].get_or_insert((*leaf, *leaf));
             *min = min.min(*leaf);
@@ -292,6 +323,37 @@ impl Tree {
                 }
             }
         }
+    }
+}
+
+/// Which tree's tint each leaf takes, for leaves placed block by block, where which tree put
+/// them is lost: the one whose trunk is nearest across, which is the one they belong to
+/// but where crowns meet.
+#[derive(Default, Debug, Clone)]
+pub struct TreeTints(Vec<(Vec2, Vec3)>);
+
+impl TreeTints {
+    /// Every tree in `trees`, placed by its trunk's axis less `origin`, in cells `cell` blocks
+    /// wide whose centres are whole numbers.
+    pub fn new<'a>(trees: impl IntoIterator<Item = &'a Tree>, origin: I64Vec3, cell: i64) -> Self {
+        Self(
+            trees
+                .into_iter()
+                .map(|t| {
+                    let axis = (t.base - origin).as_dvec3() + t.axis();
+                    (Vec2::new(axis.x as f32, axis.z as f32) / cell as f32 - (cell - 1) as f32 / (2.0 * cell as f32), t.tint())
+                })
+                .collect(),
+        )
+    }
+
+    /// The tint of the leaf at `coord`, in cells.
+    pub fn at(&self, coord: IVec3) -> Vec3 {
+        let p = Vec2::new(coord.x as f32, coord.z as f32);
+        self.0
+            .iter()
+            .min_by(|a, b| a.0.distance_squared(p).total_cmp(&b.0.distance_squared(p)))
+            .map_or(Vec3::ONE, |&(_, tint)| tint)
     }
 }
 
