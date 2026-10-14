@@ -60,6 +60,13 @@ const SWELL_SHARPNESS: f32 = 1.2;
 const SWELL_PACE: f32 = 0.55;
 // Swell builds up from this depth in blocks to its full height at this one.
 const SWELL_DEPTH: vec2<f32> = vec2<f32>(0.5, 6.0);
+// Out over deep water, between these depths, the longest waves grow up to this many times
+// taller, by these shares for each, into big rolling crests, while the short ones stay
+// as they are. Full-detail chunks only count depth to the bottom of their own 16 blocks, so
+// it's all grown by then, or the swell would change height where LOD water takes over.
+const DEEP_SWELL_DEPTH: vec2<f32> = vec2<f32>(8.0, 15.0);
+const DEEP_SWELL: f32 = 3.5;
+const DEEP_SWELL_SHARES: array<f32, 5> = array<f32, 5>(1.0, 0.8, 0.45, 0.15, 0.0);
 // Each wave fades out between these many of its wavelengths from the camera, where LOD
 // cells grow too wide to carry it. By distance alone, so meshes side by side agree.
 const SWELL_FADE: vec2<f32> = vec2<f32>(14.0, 28.0);
@@ -145,7 +152,7 @@ struct Swell {
     lost: f32,
 }
 
-fn swell(xz: vec2<f32>, time: f32, distance: f32, size: f32) -> Swell {
+fn swell(xz: vec2<f32>, time: f32, distance: f32, size: f32, deep: f32) -> Swell {
     var out = Swell(0.0, vec2<f32>(0.0), 0.0);
     let at = warped(xz, time);
     let wind_angle = atan2(WIND.y, WIND.x);
@@ -156,13 +163,18 @@ fn swell(xz: vec2<f32>, time: f32, distance: f32, size: f32) -> Swell {
         let speed = sqrt(9.8 / k) * SWELL_PACE;
         let shape = swell_shape(k * (dot(direction, at) - speed * time));
         let fade = 1.0 - smoothstep(SWELL_FADE.x * SWELL_LENGTHS[i], SWELL_FADE.y * SWELL_LENGTHS[i], distance);
-        let height = SWELL_HEIGHTS[i] * size;
+        let height = SWELL_HEIGHTS[i] * size * (1.0 + (DEEP_SWELL - 1.0) * DEEP_SWELL_SHARES[i] * deep);
         out.height += height * shape.x * fade;
         let steepness = height * k * shape.y;
         out.slope += direction * steepness * fade;
         out.lost += 0.5 * height * height * k * k * (1.0 - fade);
     }
     return out;
+}
+
+// How deep the water is, 0..1, for the swell to grow over, see `DEEP_SWELL`.
+fn deep_water(depth: f32) -> f32 {
+    return smoothstep(DEEP_SWELL_DEPTH.x, DEEP_SWELL_DEPTH.y, depth);
 }
 
 // How much of its full size the swell has at a vertex or fragment: calmer over shallows
@@ -197,7 +209,7 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     let time = view_bindings::globals.time;
     let cam_dist = distance(world_position.xyz, view_bindings::view.world_position.xyz);
     let size = swell_size(shore_factor, depth, world_position.xz, time);
-    world_position.y += swell(world_position.xz, time, cam_dist, size).height * is_top;
+    world_position.y += swell(world_position.xz, time, cam_dist, size, deep_water(depth)).height * is_top;
     out.color = vertex.color;
 }
 
@@ -432,10 +444,12 @@ fn fragment(
         let time = view_bindings::globals.time;
         let ripple = ripples(world_position.xz, time, footprint);
         var size = 1.0;
+        var deep = 1.0;
 @if(VERTEX_COLORS) {
         size = swell_size(in.color.r, in.color.g * CHUNK_SIZE, world_position.xz, time);
+        deep = deep_water(in.color.g * CHUNK_SIZE);
 }
-        let waves = swell(world_position.xz, time, dist, size);
+        let waves = swell(world_position.xz, time, dist, size, deep);
         let slope = ripple.xy + waves.slope;
         let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
         let variance = CALM_SLOPE_VARIANCE + ripple.z + waves.lost;

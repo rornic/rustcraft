@@ -203,7 +203,9 @@ pub fn update_underwater_effects(
             aperture_f_stops: 0.5,
             ..default()
         };
-        color_grading.global.temperature = -0.4;
+        // The fog's colour is already the water's: a white balance shift on top, like the
+        // -0.4 this once had, moves the white point off the chromaticity diagram, where Bevy's
+        // balance matrix turns blue into olive.
         color_grading.global.post_saturation = 0.85;
         clear_color.0 = underwater_color;
     } else if let Some(dry) = dry_defaults.take() {
