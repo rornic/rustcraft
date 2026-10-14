@@ -4,7 +4,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use bevy::math::I64Vec2;
 
 use super::biome::BiomeId;
-use super::columns::{ColumnCache, ColumnGrid};
+use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
 use crate::chunks::lod::LodKey;
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
@@ -91,6 +91,12 @@ impl RegionStore {
     /// while it's sampled, so only call from a task.
     pub fn column_grid(&self, key: LodKey) -> Arc<ColumnGrid> {
         self.columns.grid(&self.noise, key)
+    }
+
+    /// What full-detail chunks at chunk `x`, `z` take from each of their columns, shared by all
+    /// the chunks stacked there. Blocks while it's sampled, so only call from a task.
+    pub fn chunk_columns(&self, heights: &mut HeightSampler, x: i64, z: i64) -> Arc<ChunkColumns> {
+        self.columns.chunk_columns(&self.noise, heights, x, z)
     }
 
     /// The lowest and highest ground under a coarse LOD node, if a node over the same

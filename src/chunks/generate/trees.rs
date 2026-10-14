@@ -355,6 +355,10 @@ impl TreeTints {
             .min_by(|a, b| a.0.distance_squared(p).total_cmp(&b.0.distance_squared(p)))
             .map_or(Vec3::ONE, |&(_, tint)| tint)
     }
+
+    pub fn heap_size(&self) -> usize {
+        self.0.capacity() * size_of::<(Vec2, Vec3)>()
+    }
 }
 
 // Whether a tree's `block` may go where `existing` is: into air, and logs through leaves.

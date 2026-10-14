@@ -9,7 +9,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{Added, Or, With},
+        query::{Added, Or, With, Without},
         system::{Commands, Local, Query, Res, ResMut, SystemParam},
     },
     
@@ -898,11 +898,13 @@ pub fn load_lods(
 
         let has_mesh = result.is_some();
         if let Some(chunk_meshes) = result {
-            commands.entity(entity).insert((
-                Mesh3d(meshes.add(chunk_meshes.opaque)),
-                MeshMaterial3d(lods.material.clone()),
-                lod_aabb(),
-            ));
+            commands.entity(entity).insert(lod_aabb());
+            // open sea is all water, with no opaque faces to upload
+            if chunk_meshes.opaque.count_vertices() > 0 {
+                commands
+                    .entity(entity)
+                    .insert((Mesh3d(meshes.add(chunk_meshes.opaque)), MeshMaterial3d(lods.material.clone())));
+            }
             if let Some(water_mesh) = chunk_meshes.water {
                 let solid = node.key.level >= SOLID_WATER_LEVEL;
                 let water_material = if solid { &lods.solid_water_material } else { &lods.water_material }.clone();
@@ -994,8 +996,9 @@ pub fn refresh_lod_visibility(
     all_groups: Query<(Entity, &ChunkGroup), With<BuiltGroup>>,
     new_groups: Query<(Entity, &ChunkGroup), Added<BuiltGroup>>,
     built_groups: Query<(), With<BuiltGroup>>,
-    // only nodes with something to draw - nodes still loading are shown when their mesh lands
-    all_nodes: Query<(Entity, &LodNode), With<Mesh3d>>,
+    // only nodes with something to draw, as those meshed to nothing are despawned - nodes still
+    // loading are shown when their mesh lands
+    all_nodes: Query<(Entity, &LodNode), Without<GenerateLodMesh>>,
     mut visibility: Query<(&mut Visibility, Option<&Fade>)>,
 ) {
     let Some(anchor) = lods.anchor else {

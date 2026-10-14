@@ -104,6 +104,7 @@ pub fn insert_terrain_resources(
     ));
     commands.insert_resource(ChunkLoader::new(
         layout,
+        world_height,
         debug.solid_leaves,
         chunk_material,
         water_material,

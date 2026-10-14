@@ -106,6 +106,7 @@ fn scale_budget(baseline: usize, render_distance: u32) -> usize {
 impl ChunkLoader {
     pub fn new(
         layout: LodLayout,
+        world_height: u64,
         solid_leaves: bool,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
@@ -119,7 +120,8 @@ impl ChunkLoader {
             // actually meshed (up to render_distance) always have complete neighbour
             // data - without this, the outermost shell would never have its full
             // neighbourhood generated, since some of it is always further out
-            spawn_queue: ChunkSpawnQueue::new(render_distance + NEIGHBOR_DATA_PADDING),
+            spawn_queue: ChunkSpawnQueue::new(render_distance + NEIGHBOR_DATA_PADDING)
+                .with_layers(World::layers(world_height)),
             material,
             water_material,
             max_in_flight_generating: scale_budget(
@@ -277,11 +279,14 @@ pub fn mark_chunks(
             .into_iter()
             .all(|adj| world.is_chunk_generated(adj))
         {
-            commands.entity(entity).insert(GenerateChunkMesh {
-                coord: chunk.coord,
-                task: None,
-            });
             commands.entity(entity).remove::<DirtyChunk>();
+            // most chunks underground: meshing them would only find every face covered
+            if !world.is_chunk_buried(chunk.coord) {
+                commands.entity(entity).insert(GenerateChunkMesh {
+                    coord: chunk.coord,
+                    task: None,
+                });
+            }
         }
     });
 }
@@ -442,6 +447,8 @@ struct ChunkSpawnQueue {
     offsets: Vec<I64Vec3>,
     anchor: ChunkCoordinate,
     cursor: usize,
+    // the chunk layers loaded, as above and below the world isn't generated, see `World::beyond_world`
+    layers: std::ops::Range<i64>,
 }
 
 impl ChunkSpawnQueue {
@@ -450,7 +457,12 @@ impl ChunkSpawnQueue {
             offsets: build_offsets(render_distance),
             anchor: ChunkCoordinate(I64Vec3::ZERO),
             cursor: 0,
+            layers: i64::MIN..i64::MAX,
         }
+    }
+
+    fn with_layers(self, layers: std::ops::Range<i64>) -> Self {
+        Self { layers, ..self }
     }
 
     // by the triangle inequality (holds for Euclidean distance same as Chebyshev), a
@@ -496,7 +508,7 @@ impl ChunkSpawnQueue {
             self.cursor += 1;
             scanned += 1;
 
-            if !loaded.contains_key(&coord) {
+            if self.layers.contains(&coord.0.y) && !loaded.contains_key(&coord) {
                 candidates.push(coord);
             }
         }
@@ -644,6 +656,16 @@ mod tests {
 
         let batch = queue.next_batch(anchor, &loaded, 5, 1000);
         assert!(!batch.contains(&anchor));
+    }
+
+    #[test]
+    fn test_next_batch_skips_layers_outside_the_world() {
+        let mut queue = ChunkSpawnQueue::new(3).with_layers(0..2);
+        let anchor = ChunkCoordinate(I64Vec3::ZERO);
+        let batch = queue.next_batch(anchor, &HashMap::new(), 1000, 1000);
+        assert!(!batch.is_empty());
+        assert!(batch.iter().all(|c| (0..2).contains(&c.0.y)));
+        assert!(queue.is_exhausted());
     }
 
     #[test]
