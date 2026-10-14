@@ -1,5 +1,5 @@
 // Sorts the full-detail chunks loaded round spawn by what they hold, and times meshing each kind.
-//   cargo run --release --example chunk_census -- [seed, default 1]
+//   cargo run --release --example chunk_census -- [seed, default 1] [full detail distance] [chunks below spawn]
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -15,8 +15,13 @@ fn main() {
     let noise = Arc::new(NoiseGenerator::new(seed));
     let regions = Arc::new(RegionStore::new(noise.clone()));
     let (sx, sz, sh) = noise.find_spawn();
-    let anchor = I64Vec3::new(sx, sh as i64 + 20, sz).div_euclid(I64Vec3::splat(CHUNK_SIZE as i64));
-    let layout = Settings::read("assets/settings.toml").unwrap().renderer.lod_layout();
+    let depth: i64 = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let anchor = I64Vec3::new(sx, sh as i64 + 20, sz).div_euclid(I64Vec3::splat(CHUNK_SIZE as i64)) - I64Vec3::Y * depth;
+    let mut renderer = Settings::read("assets/settings.toml").unwrap().renderer;
+    if let Some(distance) = std::env::args().nth(2).and_then(|s| s.parse().ok()) {
+        renderer.full_detail_distance = distance;
+    }
+    let layout = renderer.lod_layout();
     let r = layout.full_detail_reach() as i64 + 2;
     println!("anchor {anchor:?}, radius {r}");
 
@@ -37,6 +42,8 @@ fn main() {
             }
         }
     }
+    let layers = rustcraft::world::World::layers(rustcraft::chunks::generate::WORLD_HEIGHT);
+    println!("{} of them in the world's layers {layers:?}, the rest never loaded", data.keys().filter(|c| layers.contains(&c.0.y)).count());
     println!("generated {} chunks in {:?}: air {:.2}s, all opaque {:.2}s, the rest {:.2}s", data.len(), t.elapsed(), gen_time[0], gen_time[1], gen_time[2]);
     let mut sum = 0u64;
     for (c, d) in &data {
