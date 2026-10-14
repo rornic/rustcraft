@@ -169,6 +169,7 @@ impl Material for ChunkMaterial {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+#[bind_group_data(WaterKey)]
 pub struct WaterMaterial {
     #[uniform(0)]
     pub color: LinearRgba,
@@ -178,8 +179,26 @@ pub struct WaterMaterial {
     // the dither window drawn, see `fade::FadeMaterials`
     #[uniform(3)]
     pub fade: Vec4,
+    // the clouds, for water to reflect and shade its glint by, see `clouds::CloudLayer`
+    #[texture(4)]
+    #[sampler(5)]
+    pub cloud_pattern: Handle<Image>,
+    #[uniform(6)]
+    pub cloud_layer: Vec4,
     // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
     pub solid: bool,
+}
+
+// Compiled into water's shaders, see `WaterMaterial::specialize`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct WaterKey {
+    solid: bool,
+}
+
+impl From<&WaterMaterial> for WaterKey {
+    fn from(material: &WaterMaterial) -> Self {
+        Self { solid: material.solid }
+    }
 }
 
 impl Material for WaterMaterial {
@@ -213,12 +232,17 @@ impl Material for WaterMaterial {
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        _key: MaterialPipelineKey<Self>,
+        key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         // unlike ChunkMaterial, water has no back-face culling: the player can swim
         // underneath the lowered surface and must still see it rendered from below.
         descriptor.primitive.cull_mode = None;
-        push_shader_defs(descriptor, &[water_level()]);
+        let mut defs = vec![water_level()];
+        // drawn opaque, so it shows the sea as it is, not blended over what's under it
+        if key.bind_group_data.solid {
+            defs.push("SOLID_WATER".into());
+        }
+        push_shader_defs(descriptor, &defs);
         Ok(())
     }
 }

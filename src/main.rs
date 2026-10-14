@@ -111,6 +111,8 @@ fn setup_scene(
         color: LinearRgba::rgb(0.0, 0.85, 0.85),
         texture: Some(atlas),
         fade: FULLY_VISIBLE,
+        cloud_pattern: clouds.pattern.clone(),
+        cloud_layer: clouds.layer,
         solid: false,
     });
     let solid_water = WaterMaterial {

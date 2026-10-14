@@ -1,11 +1,16 @@
 import bevy_pbr::render::{
     forward_io::{Vertex, VertexOutput, decompress_vertex},
     mesh_view_bindings as view_bindings,
+    mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT,
     mesh_functions,
-    view_transformations::position_world_to_clip,
+    shadows::fetch_directional_shadow,
+    view_transformations::{position_world_to_clip, position_world_to_view},
 };
 import super::fog::fogged;
 import super::dither::dither_threshold;
+import super::sky::sky_colour;
+import super::lighting::{SKY_GAIN, direct_sun, open_sky};
+import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> material_color: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var material_color_texture: texture_2d<f32>;
@@ -51,6 +56,38 @@ const WAVE_FADE_END: f32 = 256.0;
 const WAVE_FADE_START: f32 = 192.0;
 const FOAM_FADE_END: f32 = 192.0;
 const FOAM_FADE_START: f32 = 144.0;
+
+// Ripples, as directional waves summed: each one's direction across the water, wavelength in
+// blocks, and steepness (its height over its wavelength, times 2 pi). Only their slopes are
+// drawn, for the surface's normal: the mesh rises and falls with `wave_height`'s longer swell.
+const RIPPLES: i32 = 8;
+const RIPPLE_DIRECTIONS: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
+    vec2<f32>(0.8, 0.6), vec2<f32>(0.21, 0.978), vec2<f32>(0.954, -0.3), vec2<f32>(-0.39, 0.921),
+    vec2<f32>(0.62, -0.785), vec2<f32>(0.995, 0.1), vec2<f32>(-0.71, 0.704), vec2<f32>(0.44, 0.898),
+);
+const RIPPLE_LENGTHS: array<f32, 8> = array<f32, 8>(13.1, 7.7, 5.3, 3.4, 2.3, 1.7, 1.21, 0.87);
+const RIPPLE_STEEPNESS: array<f32, 8> = array<f32, 8>(0.11, 0.1, 0.09, 0.09, 0.08, 0.07, 0.07, 0.06);
+// The wind gusts over patches of water roughly this many blocks across, drifting this fast,
+// roughening some and calming others, between these shares of the ripples' steepness.
+const GUST_SIZE: f32 = 56.0;
+const GUST_DRIFT: vec2<f32> = vec2<f32>(1.2, 0.7);
+const GUST_RANGE: vec2<f32> = vec2<f32>(0.35, 1.35);
+// Ripples fade out once they're this many pixels long or shorter, which would only shimmer.
+// What they'd have tilted the surface by roughens it instead, so the sun's glint spreads
+// into a glittering path over far water rather than vanishing.
+const RIPPLE_MIN_PIXELS: f32 = 4.0;
+// How smooth still water is, as the slope's spread: a sharp glint off it.
+const CALM_SLOPE_VARIANCE: f32 = 0.002;
+// How much light water reflects looking straight down at it, rising to all at a glance.
+const REFLECT_STRAIGHT_DOWN: f32 = 0.02;
+// How bright the sun's glint is, to how bright it would be off a perfect mirror.
+const GLINT: f32 = 0.6;
+
+// Clouds as reflected: their colour, lit as `clouds.wesl` lights them, and how far out they
+// fade, to the fog's end, as the clouds themselves do.
+const CLOUD_COLOR: vec3<f32> = vec3<f32>(0.95, 0.95, 0.92);
+const CLOUD_SUN_SCATTER: f32 = 0.8;
+const CLOUD_SKY_SCATTER: f32 = 1.4;
 
 // Water's colours are picked as they should look on screen, so they're turned back into
 // the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
@@ -115,6 +152,16 @@ fn hash2(p: vec2<f32>) -> f32 {
     return fract(sin(h) * 43758.5453123);
 }
 
+// Value noise, 0..1, smooth across whole-number cells.
+fn smooth_noise(p: vec2<f32>) -> f32 {
+    let cell = floor(p);
+    let t = fract(p);
+    let u = t * t * (3.0 - 2.0 * t);
+    let a = mix(hash2(cell), hash2(cell + vec2<f32>(1.0, 0.0)), u.x);
+    let b = mix(hash2(cell + vec2<f32>(0.0, 1.0)), hash2(cell + vec2<f32>(1.0, 1.0)), u.x);
+    return mix(a, b, u.y);
+}
+
 // Reveals a fraction (`coverage`) of a coarse, block-aligned grid - a blocky,
 // hard-edged cutout (like Minecraft's animated water/foam texture frames) instead
 // of a smooth noise gradient. `frame` steps discretely so the revealed cells
@@ -152,6 +199,88 @@ fn scene_colour(display: vec3<f32>) -> vec3<f32> {
         scene = max(scene + (display - displayed(scene)) * 1.5 / scale, vec3<f32>(0.0));
     }
     return scene;
+}
+
+// The water's slope at `xz` from the ripples, d(height)/dx and d(height)/dz, and the
+// spread of slope left out where ripples are too fine for `footprint`, the blocks a
+// pixel spans there.
+fn ripples(xz: vec2<f32>, time: f32, footprint: f32) -> vec3<f32> {
+    var slope = vec2<f32>(0.0);
+    var lost = 0.0;
+    let gust = mix(GUST_RANGE.x, GUST_RANGE.y, smooth_noise((xz - GUST_DRIFT * time) / GUST_SIZE));
+    for (var i = 0; i < RIPPLES; i++) {
+        let k = 6.2831853 / RIPPLE_LENGTHS[i];
+        // deep water waves travel at sqrt(g / k), here in blocks a second with a game's gravity
+        let speed = sqrt(9.8 / k);
+        let direction = RIPPLE_DIRECTIONS[i];
+        let phase = k * (dot(direction, xz) - speed * time);
+        let shown = 1.0 - smoothstep(RIPPLE_MIN_PIXELS * 0.5, RIPPLE_MIN_PIXELS, RIPPLE_LENGTHS[i] / footprint);
+        let fine = 1.0 - shown;
+        let steepness = RIPPLE_STEEPNESS[i] * gust;
+        slope += direction * steepness * cos(phase) * fine;
+        lost += 0.5 * steepness * steepness * shown;
+    }
+    return vec3<f32>(slope, lost);
+}
+
+// The sky reflected along `direction` from `origin`, with the clouds in it where it rises to them.
+fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    // a reflection pointing down would be of the water itself, so it's kept to the sky
+    let sky = sky_colour(normalize(vec3<f32>(direction.x, max(direction.y, 0.02), direction.z)));
+    let layer = cloud_layer.x;
+    if direction.y <= 0.0 || origin.y >= layer || cloud_layer.y <= 0.0 {
+        return sky;
+    }
+    let hit = origin.xz + direction.xz * ((layer - origin.y) / direction.y);
+    // `globals.time` wraps when the wind has carried the clouds a whole number of patterns
+    let drift = cloud_layer.zw * view_bindings::globals.time;
+    let thickness = textureSampleLevel(cloud_pattern, cloud_sampler, (hit - drift) / cloud_layer.y, 0.0).r;
+    let away = distance(hit, view_bindings::view.world_position.xz);
+    let end = max(view_bindings::fog.be.y, 1.0);
+    let cover = smoothstep(0.1, 0.5, thickness) * (1.0 - smoothstep(0.4 * end, end, away));
+    // seen from below, steeply, or from the side, low down
+    let side = normalize(vec3<f32>(-direction.x, 0.0, -direction.z) + vec3<f32>(0.0, 0.0, 1e-4));
+    let facing = normalize(mix(side, vec3<f32>(0.0, -1.0, 0.0), direction.y));
+    let lit = direct_sun(facing) * CLOUD_SUN_SCATTER + open_sky(facing) * CLOUD_SKY_SCATTER;
+    return mix(sky, CLOUD_COLOR * lit, cover);
+}
+
+// How much of the light arriving at an angle with cosine `cos_theta` off the normal water
+// reflects, by Schlick's approximation.
+fn fresnel(cos_theta: f32) -> f32 {
+    return REFLECT_STRAIGHT_DOWN + (1.0 - REFLECT_STRAIGHT_DOWN) * pow(1.0 - clamp(cos_theta, 0.0, 1.0), 5.0);
+}
+
+// The sun's glint towards `to_eye` off water turned to `normal`, whose slopes spread by
+// `variance`, in scene colour: a Beckmann highlight, widening as the water roughens.
+fn glint(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, world_position: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
+    if view_bindings::lights.n_directional_lights == 0u {
+        return vec3<f32>(0.0);
+    }
+    let sun = &view_bindings::lights.directional_lights[0];
+    let to_sun = (*sun).direction_to_light;
+    let n_dot_l = dot(normal, to_sun);
+    let n_dot_v = dot(normal, to_eye);
+    if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let half_way = normalize(to_sun + to_eye);
+    let n_dot_h = max(dot(normal, half_way), 1e-4);
+    // Beckmann's spread of facets, with its roughness squared twice the slopes' variance
+    let alpha2 = 2.0 * variance;
+    let cos2 = n_dot_h * n_dot_h;
+    let facets = exp((cos2 - 1.0) / (alpha2 * cos2)) / (3.14159265 * alpha2 * cos2 * cos2);
+    let reflected = facets * fresnel(dot(half_way, to_eye)) / (4.0 * n_dot_v);
+    let radiance = (*sun).color.rgb * view_bindings::view.exposure / SKY_GAIN;
+    // in the land's shadow, no glint
+    if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
+        return radiance * reflected * n_dot_l * GLINT;
+    }
+    let view_z = position_world_to_view(world_position).z;
+    let shadow = fetch_directional_shadow(0u, vec4<f32>(world_position, 1.0), normal, view_z, frag_coord);
+    let reach = (*sun).cascades[(*sun).num_cascades - 1u].far_bound;
+    let shaded = mix(shadow, 1.0, smoothstep(reach * 0.8, reach, -view_z));
+    return radiance * reflected * n_dot_l * GLINT * shaded;
 }
 
 @fragment
@@ -226,8 +355,33 @@ fn fragment(
     alpha = mix(alpha, 1.0, foam);
 }
 
+    // What the water shows of itself, from below the surface, and the sky and sun it
+    // reflects. Looking up at it from underwater, only itself.
+    var scene = scene_colour(color.rgb);
+    let to_eye = -view_to_world / dist;
+    // blocks a pixel spans across the water here, worked out where every fragment does
+    let footprint = max(length(dpdx(world_position.xz)), length(dpdy(world_position.xz)));
+    let above = view_position.y > world_position.y && normal.y > 0.5;
+@if(SOLID_WATER) {
+    // nothing shows through, so it's all the water's own colour that isn't reflected
+    alpha = 1.0;
+}
+    if above {
+        let time = view_bindings::globals.time;
+        let ripple = ripples(world_position.xz, time, footprint);
+        let surface = normalize(vec3<f32>(-ripple.x, 1.0, -ripple.y));
+        let variance = CALM_SLOPE_VARIANCE + ripple.z;
+        let sky = reflected_sky(world_position, reflect(-to_eye, surface));
+        let reflected = fresnel(dot(surface, to_eye));
+        let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(world_position);
+        // blended over what's behind: the reflection and glint stay as bright however clear the water
+        let body = scene * alpha * (1.0 - reflected);
+        let covered = alpha * (1.0 - reflected) + reflected;
+        scene = (body + sky * reflected + sun) / max(covered, 1e-4);
+        alpha = covered;
+    }
+
     // so distant water fades into the sky instead of popping in and out
-    let scene = scene_colour(color.rgb);
     let shown = fogged(vec4<f32>(scene, alpha), world_position, in.position.xy);
 
     // after the texture samples above, which need uniform control flow
