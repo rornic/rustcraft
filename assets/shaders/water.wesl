@@ -319,6 +319,37 @@ fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     return mix(sky, CLOUD_COLOR * lit, cover);
 }
 
+// Where reflections are looked up across the spread of slopes waves too fine to draw would
+// have had, as offsets in standard deviations: a spiral through a disc.
+const REFLECTION_TAPS: i32 = 8;
+const REFLECTION_SPREAD: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
+    vec2<f32>(0.35, 0.0), vec2<f32>(-0.42, 0.55), vec2<f32>(-0.38, -0.78), vec2<f32>(0.98, -0.52),
+    vec2<f32>(0.21, 1.25), vec2<f32>(-1.37, 0.18), vec2<f32>(-0.06, -1.5), vec2<f32>(1.38, 0.9),
+);
+
+// The sky and clouds reflected towards `to_eye` off water at `origin` sloping by `slope`,
+// in rgb, and how much it reflects, in a. Where waves are too fine to draw, so `spread`
+// over their slopes is wide, it's the mean over that spread: clouds blur and smear
+// towards the eye, as they do on a real sea, instead of reflecting as off a mirror.
+fn rough_reflection(origin: vec3<f32>, slope: vec2<f32>, spread: f32, to_eye: vec3<f32>) -> vec4<f32> {
+    var light = vec3<f32>(0.0);
+    var reflected = 0.0;
+    for (var i = 0; i < REFLECTION_TAPS; i++) {
+        let tilted = slope + REFLECTION_SPREAD[i] * spread;
+        let normal = normalize(vec3<f32>(-tilted.x, 1.0, -tilted.y));
+        // facets turned away from the eye aren't seen
+        let facing = dot(normal, to_eye);
+        if facing <= 0.0 {
+            continue;
+        }
+        let share = fresnel(facing);
+        light += reflected_sky(origin, reflect(-to_eye, normal)) * share;
+        reflected += share;
+    }
+    let mean = reflected / f32(REFLECTION_TAPS);
+    return vec4<f32>(light / max(reflected, 1e-4), mean);
+}
+
 // How much of the light arriving at an angle with cosine `cos_theta` off the normal water
 // reflects, by Schlick's approximation.
 fn fresnel(cos_theta: f32) -> f32 {
@@ -453,8 +484,9 @@ fn fragment(
         let slope = ripple.xy + waves.slope;
         let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
         let variance = CALM_SLOPE_VARIANCE + ripple.z + waves.lost;
-        let sky = reflected_sky(world_position, reflect(-to_eye, surface));
-        let reflected = fresnel(dot(surface, to_eye));
+        let rough = rough_reflection(world_position, slope, sqrt(ripple.z + waves.lost), to_eye);
+        let sky = rough.rgb;
+        let reflected = rough.a;
         let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(world_position);
         // blended over what's behind: the reflection and glint stay as bright however clear the water
         let body = scene * alpha * (1.0 - reflected);
