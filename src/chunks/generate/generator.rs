@@ -2,7 +2,7 @@ use std::{cell::LazyCell, collections::HashMap, ops::Deref, sync::Arc};
 
 use bevy::{
     asset::RenderAssetUsages,
-    math::{I64Vec2, I64Vec3, IVec3, U16Vec3, Vec3},
+    math::{I64Vec2, I64Vec3, IVec3, U16Vec3, UVec2, Vec3},
     render::{
         mesh::{Indices, Mesh, VertexAttributeValues},
     },
@@ -135,16 +135,19 @@ const CANOPY_CELL: i64 = 16;
 // How many points across each column, each way, its canopy's cover is judged from.
 const CANOPY_SAMPLES: usize = 4;
 // Columns at least this much under crowns are canopy. The rest only darken the ground, by how
-// much of them is, see `LodBlocks::forest_shade`.
+// much of them is, see `LodBlocks::forest_shade`. Higher, and the trees left out of the canopy
+// each need a box of their own; lower, and it fills more of the gaps between crowns.
 const CANOPY_COVER: f32 = 0.5;
 // Canopy tops are rounded to this many steps a cell, so neighbouring columns merge into one box.
 const CANOPY_STEPS: i64 = 4;
 
 // The trees around a coarse node seen from above, column by padded column.
 struct Canopy {
+    // which of each column's `CANOPY_SAMPLES` x `CANOPY_SAMPLES` points are under crowns, x fastest
+    hits: Vec<u32>,
     // how much of each column crowns cover, 0..1
     cover: Vec<f32>,
-    // the highest crown's top over each column, in blocks
+    // the crowns' tops over each column, in blocks, weighed by how much of it each covers
     tops: Vec<f64>,
     // the mean tint of the crowns over each column
     tints: Vec<Vec3>,
@@ -153,7 +156,7 @@ struct Canopy {
 impl Canopy {
     fn new(trees: &[Tree], base: I64Vec3, cell: i64, size: i32) -> Self {
         let padded = ((size + 2) * (size + 2)) as usize;
-        let (mut hits, mut tops, mut tints) = (vec![0u32; padded], vec![f64::MIN; padded], vec![Vec3::ZERO; padded]);
+        let (mut hits, mut tops, mut tints) = (vec![0u32; padded], vec![0.0; padded], vec![Vec3::ZERO; padded]);
         let mut weights = vec![0u32; padded];
         let step = cell as f64 / CANOPY_SAMPLES as f64;
         for tree in trees {
@@ -174,7 +177,7 @@ impl Canopy {
                     }
                     if under != 0 {
                         hits[column] |= under;
-                        tops[column] = tops[column].max(top);
+                        tops[column] += top * under.count_ones() as f64;
                         tints[column] += tint * under.count_ones() as f32;
                         weights[column] += under.count_ones();
                     }
@@ -184,7 +187,8 @@ impl Canopy {
         let samples = (CANOPY_SAMPLES * CANOPY_SAMPLES) as f32;
         let cover = hits.iter().map(|h| h.count_ones() as f32 / samples).collect();
         let tints = tints.iter().zip(&weights).map(|(&t, &w)| if w > 0 { t / w as f32 } else { Vec3::ONE }).collect();
-        Self { cover, tops, tints }
+        let tops = tops.iter().zip(&weights).map(|(&t, &w)| if w > 0 { t / w as f64 } else { 0.0 }).collect();
+        Self { hits, cover, tops, tints }
     }
 
     // Whether `tree` is part of the canopy, which is drawn in its place: the column it stands in is.
@@ -194,13 +198,15 @@ impl Canopy {
     }
 
     // The canopy over this node's columns whose ground is in it, as boxes from the ground up to
-    // the crowns' tops, merged where columns side by side round to the same top.
+    // the crowns' tops, merged where columns side by side round to the same top, and drawn in at
+    // their edges to the points under crowns, so they're no wider than the trees.
     fn boxes(&self, ground_heights: &[f32], base: I64Vec3, cell: i64, size: i32) -> Vec<TreeBox> {
         let n = size as usize;
         let step = (cell / CANOPY_STEPS) as f64;
         let ceiling = base.y + size as i64 * cell;
+        let column_of = |x: usize, z: usize| LodBlocks::column(size, x as i32, z as i32);
         let top = |x: usize, z: usize| {
-            let column = LodBlocks::column(size, x as i32, z as i32);
+            let column = column_of(x, z);
             let ground = ground_heights[column] as i64;
             let canopy = self.cover[column] >= CANOPY_COVER && (base.y..ceiling).contains(&ground);
             canopy.then(|| (self.tops[column] / step).round() as i64)
@@ -223,20 +229,29 @@ impl Canopy {
                     z1 += 1;
                 }
                 let (mut lowest, mut tint, mut count) = (f32::MAX, Vec3::ZERO, 0.0);
+                // the points under crowns' bounds, in points across the node
+                let (mut near, mut far) = (UVec2::MAX, UVec2::ZERO);
                 for x in x0..x1 {
                     for z in z0..z1 {
                         taken[x * n + z] = true;
-                        let column = LodBlocks::column(size, x as i32, z as i32);
+                        let column = column_of(x, z);
                         lowest = lowest.min(ground_heights[column]);
                         tint += self.tints[column];
                         count += 1.0;
+                        for i in (0..CANOPY_SAMPLES * CANOPY_SAMPLES).filter(|i| self.hits[column] & (1 << i) != 0) {
+                            let point = UVec2::new((x * CANOPY_SAMPLES + i % CANOPY_SAMPLES) as u32, (z * CANOPY_SAMPLES + i / CANOPY_SAMPLES) as u32);
+                            (near, far) = (near.min(point), far.max(point));
+                        }
                     }
                 }
+                // each point stands for the square round it
+                let samples = CANOPY_SAMPLES as f32;
+                let (near, far) = (near.as_vec2() / samples - 0.5, (far + 1).as_vec2() / samples - 0.5);
                 // from a little under the ground, so no gap shows on slopes
                 let bottom = mesh_y(lowest as f64 - 2.0);
                 boxes.push(TreeBox {
-                    min: Vec3::new(x0 as f32 - 0.5, bottom, z0 as f32 - 0.5),
-                    max: Vec3::new(x1 as f32 - 0.5, mesh_y(steps as f64 * step).max(bottom + 0.1), z1 as f32 - 0.5),
+                    min: Vec3::new(near.x, bottom, near.y),
+                    max: Vec3::new(far.x, mesh_y(steps as f64 * step).max(bottom + 0.1), far.y),
                     block: BlockType::Leaves,
                     tint: tint / count,
                     faces: BoxFaces::NoBottom,
@@ -1081,9 +1096,15 @@ struct MeshBuffers {
     lights: Vec<f32>,
     // whether faces draw their block's mean colour instead of its texture, see `world.wesl`
     untextured: bool,
-    // where tree boxes start and whether they're untextured, which they are on their own terms
-    boxes: Option<(usize, bool)>,
+    // where tree boxes start and how they draw, which is on their own terms
+    boxes: Option<(usize, f32)>,
 }
+
+// How a face draws, carried in each vertex's second uv, see `world.wesl`: its own tile, its
+// tile with leaves' holes filled, or its block's mean colour.
+const TEXTURED: f32 = 0.0;
+const TEXTURED_SOLID: f32 = 0.75;
+const UNTEXTURED: f32 = 1.0;
 
 impl MeshBuffers {
     fn push_face(&mut self, vs: &[Vertex], position: Vec3, uv_offset: f32, colors: &[[f32; 4]]) {
@@ -1197,14 +1218,13 @@ impl MeshBuffers {
         );
         if !self.lights.is_empty() {
             assert_eq!(self.lights.len(), self.vertices.len(), "only some vertices carry light");
-            let flag = |untextured: bool| if untextured { 1.0 } else { 0.0 };
             let lights = self
                 .lights
                 .into_iter()
                 .enumerate()
                 .map(|(i, l)| match self.boxes {
-                    Some((start, untextured)) if i >= start => [l, flag(untextured)],
-                    _ => [l, flag(self.untextured)],
+                    Some((start, flag)) if i >= start => [l, flag],
+                    _ => [l, if self.untextured { UNTEXTURED } else { TEXTURED }],
                 })
                 .collect();
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(lights));
@@ -1359,8 +1379,8 @@ fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>],
 // cell's width of times over a face, since one stretched over a coarse cell would read as a
 // giant block. Past a few blocks a tile is under a pixel and mipmaps down to the mean anyway.
 const TEXTURE_MAX_CELL_SIZE: i64 = 4;
-// Tree boxes keep their leaf texture, holes and all, up to cells this wide: it has to stay
-// readable as leaves, and past it a crown is a few pixels.
+// Tree boxes keep their leaf texture's holes up to cells this wide. Past it boxes are mostly
+// canopy, too wide to see through, and keep the texture with its holes filled.
 const BOX_TEXTURE_MAX_CELL: i64 = 8;
 
 // A quad's `uvs` scaled to count blocks across it, so a texture isn't stretched over a whole box.
@@ -1837,8 +1857,10 @@ fn mesh_blocks(
     );
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly
     const BOX_LIGHT: f32 = 0.8;
-    let box_textured = cell_size <= BOX_TEXTURE_MAX_CELL;
-    opaque.boxes = Some((opaque.vertices.len(), !box_textured));
+    // past them, so wide a box would show through to its back where leaves' holes line up, so
+    // they're filled
+    let box_holes = cell_size <= BOX_TEXTURE_MAX_CELL;
+    opaque.boxes = Some((opaque.vertices.len(), if box_holes { TEXTURED } else { TEXTURED_SOLID }));
     for tree_box in source.tree_boxes() {
         let (centre, extent) = ((tree_box.min + tree_box.max) / 2.0, tree_box.max - tree_box.min);
         let tint = if tree_box.block.lod_tile().tinted() { grass_tint.at(centre) * tree_box.tint } else { Vec3::ONE };
@@ -1848,7 +1870,7 @@ fn mesh_blocks(
             BoxFaces::Sides => &face_vertices[..4],
         };
         for face in faces {
-            let tile = if box_textured { tree_box.block.tile(Face::of_normal_y(face[0].normal[1])) } else { tree_box.block.lod_tile() };
+            let tile = tree_box.block.tile(Face::of_normal_y(face[0].normal[1]));
             let positions = std::array::from_fn(|j| (centre + Vec3::from(face[j].position) * extent).to_array());
             let uvs = tiled_uvs(&positions, &std::array::from_fn(|j| face[j].uv), cell_size as f32);
             opaque.push_tiled_quad(positions, face[0].normal, uvs, [tint.extend(tile.atlas_cell()).to_array(); 4], [BOX_LIGHT; 4]);
@@ -2560,7 +2582,9 @@ mod tests {
         let key = crate::chunks::lod::LodKey::containing(chunk, 5);
         assert!(key.cell_size() > super::BOX_TEXTURE_MAX_CELL);
         let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
-        assert!(!flags.is_empty() && flags.iter().all(|&f| f == 1.0));
+        // but for tree boxes, textured with their leaves' holes filled, which come last
+        let ground = flags.iter().take_while(|&&f| f == super::UNTEXTURED).count();
+        assert!(ground > 0 && flags[ground..].iter().all(|&f| f == super::TEXTURED_SOLID));
     }
 
     #[test]
@@ -2978,6 +3002,33 @@ mod tests {
             assert!(highest <= tallest + step, "canopy at {highest}, trees up to {tallest} at level {level}");
             // the ground under it is darkened by how much of it is under crowns
             assert!(blocks.forest.iter().any(|&f| f > 0.9));
+        }
+    }
+
+    #[test]
+    fn test_canopy_is_no_bigger_than_the_crowns_under_it() {
+        let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+        let (middle, _) = forest(&regions);
+        for level in [4u8, 5] {
+            let key = LodKey::containing(ChunkCoordinate(middle.div_euclid(I64Vec3::splat(16))), level);
+            let blocks = LodBlocks::sample(&regions, key);
+            let canopy: Vec<_> = blocks.boxes.iter().filter(|b| b.faces == super::BoxFaces::NoBottom).collect();
+            let area = |b: &&super::TreeBox| (b.max.x - b.min.x) * (b.max.z - b.min.z);
+            let drawn: f32 = canopy.iter().map(area).sum();
+            // what's under crowns over the ground this node draws
+            let (min, span) = (key.min_block().y as f32, 16.0 * key.cell_size() as f32);
+            let mut under = 0.0;
+            for x in 0..16 {
+                for z in 0..16 {
+                    let column = LodBlocks::column(16, x, z);
+                    if (min..min + span).contains(&blocks.ground_heights[column]) {
+                        under += blocks.forest[column];
+                    }
+                }
+            }
+            // its edges are drawn in to the crowns, so what's extra is the gaps between them inside
+            // it, more of them the wider the columns
+            assert!(drawn <= under * 1.4, "canopy {drawn} over {under} under crowns at level {level}");
         }
     }
 

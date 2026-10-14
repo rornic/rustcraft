@@ -64,7 +64,7 @@ impl Default for RendererSettings {
             full_detail_distance: 32,
             lod_level_scale: 4,
             lod_fade_seconds: 1.5,
-            shadow_distance: 32,
+            shadow_distance: 64,
             shadow_cascades: 3,
         }
     }

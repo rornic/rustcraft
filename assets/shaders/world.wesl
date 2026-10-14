@@ -13,6 +13,8 @@ import super::lighting::{direct_sun, open_sky};
 import super::cloud_shadow::cloud_shadow;
 import super::lod_patch::patch_tint;
 import super::dither::dither_threshold;
+// How bright the leaves seen through a solid tree box's holes are, to its surface's.
+const HOLE_SHADE: f32 = 0.55;
 // All that's left with no sky light at all, so caves aren't pitch black.
 const CAVE_AMBIENT: vec3<f32> = vec3<f32>(0.02, 0.02, 0.025);
 // Above 1, light falls away quickly at first under cover, then more slowly.
@@ -50,9 +52,11 @@ fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky
 }
 
 // Faces turn toward up between these distances in blocks, to this much of the way: past
-// where a block step is under a pixel, lit tops and dark sides shimmer into each other.
-const FLATTEN_START: f32 = 250.0;
-const FLATTEN_END: f32 = 1000.0;
+// where a step is under a pixel, lit tops and dark sides shimmer into each other. LOD cells are
+// a few blocks wide well before then, so it starts where shadows end, the default
+// `RendererSettings::shadow_distance`, and the land is lit block by block as far as it's shadowed.
+const FLATTEN_START: f32 = 1024.0;
+const FLATTEN_END: f32 = 4096.0;
 const FLATTEN_MAX: f32 = 0.85;
 
 // The normal to light by: turned toward up with distance, which evens out the sun's and sky's contrast between faces.
@@ -105,12 +109,17 @@ fn fragment(
     let normal = normalize(in.world_normal);
 
     var color = block_texel(in.uv, in.color.a);
-    // coarse LOD cells, where a stretched texture would read as one giant block. Leaves
-    // come out solid, and their shadows match, see `world_prepass.wesl`.
+    // coarse LOD cells, where a stretched texture would read as one giant block, and wide
+    // tree boxes, which keep it: leaves come out solid, and their shadows match, see
+    // `world_prepass.wesl`. How a face draws is `generator::TEXTURED` and so on.
 @if(VERTEX_UVS_B) {
-    if in.uv_b.y > 0.5 {
+    if in.uv_b.y > 0.875 {
         let mean = block_mean(in.color.a);
         color = vec4<f32>(mean.rgb * patch_tint(world_position), mean.a);
+    } else if in.uv_b.y > 0.5 {
+        // the holes show deeper leaves, in their shade
+        let deeper = block_mean(in.color.a).rgb * HOLE_SHADE;
+        color = vec4<f32>(mix(deeper, color.rgb, smoothstep(0.3, 0.7, color.a)), 1.0);
     }
 }
     // `DebugSettings::solid_leaves`: leaves without their holes, as coarse LODs draw them
