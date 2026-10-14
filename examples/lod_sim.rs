@@ -66,6 +66,7 @@ fn setup(
         fade: FULLY_VISIBLE,
         cloud_pattern: Default::default(),
         cloud_layer: Default::default(),
+        see_through: Default::default(),
         solid: false,
     });
     let solid_water = water_materials.add(WaterMaterial {
@@ -74,6 +75,7 @@ fn setup(
         fade: FULLY_VISIBLE,
         cloud_pattern: Default::default(),
         cloud_layer: Default::default(),
+        see_through: Default::default(),
         solid: true,
     });
     insert_terrain_resources(

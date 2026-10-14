@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
     insert_terrain_resources,
-    material::{block_atlas, ChunkMaterial, WaterMaterial},
+    material::{block_atlas, see_through_reach, ChunkMaterial, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
@@ -113,6 +113,7 @@ fn setup_scene(
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
+        see_through: see_through_reach(layout),
         solid: false,
     });
     let solid_water = WaterMaterial {

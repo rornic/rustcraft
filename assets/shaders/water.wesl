@@ -17,6 +17,8 @@ import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_l
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var material_color_sampler: sampler;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
+// between these distances, x to y, see-through water turns opaque, see `WaterMaterial`
+@group(constants::MATERIAL_BIND_GROUP) @binding(7) var<uniform> see_through: vec4<f32>;
 
 
 const TROPICAL_TINT: vec3<f32> = vec3<f32>(0.0, 0.85, 0.9);
@@ -470,6 +472,13 @@ fn fragment(
 @if(SOLID_WATER) {
     // nothing shows through, so it's all the water's own colour that isn't reflected
     alpha = 1.0;
+}
+@if(!SOLID_WATER) {
+    // and see-through water closes up before LODs draw it opaque, or where they take over
+    // the seabed would stop showing all at once, along the square edge of their nodes
+    if see_through.y > see_through.x {
+        alpha = mix(alpha, 1.0, smoothstep(see_through.x, see_through.y, dist));
+    }
 }
     if above {
         let time = view_bindings::globals.time;

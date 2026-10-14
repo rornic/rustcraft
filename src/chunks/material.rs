@@ -15,6 +15,8 @@ use bevy::{
 };
 
 use crate::block::Tile;
+use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::lod::{LodLayout, SOLID_WATER_LEVEL};
 use crate::chunks::generate::WATER_LEVEL;
 use crate::settings::DebugSettings;
 
@@ -185,8 +187,23 @@ pub struct WaterMaterial {
     pub cloud_pattern: Handle<Image>,
     #[uniform(6)]
     pub cloud_layer: Vec4,
+    // between these distances in blocks, x to y, see-through water turns opaque, so it
+    // matches the opaque water LODs draw farther out, see `see_through_reach`
+    #[uniform(7)]
+    pub see_through: Vec4,
     // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
     pub solid: bool,
+}
+
+/// Where see-through water turns opaque for `WaterMaterial::see_through`: by the nearest
+/// LOD water drawn opaque can be, where a node of `lod::SOLID_WATER_LEVEL` is no longer
+/// split, see `LodLayout::splits`. None at all if no level is that coarse.
+pub fn see_through_reach(layout: LodLayout) -> Vec4 {
+    if layout.max_level < SOLID_WATER_LEVEL {
+        return Vec4::new(f32::MAX, f32::MAX, 0.0, 0.0);
+    }
+    let opaque = layout.reach(SOLID_WATER_LEVEL - 1) * CHUNK_SIZE as f32;
+    Vec4::new(0.5 * opaque, 0.95 * opaque, 0.0, 0.0)
 }
 
 // Compiled into water's shaders, see `WaterMaterial::specialize`.
@@ -250,6 +267,18 @@ impl Material for WaterMaterial {
 #[cfg(test)]
 mod tests {
     use bevy::color::{LinearRgba, Srgba};
+
+    #[test]
+    fn test_see_through_water_is_opaque_before_lods_draw_it_opaque() {
+        use crate::chunks::lod::{LodLayout, SOLID_WATER_LEVEL};
+        let layout = LodLayout::new(16, 512, 2);
+        let reach = super::see_through_reach(layout);
+        // the nearest a node drawing opaque water can be, in blocks
+        let opaque = layout.reach(SOLID_WATER_LEVEL - 1) * 16.0;
+        assert!(reach.x < reach.y && reach.y < opaque, "{reach} for opaque from {opaque}");
+        // with no level that coarse, water stays see-through however far out
+        assert!(super::see_through_reach(LodLayout::new(16, 16, 2)).x > 1e30);
+    }
 
     #[test]
     fn test_atlas_mips_end_at_one_texel_a_tile() {
