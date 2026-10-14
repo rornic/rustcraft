@@ -53,7 +53,7 @@ const FOAM_FRAME_RATE: f32 = 1.2;
 // about twice that. Their crests are sharp and troughs broad, see `swell_shape`.
 const SWELLS: i32 = 5;
 const WIND: vec2<f32> = vec2<f32>(0.8, 0.6);
-const SWELL_ANGLES: array<f32, 5> = array<f32, 5>(0.0, 0.45, -0.6, 1.05, -0.25);
+const SWELL_ANGLES: array<f32, 5> = array<f32, 5>(0.0, 0.8, -1.05, 1.9, -0.45);
 const SWELL_LENGTHS: array<f32, 5> = array<f32, 5>(71.0, 43.0, 29.0, 17.0, 11.0);
 const SWELL_HEIGHTS: array<f32, 5> = array<f32, 5>(0.55, 0.38, 0.25, 0.15, 0.08);
 // How peaked crests are: 0 is a sine wave.
@@ -77,24 +77,24 @@ const SWELL_FADE: vec2<f32> = vec2<f32>(14.0, 28.0);
 // instead of running straight across the world. Kept gentle enough that the water's never
 // stretched by more than about half: past that it folds over and crests double back.
 const SWIRLS: i32 = 2;
-const SWIRL_REACH: array<f32, 2> = array<f32, 2>(36.0, 9.0);
-const SWIRL_SIZE: array<f32, 2> = array<f32, 2>(420.0, 110.0);
+const SWIRL_REACH: array<f32, 2> = array<f32, 2>(90.0, 24.0);
+const SWIRL_SIZE: array<f32, 2> = array<f32, 2>(760.0, 200.0);
 const SWIRL_DRIFT: array<vec2<f32>, 2> = array<vec2<f32>, 2>(vec2<f32>(0.25, -0.15), vec2<f32>(0.6, -0.4));
 // And each wave slips in and out of step with the others from place to place, by up to this
 // many of its cycles over patches this many of its wavelengths across, so where they meet
 // they never line up into the same rows twice.
-const PHASE_DRIFT: f32 = 0.6;
-const PHASE_SCALE: f32 = 10.0;
+const PHASE_DRIFT: f32 = 1.5;
+const PHASE_SCALE: f32 = 20.0;
 const FOAM_FADE_END: f32 = 192.0;
 const FOAM_FADE_START: f32 = 144.0;
 
 // Ripples, as directional waves summed: each one's direction across the water, wavelength in
 // blocks, and steepness (its height over its wavelength, times 2 pi). Only their slopes are
-// drawn, for the surface's normal: the mesh rises and falls with `wave_height`'s longer swell.
+// drawn, for the surface's normal: the mesh rises and falls with the longer `swell`.
 const RIPPLES: i32 = 8;
 const RIPPLE_DIRECTIONS: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
-    vec2<f32>(0.8, 0.6), vec2<f32>(0.21, 0.978), vec2<f32>(0.954, -0.3), vec2<f32>(-0.39, 0.921),
-    vec2<f32>(0.62, -0.785), vec2<f32>(0.995, 0.1), vec2<f32>(-0.71, 0.704), vec2<f32>(0.44, 0.898),
+    vec2<f32>(0.800, 0.600), vec2<f32>(-0.221, 0.975), vec2<f32>(0.792, -0.610), vec2<f32>(-0.901, 0.433),
+    vec2<f32>(-0.086, -0.996), vec2<f32>(0.414, 0.910), vec2<f32>(-0.955, -0.297), vec2<f32>(1.000, -0.006),
 );
 const RIPPLE_LENGTHS: array<f32, 8> = array<f32, 8>(13.1, 7.7, 5.3, 3.4, 2.3, 1.7, 1.21, 0.87);
 const RIPPLE_STEEPNESS: array<f32, 8> = array<f32, 8>(0.11, 0.1, 0.09, 0.09, 0.08, 0.07, 0.07, 0.06);
