@@ -1167,6 +1167,10 @@ impl MeshBuffers {
         ring.extend((1..=w).rev().map(|i| (i, h)));
         ring.extend((1..=h).rev().map(|j| (0, j)));
 
+        let blend = |corners: [[f32; 2]; 2], u: f32, v: f32| {
+            let along = |c: [f32; 2]| c[0] + (c[1] - c[0]) * v;
+            along(corners[0]) + (along(corners[1]) - along(corners[0])) * u
+        };
         let mut push = |i: f32, j: f32, uv: [f32; 2]| {
             let position = quad.corner + quad.ta * i + quad.tb * j;
             self.vertices.push(Vertex {
@@ -1174,8 +1178,9 @@ impl MeshBuffers {
                 normal: quad.normal,
                 uv,
             });
-            self.colors.push((quad.color)(position));
-            self.lights.push(quad.light);
+            let (u, v) = (i / w as f32, j / h as f32);
+            self.colors.push((quad.color)(blend(quad.ao, u, v), position));
+            self.lights.push(blend(quad.light, u, v));
             self.vertices.len() as u32 - 1
         };
         let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
@@ -1239,8 +1244,11 @@ struct FanQuad<'a> {
     tb: Vec3,
     size: (usize, usize),
     normal: [f32; 3],
-    color: &'a dyn Fn(Vec3) -> [f32; 4],
-    light: f32,
+    // the colour at a position, given its ambient occlusion
+    color: &'a dyn Fn(f32, Vec3) -> [f32; 4],
+    // ambient occlusion and sky light at the quad's corners, [along ta][along tb], blended across it
+    ao: [[f32; 2]; 2],
+    light: [[f32; 2]; 2],
     uv_at: &'a dyn Fn(usize, usize) -> [f32; 2],
     reversed: bool,
 }
@@ -1516,19 +1524,24 @@ struct FaceCell {
 }
 
 impl FaceCell {
-    fn flat(&self) -> bool {
-        self.ao.iter().all(|&ao| ao == self.ao[0]) && self.light.iter().all(|&l| l == self.light[0])
+    // Whether its shading is the same at both its ends along `axis` of the face, 0 for its
+    // first tangent and 1 for its second, with `corners` where each corner is along them.
+    fn even_along(&self, corners: &[[bool; 2]; 4], axis: usize) -> bool {
+        (0..4).all(|j| {
+            (0..4).all(|k| corners[j][1 - axis] != corners[k][1 - axis] || (self.ao[j] == self.ao[k] && self.light[j] == self.light[k]))
+        })
     }
 
-    // Only flat-shaded faces merge: stretching a gradient over several blocks would change the shading.
-    fn merges_with(&self, other: &FaceCell) -> bool {
+    // Whether `other`, next to it along `axis`, merges into one quad with it: shaded just the
+    // same, and evenly along `axis`, so a gradient across the run is stretched only along
+    // where it doesn't change, which leaves the shading as it was.
+    fn merges_along(&self, other: &FaceCell, corners: &[[bool; 2]; 4], axis: usize) -> bool {
         self.block == other.block
             && self.tint == other.tint
-            && self.flat()
-            && other.flat()
-            && self.ao[0] == other.ao[0]
-            && self.light[0] == other.light[0]
+            && self.ao == other.ao
+            && self.light == other.light
             && self.span == other.span
+            && self.even_along(corners, axis)
     }
 }
 
@@ -1570,7 +1583,14 @@ fn face_span(
     Some((top.is_some() || covered).then_some([floor, ceiling]))
 }
 
-// Merges runs of identical, flat-shaded opaque faces into single quads, one face direction slice at a time.
+#[cfg(test)]
+thread_local! {
+    // lets tests mesh face by face, to check merging leaves the shading as it was
+    static NO_MERGING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// Merges runs of identically shaded opaque faces into single quads, one face direction slice at a
+// time, where the shading doesn't change along the run, see `FaceCell::merges_along`.
 // With `solid_leaves`, leaves hide the faces of the leaves behind them.
 fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
@@ -1604,6 +1624,15 @@ fn mesh_opaque_greedy(
         let normal_unit = normal.abs();
         let (p0, p1, p2) = (Vec3::from(template[0].position), Vec3::from(template[1].position), Vec3::from(template[2].position));
         let ccw_in_ab = (p1 - p0).cross(p2 - p0).dot(ta.as_vec3().cross(tb.as_vec3())) > 0.0;
+        // whether each corner is at the far end along each tangent
+        let corners: [[bool; 2]; 4] = std::array::from_fn(|j| [template[j].position[a_axis] > 0.0, template[j].position[b_axis] > 0.0]);
+        let by_corner = |values: [f32; 4]| {
+            let mut out = [[0.0; 2]; 2];
+            for (j, [far_a, far_b]) in corners.iter().enumerate() {
+                out[*far_a as usize][*far_b as usize] = values[j];
+            }
+            out
+        };
 
         for slice in 0..size {
             for b in 0..size {
@@ -1658,16 +1687,16 @@ fn mesh_opaque_greedy(
                     // along the ground's contour, where its neighbours share those heights
                     let trimmed_side = cell.span.is_some() && normal.y == 0;
                     let (grow_a, grow_b) = (!trimmed_side || a_axis != 1, !trimmed_side || b_axis != 1);
-                    if cell.flat() {
-                        while grow_a && a0 + w < n && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_with(&o)) {
-                            w += 1;
-                        }
-                        while grow_b
-                            && b0 + h < n
-                            && (a0..a0 + w).all(|a| mask[(b0 + h) * n + a].is_some_and(|o| cell.merges_with(&o)))
-                        {
-                            h += 1;
-                        }
+                    #[cfg(test)]
+                    let (grow_a, grow_b) = if NO_MERGING.get() { (false, false) } else { (grow_a, grow_b) };
+                    while grow_a && a0 + w < n && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_along(&o, &corners, 0)) {
+                        w += 1;
+                    }
+                    while grow_b
+                        && b0 + h < n
+                        && (a0..a0 + w).all(|a| mask[(b0 + h) * n + a].is_some_and(|o| cell.merges_along(&o, &corners, 1)))
+                    {
+                        h += 1;
                     }
                     for b in b0..b0 + h {
                         for a in a0..a0 + w {
@@ -1732,8 +1761,9 @@ fn mesh_opaque_greedy(
                         tb: tb_step,
                         size: (w, h),
                         normal: template[0].normal,
-                        color: &|position| color(cell.ao[0], position),
-                        light: cell.light[0],
+                        color: &color,
+                        ao: by_corner(cell.ao),
+                        light: by_corner(cell.light),
                         uv_at: &uv_at,
                         reversed: !ccw_in_ab,
                     });
@@ -2632,6 +2662,66 @@ mod tests {
         chunk.set_block_at(U16Vec3::new(8, 1, 8), BlockType::Stone);
         // one quad per face of the floor and of the pillar would be 44; the shaded ring around it splits the top
         assert!(mesh_vertices(chunk) > 44);
+    }
+
+    // A floor with a wall, a step up onto a ledge and a lone block on it, shaded every which way.
+    fn walled_chunk() -> ChunkData {
+        let mut chunk = floor_chunk();
+        for x in 2..14 {
+            chunk.set_block_at(U16Vec3::new(x, 1, 4), BlockType::Stone);
+            chunk.set_block_at(U16Vec3::new(x, 2, 4), BlockType::Stone);
+        }
+        for x in 0..16 {
+            for z in 10..16 {
+                chunk.set_block_at(U16Vec3::new(x, 1, z), BlockType::Stone);
+            }
+        }
+        chunk.set_block_at(U16Vec3::new(7, 2, 12), BlockType::Stone);
+        chunk
+    }
+
+    // Each vertex's position, normal, colour and light.
+    fn shaded_vertices(mesh: &Mesh) -> Vec<(Vec3, Vec3, Vec3, f32)> {
+        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
+        let normals = mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().as_float3().unwrap();
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!() };
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else { panic!() };
+        (0..positions.len())
+            .map(|i| (Vec3::from(positions[i]), Vec3::from(normals[i]), Vec3::new(colors[i][0], colors[i][1], colors[i][2]), lights[i][0]))
+            .collect()
+    }
+
+    #[test]
+    fn test_merging_shaded_faces_leaves_their_shading_as_it_was() {
+        let unmerged = {
+            super::NO_MERGING.set(true);
+            let mesh = mesh_chunk(walled_chunk()).opaque;
+            super::NO_MERGING.set(false);
+            mesh
+        };
+        let merged = mesh_chunk(walled_chunk()).opaque;
+        assert!(merged.count_vertices() < unmerged.count_vertices());
+        let vertices = shaded_vertices(&merged);
+        let Some(Indices::U32(indices)) = merged.indices() else { panic!() };
+        // every corner of every face drawn alone is shaded the same by the merged quad over it
+        for (p, normal, color, light) in shaded_vertices(&unmerged) {
+            let found = indices.chunks(3).find_map(|tri| {
+                let [a, b, c] = [0, 1, 2].map(|k| vertices[tri[k] as usize]);
+                if a.1 != normal || (p - a.0).dot(normal).abs() > 1e-4 {
+                    return None;
+                }
+                // barycentric weights of p in the triangle
+                let (v0, v1, v2) = (b.0 - a.0, c.0 - a.0, p - a.0);
+                let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
+                let denom = d00 * d11 - d01 * d01;
+                let (wb, wc) = ((d11 * d20 - d01 * d21) / denom, (d00 * d21 - d01 * d20) / denom);
+                let wa = 1.0 - wb - wc;
+                (wa.min(wb).min(wc) > -1e-4).then(|| (a.2 * wa + b.2 * wb + c.2 * wc, a.3 * wa + b.3 * wb + c.3 * wc))
+            });
+            let (found_color, found_light) = found.unwrap_or_else(|| panic!("nothing drawn at {p} facing {normal}"));
+            assert!((found_color - color).abs().max_element() < 2e-3, "at {p} facing {normal}: {found_color} for {color}");
+            assert!((found_light - light).abs() < 1e-4, "at {p} facing {normal}: light {found_light} for {light}");
+        }
     }
 
     // Open air over ground far below the node, with `blocks` set, in cells of 4 blocks.

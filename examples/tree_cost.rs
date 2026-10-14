@@ -1,7 +1,7 @@
-// Counts the vertices trees cost at each level of detail over the densest forest found near
+// Counts the vertices trees cost at each level of detail, and all the land's, over the densest forest found near
 // the origin, and what that comes to over each level's ring of the view with the renderer
 // settings from assets/settings.toml, were it all forest like that. Run with:
-//   cargo run --release --example tree_cost -- [seed, default 1]
+//   cargo run --release --example tree_cost -- [seed, default 1] [x z, default the densest forest]
 use std::sync::Arc;
 
 use bevy::math::{I64Vec2, I64Vec3};
@@ -45,8 +45,12 @@ fn main() {
             }
         }
     }
-    let (count, cx, cz) = best;
-    println!("forest at {cx}, {cz}, {count} trees in 200 x 200 blocks round it");
+    let (count, mut cx, mut cz) = best;
+    let args: Vec<i64> = std::env::args().skip(2).filter_map(|a| a.parse().ok()).collect();
+    if let [x, z] = args[..] {
+        (cx, cz) = (x, z);
+    }
+    println!("measuring round {cx}, {cz} (the densest forest is {count} trees in 200 x 200 blocks)");
     let layout = Settings::read("assets/settings.toml").unwrap().renderer.lod_layout();
     let size = CHUNK_SIZE as i64;
     let min = I64Vec3::new(cx - PATCH / 2, 0, cz - PATCH / 2);
@@ -63,11 +67,11 @@ fn main() {
     };
     let (low, high) = height_range();
 
-    let mut total = 0.0;
+    let (mut total, mut total_all) = (0.0, 0.0);
     let mut previous_reach = 0.0;
     for level in 0..=layout.max_level {
         let width = size << level;
-        let mut vertices = 0;
+        let (mut vertices, mut all) = (0, 0);
         let measured;
         if level == 0 {
             // a quarter of the patch, as full detail is slow to make
@@ -77,7 +81,9 @@ fn main() {
                     for y in low.div_euclid(size)..=high.div_euclid(size) {
                         let coord = ChunkCoordinate(I64Vec3::new(min.x / size + x, y, min.z / size + z));
                         let data = generate_chunk(regions.clone(), coord);
-                        vertices += tree_vertices(&generate_chunk_mesh(Arc::new(data), vec![None; 26], coord, &noise, false).opaque);
+                        let mesh = generate_chunk_mesh(Arc::new(data), vec![None; 26], coord, &noise, false).opaque;
+                        vertices += tree_vertices(&mesh);
+                        all += mesh.count_vertices();
                     }
                 }
             }
@@ -90,6 +96,7 @@ fn main() {
                         let chunk = ChunkCoordinate(I64Vec3::new(min.x + x * width, y * width, min.z + z * width) / size);
                         if let Some(meshes) = generate_lod_mesh(regions.clone(), LodKey::containing(chunk, level)) {
                             vertices += tree_vertices(&meshes.opaque);
+                            all += meshes.opaque.count_vertices();
                         }
                     }
                 }
@@ -97,12 +104,20 @@ fn main() {
             measured = (span * width).pow(2);
         }
         let per_km2 = vertices as f64 / measured as f64 * 1e6;
+        let all_per_km2 = all as f64 / measured as f64 * 1e6;
         let reach = layout.reach(level).min(layout.render_distance()) as f64 * size as f64;
         let ring = std::f64::consts::PI * (reach * reach - previous_reach * previous_reach);
         previous_reach = reach;
         let in_view = per_km2 * ring / 1e6;
         total += in_view;
-        println!("level {level} (cells {:>2}): {per_km2:>10.0} tree vertices/km², ring out to {reach:>6.0} blocks: {:>6.2}M", 1 << level, in_view / 1e6);
+        let all_in_view = all_per_km2 * ring / 1e6;
+        total_all += all_in_view;
+        println!(
+            "level {level} (cells {:>2}): {per_km2:>10.0} tree vertices/km², ring out to {reach:>6.0} blocks: {:>6.2}M, {:>6.2}M in all",
+            1 << level,
+            in_view / 1e6,
+            all_in_view / 1e6
+        );
     }
-    println!("all levels: {:.2}M tree vertices in a view all forest", total / 1e6);
+    println!("all levels: {:.2}M tree vertices, {:.2}M in all, in a view all like this", total / 1e6, total_all / 1e6);
 }
