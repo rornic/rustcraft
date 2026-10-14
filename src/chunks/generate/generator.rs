@@ -2946,6 +2946,31 @@ mod tests {
     }
 
     #[test]
+    fn test_side_faces_texture_the_right_way_up_merged_or_not() {
+        let mut chunk = ChunkData::default();
+        for x in 4..7 {
+            for y in 4..6 {
+                chunk.set_block_at(U16Vec3::new(x, y, 4), BlockType::Grass);
+            }
+        }
+        let mesh = mesh_chunk(chunk).opaque;
+        let (Some(VertexAttributeValues::Float32x3(positions)), Some(VertexAttributeValues::Float32x3(normals)), Some(VertexAttributeValues::Float32x2(uvs))) =
+            (mesh.attribute(Mesh::ATTRIBUTE_POSITION), mesh.attribute(Mesh::ATTRIBUTE_NORMAL), mesh.attribute(Mesh::ATTRIBUTE_UV_0))
+        else {
+            panic!("mesh lacks positions, normals or uvs");
+        };
+        // v counts blocks down from the wall's top on every side, so the tile's top row is at the top
+        let mut sides = 0;
+        for ((p, n), uv) in positions.iter().zip(normals).zip(uvs) {
+            if n[1] == 0.0 {
+                sides += 1;
+                assert!((p[1] + uv[1] - 5.5).abs() < 1e-4, "normal {n:?}: v {} at y {}", uv[1], p[1]);
+            }
+        }
+        assert!(sides > 0);
+    }
+
+    #[test]
     fn test_chunk_with_a_block_has_geometry() {
         let mut chunk = ChunkData::default();
         chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
