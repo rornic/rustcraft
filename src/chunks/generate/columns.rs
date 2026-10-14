@@ -39,7 +39,8 @@ impl From<LodKey> for ColumnKey {
     }
 }
 
-/// The ground at the centre of each cell of a column of LOD nodes, from one noise sample apiece.
+/// The ground at the centre of each cell of a column of LOD nodes, from one noise sample apiece,
+/// leaving out what's too fine for the cells to show.
 pub struct ColumnGrid {
     cell: i64,
     heights: Vec<f32>,
@@ -68,7 +69,7 @@ impl ColumnGrid {
             for cz in -RING..size + RING {
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
-                let sample = noise.sample(world_x as f64, world_z as f64);
+                let sample = noise.sample_for_cell(world_x as f64, world_z as f64, cell as f64);
                 grid.heights.push(sample.height as f32);
                 grid.biomes.push(sample.biome);
                 grid.trees.push(sample.trees as f32);
@@ -179,7 +180,7 @@ mod tests {
         for (cx, cz) in [(-1, -1), (0, 0), (7, 12), (16, 16)] {
             let x = base.x + cx as i64 * cell + cell / 2;
             let z = base.z + cz as i64 * cell + cell / 2;
-            assert_eq!(noise.get(bevy::math::I64Vec2::new(x, z)) as f32 as f64, grid.height(cx, cz));
+            assert_eq!(noise.sample_for_cell(x as f64, z as f64, cell as f64).height as f32 as f64, grid.height(cx, cz));
         }
         assert!(grid.lowest <= grid.highest);
     }

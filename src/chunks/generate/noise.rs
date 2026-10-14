@@ -1,6 +1,8 @@
 use bevy::math::{FloatExt, I64Vec2};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use super::fractal::{resolved, Fractal};
+
 use super::biome::{BaseColumn, BiomeId, Biomes, Climate};
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
@@ -33,6 +35,9 @@ const RUGGEDNESS_WAVELENGTH: f64 = 7000.0;
 const RIDGE_WAVELENGTH: f64 = 1500.0;
 const RIDGE_OCTAVES: usize = 9;
 const RIDGE_WARP: f64 = 0.18;
+// The mean of a ridged octave's signal, (1 - |perlin|)^2, measured; it stands in for octaves
+// too fine for the cells sampled, so leaving them out doesn't sink the peaks.
+const RIDGE_SIGNAL_MEAN: f64 = 0.49;
 // A range is a broad uplifted massif with ridged peaks and valleys carved into it.
 const UPLIFT_HEIGHT: f64 = 190.0;
 const RIDGE_HEIGHT: f64 = 230.0;
@@ -113,13 +118,13 @@ pub struct NoiseGenerator {
     seed: u32,
     warp_x: Fbm<Perlin>,
     warp_z: Fbm<Perlin>,
-    continents: Fbm<Perlin>,
-    ruggedness: Fbm<Perlin>,
+    continents: Fractal,
+    ruggedness: Fractal,
     ridges: Vec<Perlin>,
-    hills: Fbm<Perlin>,
-    hilliness: Fbm<Perlin>,
-    detail: Fbm<Perlin>,
-    texture: Fbm<Perlin>,
+    hills: Fractal,
+    hilliness: Fractal,
+    detail: Fractal,
+    texture: Fractal,
     temperature: Fbm<Perlin>,
     humidity: Fbm<Perlin>,
     biomes: Biomes,
@@ -135,19 +140,20 @@ impl NoiseGenerator {
                 .set_persistence(0.5)
                 .set_lacunarity(2.0)
         };
+        let fractal = |i: u32, wavelength: f64, octaves: usize| Fractal::new(field_seed(i), wavelength, octaves, 2.0, 0.5);
         Self {
             seed,
             warp_x: fbm(0, WARP_WAVELENGTH, 3),
             warp_z: fbm(1, WARP_WAVELENGTH, 3),
-            continents: fbm(2, CONTINENT_WAVELENGTH, 6),
-            ruggedness: fbm(3, RUGGEDNESS_WAVELENGTH, 3),
+            continents: fractal(2, CONTINENT_WAVELENGTH, 6),
+            ruggedness: fractal(3, RUGGEDNESS_WAVELENGTH, 3),
             ridges: (0..RIDGE_OCTAVES as u32)
                 .map(|i| Perlin::new(field_seed(4).wrapping_add(i)))
                 .collect(),
-            detail: fbm(5, DETAIL_WAVELENGTH, 5),
-            texture: fbm(8, TEXTURE_WAVELENGTH, 3),
-            hills: fbm(6, HILL_WAVELENGTH, 4),
-            hilliness: fbm(7, HILLINESS_WAVELENGTH, 2),
+            detail: fractal(5, DETAIL_WAVELENGTH, 5),
+            texture: fractal(8, TEXTURE_WAVELENGTH, 3),
+            hills: fractal(6, HILL_WAVELENGTH, 4),
+            hilliness: fractal(7, HILLINESS_WAVELENGTH, 2),
             temperature: fbm(9, CLIMATE_WAVELENGTH, 4),
             humidity: fbm(10, CLIMATE_WAVELENGTH, 4),
             biomes: Biomes::new(seed),
@@ -169,10 +175,18 @@ impl NoiseGenerator {
 
     // The base terrain, then whichever biomes the climate here calls for.
     pub fn sample(&self, x: f64, z: f64) -> TerrainSample {
-        let (continentalness, ruggedness, height) = self.base_terrain(x, z);
+        self.sample_for_cell(x, z, 1.0)
+    }
+
+    /// The terrain as a cell `cell` blocks wide, sampled at its centre, should see it: features
+    /// too fine for cells that wide fade to their average, instead of aliasing into bumps and
+    /// gaps that change from one LOD level to the next. The same as `sample` for single blocks.
+    pub fn sample_for_cell(&self, x: f64, z: f64, cell: f64) -> TerrainSample {
+        let (continentalness, ruggedness, height) = self.base_terrain(x, z, cell);
         let (height, biome, trees) = self.biomes.shape(&BaseColumn {
             x,
             z,
+            cell,
             height,
             continentalness,
             ruggedness,
@@ -187,19 +201,19 @@ impl NoiseGenerator {
     }
 
     // Continentalness, ruggedness and height of the terrain every biome starts from.
-    fn base_terrain(&self, x: f64, z: f64) -> (f64, f64, f64) {
+    fn base_terrain(&self, x: f64, z: f64, cell: f64) -> (f64, f64, f64) {
         let warp_x = self.warp_x.get([x, z]) * WARP_STRENGTH;
         let warp_z = self.warp_z.get([x, z]) * WARP_STRENGTH;
         let (wx, wz) = (x + warp_x, z + warp_z);
 
         let edge = edge_falloff(wx, z + warp_z * POLE_COAST_WARP);
-        let continentalness = (self.continents.get([wx, wz]) * CONTINENT_CONTRAST - OCEAN_BIAS)
+        let continentalness = (self.continents.get(wx, wz, cell) * CONTINENT_CONTRAST - OCEAN_BIAS)
             .clamp(-1.0, 1.0);
         let continentalness = (continentalness + POLAR_UPLIFT * smoothstep(POLAR_UPLIFT_LATITUDE.0, POLAR_UPLIFT_LATITUDE.1, wz.abs() / WORLD_HALF_SIZE as f64))
             .lerp(-1.0, edge);
         // Ruggedness and hilliness only shape land and the shallows, so open ocean skips them.
         let ruggedness = if continentalness > OPEN_OCEAN {
-            self.ruggedness.get([wx, wz])
+            self.ruggedness.get(wx, wz, cell)
         } else {
             0.0
         };
@@ -214,7 +228,7 @@ impl NoiseGenerator {
             let ridge_z = z + warp_z * RIDGE_WARP;
             let uplift = smoothstep(0.0, 1.0, mountain_mask) * UPLIFT_HEIGHT;
             // Peaks grow towards the heart of a range, leaving foothills at its edges.
-            let ridges = self.ridged(ridge_x, ridge_z).powf(1.3) * mountain_mask.powf(1.5) * RIDGE_HEIGHT;
+            let ridges = self.ridged(ridge_x, ridge_z, cell).powf(1.3) * mountain_mask.powf(1.5) * RIDGE_HEIGHT;
             uplift + ridges
         } else {
             0.0
@@ -222,10 +236,10 @@ impl NoiseGenerator {
 
         // Kept above zero, so hills rise out of flat valley floors instead of dipping into lakes.
         let hills = if continentalness > 0.0 {
-            let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get([wx, wz]));
+            let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get(wx, wz, cell));
             let hill_amplitude = 0.15_f64.lerp(1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
             // Ranges carry their own relief, so hills fade out into them.
-            (self.hills.get([x, z]) * 0.8 + 0.3).max(0.0) * hill_amplitude * (1.0 - mountain_mask)
+            (self.hills.get(x, z, cell) * 0.8 + 0.3).max(0.0) * hill_amplitude * (1.0 - mountain_mask)
         } else {
             0.0
         };
@@ -236,12 +250,12 @@ impl NoiseGenerator {
             + mountain_mask * MOUNTAIN_DETAIL;
         let sea_floor_blend = smoothstep(OPEN_OCEAN, OPEN_OCEAN + 0.1, continentalness);
         let detail_amplitude = SEA_FLOOR_DETAIL.lerp(land_detail, sea_floor_blend) * shore_calm;
-        let detail = self.detail.get([x, z]) * detail_amplitude;
+        let detail = self.detail.get(x, z, cell) * detail_amplitude;
 
         let land_texture = mountain_mask * MOUNTAIN_TEXTURE;
         // none right at the shore, or it raises specks of land out of the shallows
         let shore_fade = smoothstep(0.0, 0.06, continentalness.abs());
-        let texture = self.texture.get([x, z]) * land_texture * sea_floor_blend * shore_fade;
+        let texture = self.texture.get(x, z, cell) * land_texture * sea_floor_blend * shore_fade;
 
         let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
         (continentalness, ruggedness, height)
@@ -267,20 +281,29 @@ impl NoiseGenerator {
 
     // Ridged multifractal in 0..1: sharp crests where the noise crosses zero, with each
     // octave weighted by the last so fine detail gathers on the ridges, not the valleys.
-    fn ridged(&self, x: f64, z: f64) -> f64 {
+    // Octaves too fine for `cell` give way to their mean signal.
+    fn ridged(&self, x: f64, z: f64, cell: f64) -> f64 {
         let mut frequency = 1.0 / RIDGE_WAVELENGTH;
+        let mut wavelength = RIDGE_WAVELENGTH;
         let mut amplitude = 1.0;
         let mut weight = 1.0;
         let mut total = 0.0;
         let mut norm = 0.0;
         for octave in &self.ridges {
-            let signal = 1.0 - octave.get([x * frequency, z * frequency]).abs();
-            let signal = signal * signal * weight;
+            let resolved = resolved(wavelength, cell);
+            let signal = if resolved > 0.0 {
+                let signal = 1.0 - octave.get([x * frequency, z * frequency]).abs();
+                signal * signal
+            } else {
+                0.0
+            };
+            let signal = (signal * resolved + RIDGE_SIGNAL_MEAN * (1.0 - resolved)) * weight;
             weight = (signal * 1.5).clamp(0.0, 1.0);
             total += signal * amplitude;
             norm += amplitude;
             amplitude *= 0.5;
             frequency *= 2.0;
+            wavelength /= 2.0;
         }
         total / norm
     }
@@ -413,6 +436,42 @@ mod tests {
         let (a, b) = (noise.climate(1000.0, 1000.0), noise.climate(1016.0, 1000.0));
         assert!((a.temperature - b.temperature).abs() < 0.05);
         assert!((a.humidity - b.humidity).abs() < 0.05);
+    }
+
+    #[test]
+    fn test_ridge_signal_mean_matches_perlin() {
+        let noise = NoiseGenerator::new(9);
+        let samples = (0..300).flat_map(|i| (0..300).map(move |j| (i as f64 * 0.0731, j as f64 * 0.0689)));
+        let mean = samples.map(|(x, z)| (1.0 - noise.ridges[0].get([x, z]).abs()).powi(2)).sum::<f64>() / 90_000.0;
+        assert!((mean - RIDGE_SIGNAL_MEAN).abs() < 0.02, "measured {mean}");
+    }
+
+    #[test]
+    fn test_full_detail_is_unfiltered() {
+        let noise = NoiseGenerator::new(9);
+        for i in 0..200 {
+            let (x, z) = (i as f64 * 97.3 - 9000.0, i as f64 * -61.7 + 4000.0);
+            assert_eq!(noise.sample(x, z).height.to_bits(), noise.sample_for_cell(x, z, 1.0).height.to_bits());
+        }
+    }
+
+    #[test]
+    fn test_wide_cells_keep_the_lie_of_the_land() {
+        // a wide cell's height is closer to the mean of the full-detail ground it covers than the
+        // height at its centre is
+        let noise = NoiseGenerator::new(9);
+        for cell in [64.0, 256.0] {
+            let (mut filtered_error, mut point_error) = (0.0, 0.0);
+            for i in 0..60 {
+                let (x, z) = (i as f64 * 517.0 - 15000.0, i as f64 * 311.0 - 9000.0);
+                let mean = (0..16).flat_map(|a| (0..16).map(move |b| (a, b)))
+                    .map(|(a, b)| noise.sample(x + (a as f64 - 7.5) * cell / 16.0, z + (b as f64 - 7.5) * cell / 16.0).height)
+                    .sum::<f64>() / 256.0;
+                filtered_error += (noise.sample_for_cell(x, z, cell).height - mean).abs();
+                point_error += (noise.sample(x, z).height - mean).abs();
+            }
+            assert!(filtered_error < point_error, "cells {cell} wide: filtered {filtered_error} vs point sampled {point_error}");
+        }
     }
 
     #[test]

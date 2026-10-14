@@ -60,6 +60,7 @@ mod tests {
         BaseColumn {
             x: 0.0,
             z: 0.0,
+            cell: 1.0,
             height: WATER_LEVEL as f64 + above_sea,
             continentalness,
             ruggedness: -1.0,

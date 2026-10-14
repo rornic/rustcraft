@@ -30,6 +30,7 @@ mod tests {
         BaseColumn {
             x: 0.0,
             z: 0.0,
+            cell: 1.0,
             height: 500.0,
             continentalness: 0.3,
             ruggedness: -1.0,

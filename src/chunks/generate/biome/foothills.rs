@@ -1,4 +1,4 @@
-use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
+use super::super::fractal::Fractal;
 
 use super::{smoothstep, BaseColumn, Biome};
 
@@ -19,15 +19,14 @@ const SEED_OFFSET: u32 = 2100;
 
 // Broken, bumpy ground around the feet of the mountains.
 pub struct Foothills {
-    bumps: Fbm<Perlin>,
+    bumps: Fractal,
 }
 
 impl Foothills {
     pub fn new(seed: u32) -> Self {
         Self {
-            bumps: Fbm::<Perlin>::new(seed.wrapping_add(SEED_OFFSET))
-                .set_frequency(1.0 / BUMP_WAVELENGTH)
-                .set_octaves(3),
+            // octaves as `noise::Fbm` steps them by default
+            bumps: Fractal::new(seed.wrapping_add(SEED_OFFSET), BUMP_WAVELENGTH, 3, std::f64::consts::PI * 2.0 / 3.0, 0.5),
         }
     }
 }
@@ -44,7 +43,7 @@ impl Biome for Foothills {
     }
 
     fn height(&self, column: &BaseColumn) -> f64 {
-        column.height + self.bumps.get([column.x, column.z]) * BUMP_HEIGHT
+        column.height + self.bumps.get(column.x, column.z, column.cell) * BUMP_HEIGHT
     }
 }
 
@@ -57,6 +56,7 @@ mod tests {
         BaseColumn {
             x: 0.0,
             z: 0.0,
+            cell: 1.0,
             height: 500.0,
             continentalness,
             ruggedness,

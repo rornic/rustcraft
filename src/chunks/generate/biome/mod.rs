@@ -33,6 +33,9 @@ impl Default for Climate {
 pub struct BaseColumn {
     pub x: f64,
     pub z: f64,
+    // how wide the cell this column stands for is, in blocks: 1 at full detail, wider for
+    // coarse LOD cells, which leave out what's too fine to show, see `fractal::resolved`
+    pub cell: f64,
     pub height: f64,
     // how far inland, negative out to sea
     pub continentalness: f64,
@@ -201,6 +204,7 @@ mod tests {
         BaseColumn {
             x: 0.0,
             z: 0.0,
+            cell: 1.0,
             height: 500.0,
             continentalness: 0.3,
             ruggedness: -1.0,

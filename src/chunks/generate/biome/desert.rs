@@ -1,5 +1,6 @@
 use noise::{NoiseFn, Perlin};
 
+use super::super::fractal::resolved;
 use super::{smoothstep, BaseColumn, Biome};
 use crate::block::BlockType;
 use crate::chunks::generate::WATER_LEVEL;
@@ -70,7 +71,14 @@ impl Biome for Desert {
             return column.height;
         }
         let field = smoothstep(-0.5, 0.3, self.dune_field.get([column.x / DUNE_FIELD_WAVELENGTH, column.z / DUNE_FIELD_WAVELENGTH]));
-        let dune = self.dune(column.x, column.z) * DUNE_HEIGHT * (0.4 + 0.6 * field);
+        // cells too wide to see the rows of dunes see their average height, half a crest
+        let resolved = resolved(DUNE_SPACING, column.cell);
+        let shape = if resolved == 1.0 {
+            self.dune(column.x, column.z)
+        } else {
+            0.5 + (self.dune(column.x, column.z) - 0.5) * resolved
+        };
+        let dune = shape * DUNE_HEIGHT * (0.4 + 0.6 * field);
         column.height + dune * room
     }
 
@@ -118,6 +126,7 @@ mod tests {
         BaseColumn {
             x,
             z: 0.0,
+            cell: 1.0,
             height: WATER_LEVEL as f64 + above_sea,
             continentalness: 0.3,
             ruggedness: -1.0,

@@ -1,5 +1,6 @@
 pub mod biome;
 pub mod columns;
+pub mod fractal;
 pub mod generator;
 pub mod light;
 pub mod noise;

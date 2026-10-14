@@ -3,6 +3,7 @@ use std::{fmt::Debug, sync::Arc};
 use bevy::prelude::Resource;
 use bevy::{
     math::{I64Vec3, U16Vec3, Vec3},
+    platform::collections::HashMap,
 };
 
 use crate::block::BlockType;
@@ -10,13 +11,13 @@ use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 use crate::chunks::generate::WORLD_HEIGHT;
 
-use super::chunks::chunk::{ChunkCoordinate, ChunkData, ChunkOctree};
+use super::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 
 #[derive(Resource)]
 pub struct World {
     seed: u32,
     pub height: u64,
-    chunks: ChunkOctree,
+    chunks: HashMap<ChunkCoordinate, Arc<ChunkData>>,
     pub region_store: Arc<RegionStore>,
     spawn: Vec3,
 }
@@ -30,12 +31,11 @@ impl World {
         let height = WORLD_HEIGHT;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
         let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
-        let chunks = ChunkOctree::default();
-        let region_distance_blocks = region_distance as i64 * chunks.chunk_size as i64;
+        let region_distance_blocks = region_distance as i64 * CHUNK_SIZE as i64;
         Self {
             seed,
             height,
-            chunks,
+            chunks: HashMap::new(),
             region_store: Arc::new(
                 RegionStore::new(noise_generator)
                     .with_resident_cap(resident_cap_for(region_distance_blocks)),
@@ -57,15 +57,17 @@ impl World {
         chunk_coord: ChunkCoordinate,
         chunk_data: ChunkData,
     ) -> Arc<ChunkData> {
-        self.chunks.set_chunk_data(chunk_coord, chunk_data)
+        let chunk_data = Arc::new(chunk_data);
+        self.chunks.insert(chunk_coord, chunk_data.clone());
+        chunk_data
     }
 
     pub fn get_chunk_data(&mut self, chunk_coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
-        self.chunks.get_chunk_data(chunk_coord)
+        self.chunks.get(&chunk_coord).cloned()
     }
 
     pub fn clear_chunk(&mut self, chunk_coord: ChunkCoordinate) {
-        self.chunks.clear_chunk(chunk_coord)
+        self.chunks.remove(&chunk_coord);
     }
 
     pub fn adjacent_chunk_data(
@@ -80,28 +82,28 @@ impl World {
     }
 
     pub fn is_chunk_generated(&mut self, chunk_coord: ChunkCoordinate) -> bool {
-        self.chunks.get_chunk_data(chunk_coord).is_some()
+        self.chunks.contains_key(&chunk_coord)
     }
 
     pub fn is_chunk_empty(&mut self, chunk_coord: ChunkCoordinate) -> bool {
         self.chunks
-            .get_chunk_data(chunk_coord)
+            .get(&chunk_coord)
             .map(|chunk_data| chunk_data.empty())
             .unwrap_or(false)
     }
 
     pub fn chunk_to_world(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
-        self.chunks.chunk_centre(chunk_coord)
+        chunk_coord.centre()
     }
 
     pub fn block_to_chunk_coordinate(&self, block_coord: I64Vec3) -> ChunkCoordinate {
         block_coord
-            .div_euclid(I64Vec3::splat(self.chunks.chunk_size as i64))
+            .div_euclid(I64Vec3::splat(CHUNK_SIZE as i64))
             .into()
     }
 
     pub fn get_block_at(&mut self, world_block_coord: I64Vec3) -> BlockType {
-        let chunk_size = self.chunks.chunk_size as i64;
+        let chunk_size = CHUNK_SIZE as i64;
         // div_euclid/rem_euclid, not `/` and `%` - those truncate toward zero, which puts
         // negative coordinates in the wrong chunk and yields a negative (then
         // wrapping-to-huge-u16) local coordinate.

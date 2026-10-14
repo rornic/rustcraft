@@ -18,6 +18,7 @@ use std::sync::Arc;
 use rustcraft::horizon::render_distance_at;
 use rustcraft::chunks::fade::FULLY_VISIBLE;
 use rustcraft::chunks::generate::noise::NoiseGenerator;
+use rustcraft::chunks::generate::columns::COARSE_CELL;
 use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::lod::{LodKey, LodLayout, LodLoader, LodNode};
 use rustcraft::chunks::material::{ChunkMaterial, WaterMaterial};
@@ -127,12 +128,13 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
                 .height
                 .max(WATER_LEVEL as f64);
             let c = ChunkCoordinate(I64Vec3::new(cx, (h as i64 - 1).div_euclid(size), cz));
+            let shown = |key: LodKey| lod_vis.get(&key).copied().unwrap_or(false);
             let drawn = chunk_vis(&c).unwrap_or(false)
                 || (1..=layout.max_level).any(|l| {
-                    lod_vis
-                        .get(&LodKey::containing(c, l))
-                        .copied()
-                        .unwrap_or(false)
+                    shown(LodKey::containing(c, l))
+                        // coarse cells draw the ground at their cell's average height, which can
+                        // be in the node above or below the one this sample's height is in
+                        || coarse_ground(&noise, cx, cz, l).is_some_and(|ground| shown(LodKey::containing(ground, l)))
                 });
             if !drawn {
                 let band = if d < full {
@@ -174,6 +176,22 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
         lingering,
         lods: lod_vis.len(),
     }
+}
+
+// The chunk holding the ground a coarse LOD level draws over chunk column (`cx`, `cz`): the
+// height of the cell around the chunk's centre, as the level's column grid samples it.
+fn coarse_ground(noise: &NoiseGenerator, cx: i64, cz: i64, level: u8) -> Option<ChunkCoordinate> {
+    let cell = 1i64 << level;
+    if cell < COARSE_CELL {
+        return None;
+    }
+    let size = CHUNK_SIZE as i64;
+    let centre = |c: i64| (c * size + size / 2).div_euclid(cell) * cell + cell / 2;
+    let h = noise
+        .sample_for_cell(centre(cx) as f64, centre(cz) as f64, cell as f64)
+        .height
+        .max(WATER_LEVEL as f64);
+    Some(ChunkCoordinate(I64Vec3::new(cx, (h as i64 - 1).div_euclid(size), cz)))
 }
 
 // The surface chunks within `radius` chunks of `pos`, found once so checking them is cheap.
