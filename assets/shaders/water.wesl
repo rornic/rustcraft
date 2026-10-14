@@ -11,6 +11,7 @@ import super::dither::dither_threshold;
 import super::sky::sky_colour;
 import super::lighting::{SKY_GAIN, direct_sun, open_sky};
 import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
+import super::curvature::{curved, uncurved};
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> material_color: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var material_color_texture: texture_2d<f32>;
@@ -234,8 +235,8 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     out.color = vertex.color;
 }
 
-    out.world_position = world_position;
-    out.position = position_world_to_clip(world_position.xyz);
+    out.world_position = vec4<f32>(curved(world_position.xyz), 1.0);
+    out.position = position_world_to_clip(out.world_position.xyz);
     out.uv = vertex.uv;
 
     return out;
@@ -518,10 +519,11 @@ fn fragment(
         let slope = ripple.xy + waves.slope;
         let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
         let variance = CALM_SLOPE_VARIANCE + ripple.z + waves.lost;
-        let rough = rough_reflection(world_position, slope, sqrt(ripple.z + waves.lost), to_eye);
+        // the clouds are flat, so they're reflected and cast shadows from where the water really is
+        let rough = rough_reflection(uncurved(world_position), slope, sqrt(ripple.z + waves.lost), to_eye);
         let sky = rough.rgb;
         let reflected = rough.a;
-        let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(world_position);
+        let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(uncurved(world_position));
         // blended over what's behind: the reflection and glint stay as bright however clear the water
         let body = scene * alpha * (1.0 - reflected);
         let covered = alpha * (1.0 - reflected) + reflected;

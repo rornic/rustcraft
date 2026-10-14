@@ -7,6 +7,7 @@ use bevy::{
     shader::{ShaderDefVal, ShaderRef},
     render::{
         mesh::MeshVertexBufferLayoutRef,
+        storage::ShaderBuffer,
         render_resource::{
             AsBindGroup, Face, RenderPipelineDescriptor,
             SpecializedMeshPipelineError,
@@ -109,6 +110,9 @@ pub struct ChunkMaterial {
     pub cloud_pattern: Handle<Image>,
     #[uniform(6)]
     pub cloud_layer: Vec4,
+    // what the land bends around, see `curvature::Curvature`
+    #[storage(8, read_only)]
+    pub curvature: Handle<ShaderBuffer>,
     // compiled into the shaders, see `specialize`
     pub debug: DebugSettings,
 }
@@ -191,6 +195,9 @@ pub struct WaterMaterial {
     // matches the opaque water LODs draw farther out, see `see_through_reach`
     #[uniform(7)]
     pub see_through: Vec4,
+    // what the land bends around, see `curvature::Curvature`
+    #[storage(8, read_only)]
+    pub curvature: Handle<ShaderBuffer>,
     // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
     pub solid: bool,
 }

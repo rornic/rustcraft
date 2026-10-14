@@ -13,6 +13,7 @@ import super::lighting::{direct_sun, open_sky};
 import super::cloud_shadow::cloud_shadow;
 import super::lod_patch::patch_tint;
 import super::dither::dither_threshold;
+import super::curvature::{curved, uncurved};
 // How bright the leaves seen through a solid tree box's holes are, to its surface's.
 const HOLE_SHADE: f32 = 0.55;
 // All that's left with no sky light at all, so caves aren't pitch black.
@@ -48,7 +49,8 @@ fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky
     if all(light == vec3<f32>(0.0)) {
         return light;
     }
-    return light * sun_shadow(world_position, normal, frag_coord) * cloud_shadow(world_position.xyz);
+    // the clouds are flat, so their shadows fall where the land really is
+    return light * sun_shadow(world_position, normal, frag_coord) * cloud_shadow(uncurved(world_position.xyz));
 }
 
 // Faces turn toward up between these distances in blocks, to this much of the way: past
@@ -73,7 +75,8 @@ fn lit_normal(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
 }
 
 // Bevy's mesh vertex shader, for meshes that are never skinned or morphed, with leaves
-// swaying in the wind. Block meshes always carry vertex colours, see `MeshBuffers`.
+// swaying in the wind and the land curving away. Block meshes always carry vertex colours,
+// see `MeshBuffers`.
 @vertex
 fn vertex(vertex_in: Vertex) -> VertexOutput {
     let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
@@ -84,7 +87,9 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
 @if(VERTEX_UVS_B) {
     coarse = vertex.uv_b.y > 0.5;
 }
-    out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, coarse, view_bindings::globals.time), 1.0);
+    let swaying = swayed(out.world_position.xyz, vertex.color.a, coarse, view_bindings::globals.time);
+    // bent where it's drawn, so shadows and fog are looked up where it's seen
+    out.world_position = vec4<f32>(curved(swaying), 1.0);
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
     // a mesh fading out sits a little farther than it is, so what replaces it wins where they coincide

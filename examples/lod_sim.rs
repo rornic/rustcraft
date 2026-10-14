@@ -58,6 +58,7 @@ fn setup(
         // nothing's drawn, so no clouds
         cloud_pattern: Default::default(),
         cloud_layer: Default::default(),
+        curvature: Default::default(),
         debug: DebugSettings::default(),
     });
     let water = water_materials.add(WaterMaterial {
@@ -67,6 +68,7 @@ fn setup(
         cloud_pattern: Default::default(),
         cloud_layer: Default::default(),
         see_through: Default::default(),
+        curvature: Default::default(),
         solid: false,
     });
     let solid_water = water_materials.add(WaterMaterial {
@@ -76,6 +78,7 @@ fn setup(
         cloud_pattern: Default::default(),
         cloud_layer: Default::default(),
         see_through: Default::default(),
+        curvature: Default::default(),
         solid: true,
     });
     insert_terrain_resources(

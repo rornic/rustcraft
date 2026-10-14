@@ -12,6 +12,7 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
+use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle};
@@ -26,6 +27,7 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut murk_materials: ResMut<Assets<MurkMaterial>>,
     clouds: Res<CloudLayer>,
+    curvature: Res<Curvature>,
 ) {
     let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
@@ -110,6 +112,7 @@ fn setup_scene(
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
+        curvature: curvature.buffer.clone(),
         debug: settings.debug,
     });
     let water_material_handle = water_materials.add(WaterMaterial {
@@ -119,6 +122,7 @@ fn setup_scene(
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
         see_through: see_through_reach(layout),
+        curvature: curvature.buffer.clone(),
         solid: false,
     });
     let solid_water = WaterMaterial {
@@ -168,6 +172,7 @@ fn main() {
             MaterialPlugin::<MurkMaterial>::default(),
             TerrainPlugin,
             CloudPlugin,
+            CurvaturePlugin,
             DebugOverlayPlugin,
         ))
         .insert_resource(winit_settings())
