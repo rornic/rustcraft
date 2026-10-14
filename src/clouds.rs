@@ -10,6 +10,7 @@ use bevy::{
     reflect::TypePath,
     render::{
         mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology},
+        storage::ShaderBuffer,
         render_resource::{
             AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
             TextureDimension, TextureFormat,
@@ -19,6 +20,7 @@ use bevy::{
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::chunks::material::{push_shader_defs, water_level};
+use crate::curvature::Curvature;
 
 /// Height of the clouds' undersides: above most land, so only the tallest peaks reach them.
 pub const CLOUD_BASE: f32 = 720.0;
@@ -73,6 +75,9 @@ pub struct CloudMaterial {
     // the clouds' base and greatest height, for shading them darker lower down
     #[uniform(1)]
     shape: Vec4,
+    // what the clouds bend around with the land, see `curvature::Curvature`
+    #[storage(8, read_only)]
+    curvature: Handle<ShaderBuffer>,
 }
 
 impl Material for CloudMaterial {
@@ -83,6 +88,11 @@ impl Material for CloudMaterial {
 
     fn enable_shadows() -> bool {
         false
+    }
+
+    // curves them away with the land
+    fn vertex_shader() -> ShaderRef {
+        "shaders/clouds.wesl".into()
     }
 
     fn fragment_shader() -> ShaderRef {
@@ -423,6 +433,7 @@ pub fn spawn_clouds(
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<CloudMaterial>>,
+    curvature: Res<Curvature>,
 ) {
     let seed = rand::random();
     let columns = cloud_columns(&cloud_pattern(seed), seed);
@@ -438,6 +449,7 @@ pub fn spawn_clouds(
     let material = materials.add(CloudMaterial {
         color: CLOUD_COLOR,
         shape: Vec4::new(CLOUD_BASE, height, 0.0, 0.0),
+        curvature: curvature.buffer.clone(),
     });
     for x in -COPIES..=COPIES {
         for z in -COPIES..=COPIES {
