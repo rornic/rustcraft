@@ -14,7 +14,7 @@ use rustcraft::chunks::{
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
-use rustcraft::player::{player_look, player_move, update_underwater_effects, PlayerBundle};
+use rustcraft::player::{murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle};
 use rustcraft::sky::{atmosphere_camera, spawn_atmosphere, sun, FOG_MAX_OPACITY};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
@@ -23,6 +23,8 @@ fn setup_scene(
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut murk_materials: ResMut<Assets<MurkMaterial>>,
     clouds: Res<CloudLayer>,
 ) {
     let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
@@ -95,6 +97,9 @@ fn setup_scene(
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
+    let (murk, murk_handle) = murk(&mut meshes, &mut murk_materials);
+    commands.spawn((murk, ChildOf(camera)));
+    commands.insert_resource(murk_handle);
     let shadow_distance = (renderer.shadow_distance as f32 * 16.0).min(fog_distance);
     commands.spawn(sun(shadow_distance, renderer.shadow_cascades));
 
@@ -160,6 +165,7 @@ fn main() {
                 }),
             MaterialPlugin::<ChunkMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
+            MaterialPlugin::<MurkMaterial>::default(),
             TerrainPlugin,
             CloudPlugin,
             DebugOverlayPlugin,
