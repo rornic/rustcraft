@@ -1029,9 +1029,10 @@ pub fn generate_chunk(
     chunk_pos: ChunkCoordinate,
 ) -> ChunkData {
     let mut heights = regions.sampler();
-    let noise = regions.noise();
-    let biomes = noise.biomes();
-    let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
+    let biomes = regions.noise().biomes();
+    // the same for every chunk stacked over these columns, so worked out once for them all
+    let columns = regions.chunk_columns(&mut heights, chunk_pos.0.x, chunk_pos.0.z);
+    let (lowest, highest) = (columns.lowest, columns.highest);
     let size = CHUNK_SIZE as i64;
     let world_y = chunk_pos.0.y * size;
     // cells in `ChunkData::from_cells` order, which is the order they're worked out in here
@@ -1039,22 +1040,15 @@ pub fn generate_chunk(
 
     for x in 0..size {
         for z in 0..size {
-            let (world_x, world_z) = (chunk_pos.0.x * size + x, chunk_pos.0.z * size + z);
-
-            let column_height = heights.height(world_x, world_z).round() as i64;
-            (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
+            let column_height = columns.height(x, z);
             // above the ground and the sea, the column is air here whatever its climate
             if world_y >= ground_top(column_height).max(WATER_LEVEL) {
                 cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
                 continue;
             }
-            let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
-            let combined_gradient = gradient_x.abs() + gradient_z.abs();
-            let biome = heights.biome(world_x, world_z);
-            let temperature = noise.temperature(world_x as f64, world_z as f64);
-
+            let (gradient, biome, temperature) = (columns.gradient(x, z), columns.biome(x, z), columns.temperature(x, z));
             cells.extend((world_y..world_y + size).map(|y| {
-                under_grass(column_block(biomes, biome, y, column_height, combined_gradient, temperature), y, column_height, 1)
+                under_grass(column_block(biomes, biome, y, column_height, gradient, temperature), y, column_height, 1)
             }));
         }
     }
