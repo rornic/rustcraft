@@ -1,6 +1,7 @@
 use bevy::math::{I64Vec3, U16Vec3, Vec3};
 
 use crate::block::BlockType;
+use crate::chunks::generate::trees::TreeTints;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct ChunkCoordinate(pub I64Vec3);
@@ -80,6 +81,8 @@ pub struct ChunkData {
     runs: Vec<Run>,
     pub size: u16,
     pub dirty: bool,
+    /// The trees reaching into the chunk, to tint their leaves, see `TreeTints`.
+    pub trees: TreeTints,
 }
 
 pub const CHUNK_SIZE: u16 = 16;
@@ -94,6 +97,7 @@ impl Default for ChunkData {
             }],
             size,
             dirty: false,
+            trees: TreeTints::default(),
         }
     }
 }
