@@ -147,7 +147,7 @@ fn update_overlay(
 
     let load = |count: &AtomicU32| count.load(Ordering::Relaxed);
     let (main, prepass, blended, shadow) = (load(&counts.main), load(&counts.prepass), load(&counts.blended), load(&counts.shadow));
-    let _ = writeln!(out, "draw calls: {} (main {main}, depth {prepass}, water/clouds {blended}, shadows {shadow})", main + prepass + blended + shadow);
+    let _ = writeln!(out, "draw calls: {} (main {main}, depth {prepass}, water {blended}, shadows {shadow})", main + prepass + blended + shadow);
 
     let mut per_level = vec![chunks.iter().count()];
     for node in &lod_nodes {
