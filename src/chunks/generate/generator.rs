@@ -1028,37 +1028,38 @@ pub fn generate_chunk(
     regions: Arc<RegionStore>,
     chunk_pos: ChunkCoordinate,
 ) -> ChunkData {
-    let mut chunk_data = ChunkData::default();
     let mut heights = regions.sampler();
     let noise = regions.noise();
-        let biomes = noise.biomes();
+    let biomes = noise.biomes();
     let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
+    let size = CHUNK_SIZE as i64;
+    let world_y = chunk_pos.0.y * size;
+    // cells in `ChunkData::from_cells` order, which is the order they're worked out in here
+    let mut cells = Vec::with_capacity((size * size * size) as usize);
 
-    for x in 0..chunk_data.size {
-        for z in 0..chunk_data.size {
-            let (world_x, world_y, world_z) = (
-                chunk_pos.0.x * chunk_data.size as i64 + x as i64,
-                chunk_pos.0.y * chunk_data.size as i64,
-                chunk_pos.0.z * chunk_data.size as i64 + z as i64,
-            );
+    for x in 0..size {
+        for z in 0..size {
+            let (world_x, world_z) = (chunk_pos.0.x * size + x, chunk_pos.0.z * size + z);
 
             let column_height = heights.height(world_x, world_z).round() as i64;
             (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
+            // above the ground and the sea, the column is air here whatever its climate
+            if world_y >= ground_top(column_height).max(WATER_LEVEL) {
+                cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
+                continue;
+            }
             let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
             let combined_gradient = gradient_x.abs() + gradient_z.abs();
             let biome = heights.biome(world_x, world_z);
             let temperature = noise.temperature(world_x as f64, world_z as f64);
 
-            for y in 0..chunk_data.size {
-                let block = under_grass(column_block(biomes, biome, world_y + y as i64, column_height, combined_gradient, temperature), world_y + y as i64, column_height, 1);
-                if block != BlockType::Air {
-                    chunk_data.set_block_at(U16Vec3::new(x, y, z), block);
-                }
-            }
+            cells.extend((world_y..world_y + size).map(|y| {
+                under_grass(column_block(biomes, biome, y, column_height, combined_gradient, temperature), y, column_height, 1)
+            }));
         }
     }
+    let mut chunk_data = ChunkData::from_cells(cells);
 
-    let size = chunk_data.size as i64;
     let origin = chunk_pos.0 * size;
     if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
         let min = I64Vec2::new(origin.x, origin.z);

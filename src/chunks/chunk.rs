@@ -103,6 +103,20 @@ impl Default for ChunkData {
 }
 
 impl ChunkData {
+    /// A chunk of every cell's block in turn, x outermost and y innermost (see `linear_index`).
+    pub fn from_cells(cells: impl IntoIterator<Item = BlockType>) -> Self {
+        let mut runs: Vec<Run> = Vec::new();
+        for block in cells {
+            match runs.last_mut() {
+                Some(run) if run.block == block => run.length += 1,
+                _ => runs.push(Run { block, length: 1 }),
+            }
+        }
+        let chunk = Self { runs, ..Self::default() };
+        assert_eq!(chunk.runs.iter().map(|r| r.length as usize).sum::<usize>(), chunk.linear_index(U16Vec3::splat(chunk.size - 1)) + 1);
+        chunk
+    }
+
     fn is_block_in_chunk(&self, block_coord: U16Vec3) -> bool {
         return block_coord.x < self.size && block_coord.y < self.size && block_coord.z < self.size;
     }
@@ -337,6 +351,36 @@ mod tests {
 
         chunk_data.set_block_at(U16Vec3::new(1, 1, 1), BlockType::Air);
         assert!(chunk_data.empty());
+    }
+
+    #[test]
+    fn test_from_cells_matches_setting_each_block() {
+        let block_at = |c: U16Vec3| match (c.x + 3 * c.y + c.z) % 7 {
+            0 => BlockType::Stone,
+            1 | 2 => BlockType::Dirt,
+            _ => BlockType::Air,
+        };
+        let mut set = ChunkData::default();
+        let mut cells = Vec::new();
+        for x in 0..set.size {
+            for z in 0..set.size {
+                for y in 0..set.size {
+                    let c = U16Vec3::new(x, y, z);
+                    set.set_block_at(c, block_at(c));
+                    cells.push(block_at(c));
+                }
+            }
+        }
+        let built = ChunkData::from_cells(cells);
+        assert_eq!(set.runs.len(), built.runs.len());
+        for x in 0..set.size {
+            for y in 0..set.size {
+                for z in 0..set.size {
+                    let c = U16Vec3::new(x, y, z);
+                    assert_eq!(set.get_block_at(c), built.get_block_at(c));
+                }
+            }
+        }
     }
 
     #[test]

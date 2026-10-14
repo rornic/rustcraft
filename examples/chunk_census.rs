@@ -21,6 +21,7 @@ fn main() {
     println!("anchor {anchor:?}, radius {r}");
 
     let mut data = std::collections::HashMap::new();
+    let mut gen_time = [0.0f64; 3]; // air, all opaque, the rest
     let t = Instant::now();
     for x in -r..=r {
         for y in -r..=r {
@@ -28,12 +29,26 @@ fn main() {
                 let o = I64Vec3::new(x, y, z);
                 if o.as_vec3().length() <= r as f32 {
                     let c = ChunkCoordinate(anchor + o);
-                    data.insert(c, Arc::new(generate_chunk(regions.clone(), c)));
+                    let t = Instant::now();
+                    let d = generate_chunk(regions.clone(), c);
+                    gen_time[if d.empty() { 0 } else if d.opaque() { 1 } else { 2 }] += t.elapsed().as_secs_f64();
+                    data.insert(c, Arc::new(d));
                 }
             }
         }
     }
-    println!("generated {} chunks in {:?}", data.len(), t.elapsed());
+    println!("generated {} chunks in {:?}: air {:.2}s, all opaque {:.2}s, the rest {:.2}s", data.len(), t.elapsed(), gen_time[0], gen_time[1], gen_time[2]);
+    let mut sum = 0u64;
+    for (c, d) in &data {
+        for (local, block) in d.iter_non_air() {
+            let h = (c.0.x * 73_856_093) ^ (c.0.y * 19_349_663) ^ (c.0.z * 83_492_791);
+            sum = sum.wrapping_add((h as u64 ^ ((local.x as u64) << 8 | (local.y as u64) << 16 | (local.z as u64) << 24)).wrapping_mul(block as u64 + 1));
+        }
+    }
+    println!("block checksum {sum:x}");
+    let t = Instant::now();
+    let buried = data.keys().filter(|c| data[c].opaque() && c.adjacent().iter().all(|n| data.get(n).is_some_and(|n| n.opaque()))).count();
+    println!("buried check over every chunk: {:?} ({buried} buried)", t.elapsed());
 
     let heap: usize = data.values().map(|d| d.heap_size()).sum();
     println!("chunk data on the heap: {:.1} MB", heap as f64 / 1e6);
