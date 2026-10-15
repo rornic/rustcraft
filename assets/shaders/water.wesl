@@ -9,7 +9,7 @@ import bevy_pbr::render::{
 import super::fog::fogged;
 import super::dither::dither_threshold;
 import super::sky::sky_colour;
-import super::lighting::{daylight, direct_sun, open_sky, sun_radiance};
+import super::lighting::{cloud_light, daylight, sun_radiance};
 import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
 import super::curvature::{curved, uncurved};
 
@@ -115,11 +115,9 @@ const REFLECT_STRAIGHT_DOWN: f32 = 0.02;
 // How bright the sun's glint is, to how bright it would be off a perfect mirror.
 const GLINT: f32 = 0.6;
 
-// Clouds as reflected: their colour, lit as `clouds.wesl` lights them, and how far out they
+// Clouds as reflected: their colour, lit by `cloud_light` as the clouds are, and how far out they
 // fade, to the fog's end, as the clouds themselves do.
 const CLOUD_COLOR: vec3<f32> = vec3<f32>(0.95, 0.95, 0.92);
-const CLOUD_SUN_SCATTER: f32 = 0.8;
-const CLOUD_SKY_SCATTER: f32 = 1.4;
 
 // Water's colours are picked as they should look on screen, so they're turned back into
 // the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
@@ -343,7 +341,7 @@ fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     // seen from below, steeply, or from the side, low down
     let side = normalize(vec3<f32>(-direction.x, 0.0, -direction.z) + vec3<f32>(0.0, 0.0, 1e-4));
     let facing = normalize(mix(side, vec3<f32>(0.0, -1.0, 0.0), direction.y));
-    let lit = direct_sun(facing, vec3<f32>(hit.x, layer, hit.y)) * CLOUD_SUN_SCATTER + open_sky(facing) * CLOUD_SKY_SCATTER;
+    let lit = cloud_light(facing, vec3<f32>(hit.x, layer, hit.y));
     return mix(sky, CLOUD_COLOR * lit, cover);
 }
 

@@ -8,17 +8,13 @@ import bevy_pbr::render::{
 };
 import super::curvature::{curved, uncurved};
 import super::fog::fogged;
-import super::lighting::{direct_sun, open_sky};
+import super::lighting::cloud_light;
 import super::dither::dither_threshold;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> cloud_color: vec4<f32>;
 // the clouds' base and greatest height
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var<uniform> cloud_shape: vec4<f32>;
 
-// Clouds scatter the light that falls on them, so their shaded sides are far brighter
-// than solid ground's would be and the sunlit ones a little softer.
-const SUN_SCATTER: f32 = 0.8;
-const SKY_SCATTER: f32 = 1.4;
 // How much light reaches a cloud's base, through the cloud above it, to its top's.
 const BASE_LIGHT: f32 = 0.8;
 // Clouds fade away this close to the camera, in blocks, so flying through one doesn't
@@ -55,6 +51,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // where the cloud really is
     let position = uncurved(in.world_position.xyz);
     let up = clamp((position.y - cloud_shape.x) / cloud_shape.y, 0.0, 1.0);
-    let light = (direct_sun(normal, position) * SUN_SCATTER + open_sky(normal) * SKY_SCATTER) * mix(BASE_LIGHT, 1.0, up);
+    let light = cloud_light(normal, position) * mix(BASE_LIGHT, 1.0, up);
     return fogged(vec4<f32>(cloud_color.rgb * light, 1.0), in.world_position.xyz, in.position.xy);
 }
