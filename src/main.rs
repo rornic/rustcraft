@@ -15,9 +15,8 @@ use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
-use rustcraft::horizon_glow::HorizonGlowPlugin;
 use rustcraft::player::{murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle};
-use rustcraft::sky::{atmosphere_camera, spawn_atmosphere, sun, FOG_MAX_OPACITY};
+use rustcraft::sky::{atmosphere_camera, match_sky_horizon, spawn_atmosphere, sun, FOG_MAX_OPACITY};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
 fn setup_scene(
@@ -174,12 +173,13 @@ fn main() {
             TerrainPlugin,
             CloudPlugin,
             CurvaturePlugin,
-            HorizonGlowPlugin,
             DebugOverlayPlugin,
         ))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
+        // once the camera's moved, see `TransformSystems::Propagate`
+        .add_systems(PostUpdate, match_sky_horizon.after(bevy::transform::TransformSystems::Propagate))
         .add_systems(
             Update,
             (player_move, player_look, update_horizon, update_underwater_effects).chain(),

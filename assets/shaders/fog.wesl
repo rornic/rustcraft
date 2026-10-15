@@ -2,7 +2,7 @@
 // stage and so must fog themselves. Each carries the curvature buffer, see `horizon.wesl`.
 
 import bevy_pbr::render::{mesh_view_bindings as view_bindings, pbr_functions::apply_fog};
-import super::horizon::{horizon_glow, horizon_haze};
+import super::horizon::horizon_haze;
 
 // `color` at `world_position` behind the camera's fog. Above water it thickens only with
 // distance across the land, not up or down, so it hides the far edge of the world in the
@@ -21,9 +21,7 @@ fn fogged(color: vec4<f32>, world_position: vec3<f32>, frag_coord: vec2<f32>) ->
     let end = max(fog.be.y, half + 1.0);
     let across = world_position.xz - view_position.xz;
     let distance = length(across);
-    // far land at the horizon takes on its glow, so it melts into the sky above it
-    let slope = (world_position.y - view_position.y) / max(distance, 1e-6);
-    let sky = horizon_haze(across) + horizon_glow(across, slope);
+    let sky = horizon_haze(across);
     let near = distance / half;
     let far = clamp((distance - half) / (end - half), 0.0, 1.0);
     let amount = select(mix(0.5, 1.0, far), 0.5 * near * near, distance < half);

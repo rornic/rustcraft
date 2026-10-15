@@ -57,6 +57,19 @@ impl Curve {
         (2.0 * self.radius).sqrt() * (above_sea.sqrt() + TALLEST.sqrt())
     }
 
+    /// How far below level the land's edge is seen from `height` blocks up, as a slope: the
+    /// sea's horizon, or nearer, `drawn` blocks out, if the land's drawn short of it. The
+    /// same as `horizon_dip` in `horizon.wesl`.
+    pub fn edge_dip(self, height: f32, drawn: f32) -> f32 {
+        let above_sea = (height - WATER_LEVEL as f32).max(0.0);
+        let bend = self.bend_at(height);
+        let mut edge = drawn.max(1.0);
+        if bend > 0.0 {
+            edge = edge.min((above_sea / bend).sqrt());
+        }
+        above_sea / edge + bend * edge
+    }
+
     /// How far below the camera's flat horizon land `distance` blocks away is drawn, seen
     /// from `height` blocks up: a sphere's drop, while it's still eased in.
     pub fn drop_at(self, distance: f32, height: f32) -> f32 {
@@ -238,5 +251,18 @@ mod tests {
         // still culled off to the side and behind
         assert!(!seen(&wide, Vec3::new(30_000.0, 0.0, -1000.0)));
         assert!(!seen(&wide, Vec3::new(0.0, 0.0, 5000.0)));
+    }
+
+    #[test]
+    fn test_edge_dip_is_the_horizon_or_the_drawn_edge_if_nearer() {
+        let height = SEA + 500.0;
+        let horizon = (height - SEA) / CURVE.drop_at(1.0, height);
+        let sea_horizon = horizon.sqrt();
+        // the slope from the eye down to the sea at its horizon
+        let dip = |d: f32| (height - SEA + CURVE.drop_at(d, height)) / d;
+        assert!((CURVE.edge_dip(height, 1.0e9) - dip(sea_horizon)).abs() < 1e-6);
+        assert!((CURVE.edge_dip(height, 0.5 * sea_horizon) - dip(0.5 * sea_horizon)).abs() < 1e-6);
+        // drawn short of the horizon, the edge is lower down
+        assert!(CURVE.edge_dip(height, 0.5 * sea_horizon) > CURVE.edge_dip(height, 1.0e9));
     }
 }
