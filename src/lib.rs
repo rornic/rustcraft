@@ -7,6 +7,7 @@ pub mod horizon;
 pub mod player;
 pub mod settings;
 pub mod sky;
+pub mod sun_glare;
 pub mod tonemap;
 pub mod util;
 pub mod world;

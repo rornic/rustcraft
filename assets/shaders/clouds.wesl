@@ -52,8 +52,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     let normal = normalize(in.world_normal);
-    // how far up the cloud, where it really is
-    let up = clamp((uncurved(in.world_position.xyz).y - cloud_shape.x) / cloud_shape.y, 0.0, 1.0);
-    let light = (direct_sun(normal) * SUN_SCATTER + open_sky(normal) * SKY_SCATTER) * mix(BASE_LIGHT, 1.0, up);
+    // where the cloud really is
+    let position = uncurved(in.world_position.xyz);
+    let up = clamp((position.y - cloud_shape.x) / cloud_shape.y, 0.0, 1.0);
+    let light = (direct_sun(normal, position) * SUN_SCATTER + open_sky(normal) * SKY_SCATTER) * mix(BASE_LIGHT, 1.0, up);
     return fogged(vec4<f32>(cloud_color.rgb * light, 1.0), in.world_position.xyz, in.position.xy);
 }

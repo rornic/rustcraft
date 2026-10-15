@@ -44,7 +44,7 @@ fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32
 
 // Sunlight reaching a face, shadowed by the land and the clouds.
 fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky: f32, frag_coord: vec2<f32>) -> vec3<f32> {
-    let light = direct_sun(shaded) * smoothstep(0.0, SUN_SKY_GATE, sky);
+    let light = direct_sun(shaded, uncurved(world_position.xyz)) * smoothstep(0.0, SUN_SKY_GATE, sky);
     // faces it can't reach need no shadow lookups
     if all(light == vec3<f32>(0.0)) {
         return light;

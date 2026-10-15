@@ -39,8 +39,9 @@ const SKY_GAIN: f32 = 4.0;
 const CAMERA_EV100: f32 = Exposure::EV100_SUNLIGHT;
 const FIRST_CASCADE_DISTANCE: f32 = 20.0;
 const ENVIRONMENT_MAP_SIZE: u32 = 64;
-const SUN_DISC_SIZE: f32 = 0.04;
-const SUN_DISC_INTENSITY: f32 = 0.05;
+// About twice the real sun's size, and bright enough past white that bloom haloes it.
+const SUN_DISC_SIZE: f32 = 0.02;
+const SUN_DISC_INTENSITY: f32 = 1.0;
 
 /// The sun, with shadows out to `shadow_distance` blocks in `cascades` slices.
 pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {

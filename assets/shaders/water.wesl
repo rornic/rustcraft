@@ -9,7 +9,7 @@ import bevy_pbr::render::{
 import super::fog::fogged;
 import super::dither::dither_threshold;
 import super::sky::sky_colour;
-import super::lighting::{SKY_GAIN, direct_sun, open_sky};
+import super::lighting::{daylight, direct_sun, open_sky, sun_radiance};
 import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
 import super::curvature::{curved, uncurved};
 
@@ -343,7 +343,7 @@ fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     // seen from below, steeply, or from the side, low down
     let side = normalize(vec3<f32>(-direction.x, 0.0, -direction.z) + vec3<f32>(0.0, 0.0, 1e-4));
     let facing = normalize(mix(side, vec3<f32>(0.0, -1.0, 0.0), direction.y));
-    let lit = direct_sun(facing) * CLOUD_SUN_SCATTER + open_sky(facing) * CLOUD_SKY_SCATTER;
+    let lit = direct_sun(facing, vec3<f32>(hit.x, layer, hit.y)) * CLOUD_SUN_SCATTER + open_sky(facing) * CLOUD_SKY_SCATTER;
     return mix(sky, CLOUD_COLOR * lit, cover);
 }
 
@@ -404,7 +404,7 @@ fn glint(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, world_position: ve
     let cos2 = n_dot_h * n_dot_h;
     let facets = exp((cos2 - 1.0) / (alpha2 * cos2)) / (3.14159265 * alpha2 * cos2 * cos2);
     let reflected = facets * fresnel(dot(half_way, to_eye)) / (4.0 * n_dot_v);
-    let radiance = (*sun).color.rgb * view_bindings::view.exposure / SKY_GAIN;
+    let radiance = sun_radiance(uncurved(world_position));
     // in the land's shadow, no glint
     if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
         return radiance * reflected * n_dot_l * GLINT;
@@ -490,7 +490,8 @@ fn fragment(
 
     // What the water shows of itself, from below the surface, and the sky and sun it
     // reflects. Looking up at it from underwater, only itself.
-    var scene = scene_colour(color.rgb);
+    // its colour's tuned for midday, so follows the light from there
+    var scene = scene_colour(color.rgb) * daylight(uncurved(world_position));
     let to_eye = -view_to_world / dist;
     // blocks a pixel spans across the water here, worked out where every fragment does
     let footprint = max(length(dpdx(world_position.xz)), length(dpdy(world_position.xz)));

@@ -16,6 +16,7 @@ use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle};
+use rustcraft::sun_glare::SunGlarePlugin;
 use rustcraft::sky::{atmosphere_camera, match_sky_horizon, move_sun, spawn_atmosphere, sun, FOG_MAX_OPACITY};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
@@ -173,6 +174,7 @@ fn main() {
             TerrainPlugin,
             CloudPlugin,
             CurvaturePlugin,
+            SunGlarePlugin,
             DebugOverlayPlugin,
         ))
         .insert_resource(winit_settings())
