@@ -16,7 +16,7 @@ use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle};
-use rustcraft::sky::{atmosphere_camera, match_sky_horizon, spawn_atmosphere, sun, FOG_MAX_OPACITY};
+use rustcraft::sky::{atmosphere_camera, match_sky_horizon, move_sun, spawn_atmosphere, sun, FOG_MAX_OPACITY};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
 fn setup_scene(
@@ -184,5 +184,6 @@ fn main() {
             Update,
             (player_move, player_look, update_horizon, update_underwater_effects).chain(),
         )
+        .add_systems(Update, move_sun)
         .run();
 }

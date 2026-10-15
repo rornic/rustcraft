@@ -4,6 +4,11 @@
 import bevy_pbr::render::{mesh_view_bindings as view_bindings, pbr_functions::apply_fog};
 import super::horizon::horizon_haze;
 
+// Over this last share of the way to the fog's end, the land fades out altogether into the
+// haze just over its edge, past the fog's opacity: the square edge of the farthest LOD nodes
+// never shows against the sky, and nodes coming into reach fade in as the fog eases out.
+const EDGE_FADE_START: f32 = 0.9;
+
 // `color` at `world_position` behind the camera's fog. Above water it thickens only with
 // distance across the land, not up or down, so it hides the far edge of the world in the
 // haze along the horizon without greying out the ground below when flying high: easing in
@@ -25,5 +30,6 @@ fn fogged(color: vec4<f32>, world_position: vec3<f32>, frag_coord: vec2<f32>) ->
     let near = distance / half;
     let far = clamp((distance - half) / (end - half), 0.0, 1.0);
     let amount = select(mix(0.5, 1.0, far), 0.5 * near * near, distance < half);
-    return vec4<f32>(mix(color.rgb, sky, amount * fog.base_color.a), color.a);
+    let opacity = mix(amount * fog.base_color.a, 1.0, smoothstep(EDGE_FADE_START, 1.0, distance / end));
+    return vec4<f32>(mix(color.rgb, sky, opacity), color.a);
 }
