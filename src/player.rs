@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 use bevy::{
     asset::{Asset, Assets, Handle},
     camera::{visibility::NoFrustumCulling, Camera},
+    ecs::hierarchy::ChildOf,
     ecs::{
         bundle::Bundle,
         component::Component,
@@ -11,14 +12,15 @@ use bevy::{
         resource::Resource,
         system::{Local, Query, Res, ResMut},
     },
-    ecs::hierarchy::ChildOf,
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
     light::{NotShadowCaster, NotShadowReceiver},
     math::{Dir3, I64Vec3, Vec3},
     mesh::{Mesh, Mesh3d, MeshVertexBufferLayoutRef},
-    pbr::{DistanceFog, FogFalloff, Material, MaterialPipeline, MaterialPipelineKey, MeshMaterial3d},
-    prelude::{default, Alpha, ClearColor, Color, LinearRgba, Meshable, Sphere, Transform},
+    pbr::{
+        DistanceFog, FogFalloff, Material, MaterialPipeline, MaterialPipelineKey, MeshMaterial3d,
+    },
     post_process::dof::{DepthOfField, DepthOfFieldMode},
+    prelude::{default, Alpha, ClearColor, Color, LinearRgba, Meshable, Sphere, Transform},
     reflect::TypePath,
     render::{
         render_resource::{AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError},
@@ -55,6 +57,7 @@ impl Default for PlayerMovement {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn player_move(
     time: Res<Time>,
     mut player_query: Query<(&PlayerMovement, &mut Transform)>,
@@ -109,15 +112,14 @@ impl Default for PlayerLook {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn player_look(
     time: Res<Time>,
     mut player_query: Query<(&PlayerLook, &mut Transform)>,
     mut camera_query: Query<(&ChildOf, &mut Transform), (With<Camera>, Without<PlayerLook>)>,
     mut motion_evr: MessageReader<MouseMotion>,
 ) {
-    let (parent, camera_transform) = &mut camera_query
-        .single_mut()
-        .expect("camera does not exist");
+    let (parent, camera_transform) = &mut camera_query.single_mut().expect("camera does not exist");
     let (player_look, player_transform) = &mut player_query
         .get_mut(parent.parent())
         .expect("player does not exist");
@@ -142,7 +144,8 @@ pub struct DryDefaults {
 }
 
 // The fog's colour underwater, picked as it should look on screen.
-static UNDERWATER_COLOR: LazyLock<Color> = LazyLock::new(|| scene_colour(Color::srgb_u8(20, 90, 130)).into());
+static UNDERWATER_COLOR: LazyLock<Color> =
+    LazyLock::new(|| scene_colour(Color::srgb_u8(20, 90, 130)).into());
 // How far round the camera the murk hangs, in blocks: past the underwater fog's end, where
 // everything is already its colour, so it only hides the sky.
 const MURK_DISTANCE: f32 = 48.0;
@@ -188,8 +191,13 @@ pub struct Murk(Handle<MurkMaterial>);
 
 /// The murk, hidden, to hang from the camera, and the handle `update_underwater_effects`
 /// shows it by.
-pub fn murk(meshes: &mut Assets<Mesh>, materials: &mut Assets<MurkMaterial>) -> (impl Bundle, Murk) {
-    let material = materials.add(MurkMaterial { color: LinearRgba::from(*UNDERWATER_COLOR).with_alpha(0.0) });
+pub fn murk(
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<MurkMaterial>,
+) -> (impl Bundle, Murk) {
+    let material = materials.add(MurkMaterial {
+        color: LinearRgba::from(*UNDERWATER_COLOR).with_alpha(0.0),
+    });
     let bundle = (
         Mesh3d(meshes.add(Sphere::new(MURK_DISTANCE).mesh().ico(3).unwrap())),
         MeshMaterial3d(material.clone()),
@@ -226,7 +234,9 @@ pub fn update_underwater_effects(
 ) {
     let (parent, camera_transform, mut fog, mut dof, mut color_grading) =
         camera_query.single_mut().expect("camera does not exist");
-    let player_transform = player_query.get(parent.parent()).expect("player does not exist");
+    let player_transform = player_query
+        .get(parent.parent())
+        .expect("player does not exist");
 
     let world_pos = player_transform.translation + camera_transform.translation;
     let block_coord = I64Vec3::new(

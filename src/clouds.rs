@@ -3,19 +3,19 @@ use std::f64::consts::TAU;
 use bevy::{
     asset::{Asset, RenderAssetUsages},
     image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
-    pbr::{MaterialPipeline, MaterialPipelineKey},
     light::{NotShadowCaster, NotShadowReceiver},
-    shader::ShaderRef,
+    pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     reflect::TypePath,
     render::{
         mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology},
-        storage::ShaderBuffer,
         render_resource::{
             AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
             TextureDimension, TextureFormat,
         },
+        storage::ShaderBuffer,
     },
+    shader::ShaderRef,
 };
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
@@ -63,8 +63,8 @@ pub struct CloudPlugin;
 impl Plugin for CloudPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<CloudMaterial>::default())
-        .add_systems(Startup, spawn_clouds)
-        .add_systems(Update, drift_clouds);
+            .add_systems(Startup, spawn_clouds)
+            .add_systems(Update, drift_clouds);
     }
 }
 
@@ -138,7 +138,9 @@ struct CloudMeshes(Vec<Handle<Mesh>>);
 /// Which cells of the pattern are cloud, `PATTERN` x `PATTERN`, row-major [x][z]. Sampled
 /// round a torus in 4D noise, so it wraps at its edges without a seam.
 fn cloud_pattern(seed: u32) -> Vec<bool> {
-    let noise = Fbm::<Perlin>::new(seed).set_octaves(2).set_persistence(0.35);
+    let noise = Fbm::<Perlin>::new(seed)
+        .set_octaves(2)
+        .set_persistence(0.35);
     let radius = PATTERN as f64 / (TAU * CLOUD_CELLS);
     let around = |cell: usize| {
         let angle = TAU * cell as f64 / PATTERN as f64;
@@ -244,12 +246,21 @@ fn cloud_columns(pattern: &[bool], seed: u32) -> Columns {
             }
             let ((a, b), (c, d)) = (around(i / n), around(i % n));
             let lump = noise.get([a, b, c, d]);
-            let top = (inside[i] as f64 * LAYERS_PER_CELL + lump * LUMPS).round().clamp(1.0, MAX_LAYERS as f64) as u8;
+            let top = (inside[i] as f64 * LAYERS_PER_CELL + lump * LUMPS)
+                .round()
+                .clamp(1.0, MAX_LAYERS as f64) as u8;
             let lifted = inside[i] == 1 && top >= 2 && lump > 0.15;
-            Some(Column { bottom: lifted as u8, top })
+            Some(Column {
+                bottom: lifted as u8,
+                top,
+            })
         })
         .collect();
-    Columns { n, cell: CELL, cells }
+    Columns {
+        n,
+        cell: CELL,
+        cells,
+    }
 }
 
 // Coarser clouds, `factor` cells merged into one each way: cloud where at least half of
@@ -267,13 +278,21 @@ fn coarsen(columns: &Columns, factor: usize) -> Columns {
                 continue;
             }
             let mean = |f: fn(&Column) -> u8| {
-                (merged.iter().map(|c| f(c) as f32).sum::<f32>() / merged.len() as f32).round() as u8
+                (merged.iter().map(|c| f(c) as f32).sum::<f32>() / merged.len() as f32).round()
+                    as u8
             };
             let bottom = mean(|c| c.bottom);
-            cells.push(Some(Column { bottom, top: mean(|c| c.top).max(bottom + 1) }));
+            cells.push(Some(Column {
+                bottom,
+                top: mean(|c| c.top).max(bottom + 1),
+            }));
         }
     }
-    Columns { n, cell: columns.cell * factor as f32, cells }
+    Columns {
+        n,
+        cell: columns.cell * factor as f32,
+        cells,
+    }
 }
 
 #[derive(Default)]
@@ -286,7 +305,11 @@ struct CloudMesh {
 impl CloudMesh {
     // A quad facing `normal`, wound so it's seen from that side.
     fn quad(&mut self, mut corners: [Vec3; 4], normal: Vec3) {
-        if (corners[1] - corners[0]).cross(corners[2] - corners[0]).dot(normal) < 0.0 {
+        if (corners[1] - corners[0])
+            .cross(corners[2] - corners[0])
+            .dot(normal)
+            < 0.0
+        {
             corners.reverse();
         }
         let start = self.positions.len() as u32;
@@ -298,7 +321,10 @@ impl CloudMesh {
 
 // The fewest rectangles covering the cells where `height` is the same, as
 // (x0, z0, x1, z1, height), ends exclusive.
-fn rectangles(n: usize, height: impl Fn(usize, usize) -> Option<u8>) -> Vec<(usize, usize, usize, usize, u8)> {
+fn rectangles(
+    n: usize,
+    height: impl Fn(usize, usize) -> Option<u8>,
+) -> Vec<(usize, usize, usize, usize, u8)> {
     let mut taken = vec![false; n * n];
     let mut found = vec![];
     for x0 in 0..n {
@@ -343,12 +369,26 @@ fn open_side(column: Option<Column>, neighbour: Option<Column>) -> [Option<(u8, 
 fn cloud_mesh(columns: &Columns) -> Mesh {
     let (n, cell) = (columns.n, columns.cell);
     let mut mesh = CloudMesh::default();
-    let corner = |x: usize, layer: u8, z: usize| Vec3::new(x as f32 * cell, layer as f32 * LAYER, z as f32 * cell);
+    let corner = |x: usize, layer: u8, z: usize| {
+        Vec3::new(x as f32 * cell, layer as f32 * LAYER, z as f32 * cell)
+    };
 
     let tops = rectangles(n, |x, z| columns.get(x, z).map(|c| c.top));
     let bottoms = rectangles(n, |x, z| columns.get(x, z).map(|c| c.bottom));
-    for ((x0, z0, x1, z1, y), normal) in tops.into_iter().map(|r| (r, Vec3::Y)).chain(bottoms.into_iter().map(|r| (r, Vec3::NEG_Y))) {
-        mesh.quad([corner(x0, y, z0), corner(x1, y, z0), corner(x1, y, z1), corner(x0, y, z1)], normal);
+    for ((x0, z0, x1, z1, y), normal) in tops
+        .into_iter()
+        .map(|r| (r, Vec3::Y))
+        .chain(bottoms.into_iter().map(|r| (r, Vec3::NEG_Y)))
+    {
+        mesh.quad(
+            [
+                corner(x0, y, z0),
+                corner(x1, y, z0),
+                corner(x1, y, z1),
+                corner(x0, y, z1),
+            ],
+            normal,
+        );
     }
 
     // sides, where a column stands higher or lower than its neighbour, merged along each edge
@@ -385,17 +425,28 @@ fn cloud_mesh(columns: &Columns) -> Mesh {
                         while v < n && open(v) == Some((lo, hi)) {
                             v += 1;
                         }
-                        mesh.quad([at(edge, start, lo), at(edge, start, hi), at(edge, v, hi), at(edge, v, lo)], normal);
+                        mesh.quad(
+                            [
+                                at(edge, start, lo),
+                                at(edge, start, hi),
+                                at(edge, v, hi),
+                                at(edge, v, lo),
+                            ],
+                            normal,
+                        );
                     }
                 }
             }
         }
     }
 
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, mesh.positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, mesh.normals)
-        .with_inserted_indices(Indices::U32(mesh.indices))
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, mesh.positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, mesh.normals)
+    .with_inserted_indices(Indices::U32(mesh.indices))
 }
 
 // The clouds as a texture that repeats, more where they're thicker, blended between cells
@@ -405,7 +456,11 @@ fn pattern_image(columns: &Columns) -> Image {
     // u along x, v along z; even the thinnest cloud keeps off half as much sun as the thickest
     let shade = |c: Column| 0.5 + 0.5 * (c.top - c.bottom) as f32 / MAX_LAYERS as f32;
     let data = (0..n * n)
-        .map(|i| columns.get(i % n, i / n).map_or(0, |c| (shade(c) * 255.0).round() as u8))
+        .map(|i| {
+            columns
+                .get(i % n, i / n)
+                .map_or(0, |c| (shade(c) * 255.0).round() as u8)
+        })
         .collect();
     let mut image = Image::new(
         Extent3d {
@@ -454,7 +509,9 @@ pub fn spawn_clouds(
     for x in -COPIES..=COPIES {
         for z in -COPIES..=COPIES {
             commands.spawn((
-                CloudTile { offset: IVec2::new(x, z) },
+                CloudTile {
+                    offset: IVec2::new(x, z),
+                },
                 Mesh3d(lods[LODS.len() - 1].clone()),
                 MeshMaterial3d(material.clone()),
                 Transform::default(),
@@ -477,7 +534,9 @@ fn tile_origin(camera: Vec2, elapsed: f32, offset: IVec2) -> Vec2 {
 fn tile_lod(camera: Vec2, origin: Vec2) -> usize {
     let nearest = camera.clamp(origin, origin + Vec2::splat(SPAN));
     let away = camera.distance(nearest) / SPAN;
-    LODS.iter().rposition(|&(_, start)| away >= start).unwrap_or(0)
+    LODS.iter()
+        .rposition(|&(_, start)| away >= start)
+        .unwrap_or(0)
 }
 
 fn drift_clouds(
@@ -537,7 +596,11 @@ mod tests {
                     }
                 }
             }
-            assert!(cloud.len() >= MIN_CLOUD_CELLS, "a cloud of {} cells", cloud.len());
+            assert!(
+                cloud.len() >= MIN_CLOUD_CELLS,
+                "a cloud of {} cells",
+                cloud.len()
+            );
         }
     }
 
@@ -562,14 +625,27 @@ mod tests {
         // across the wrap, neighbouring cells agree about as often as anywhere else
         let pattern = cloud_pattern(3);
         let n = PATTERN;
-        let agree = |a: usize, b: usize| (0..n).filter(|&z| pattern[a * n + z] == pattern[b * n + z]).count();
+        let agree = |a: usize, b: usize| {
+            (0..n)
+                .filter(|&z| pattern[a * n + z] == pattern[b * n + z])
+                .count()
+        };
         let inside = agree(n / 2, n / 2 + 1);
         let across = agree(n - 1, 0);
-        assert!(across as f64 > inside as f64 * 0.8, "inside {inside}, across the wrap {across}");
+        assert!(
+            across as f64 > inside as f64 * 0.8,
+            "inside {inside}, across the wrap {across}"
+        );
     }
 
-    fn columns(n: usize, cells: &[((usize, usize), (u8, u8))]) -> Columns {
-        let mut columns = Columns { n, cell: CELL, cells: vec![None; n * n] };
+    type TestCell = ((usize, usize), (u8, u8));
+
+    fn columns(n: usize, cells: &[TestCell]) -> Columns {
+        let mut columns = Columns {
+            n,
+            cell: CELL,
+            cells: vec![None; n * n],
+        };
         for &((x, z), (bottom, top)) in cells {
             columns.cells[x * n + z] = Some(Column { bottom, top });
         }
@@ -577,23 +653,50 @@ mod tests {
     }
 
     fn triangles(mesh: &Mesh) -> Vec<([Vec3; 3], Vec3)> {
-        let Some(Indices::U32(indices)) = mesh.indices() else { panic!() };
-        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
-        let normals = mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().as_float3().unwrap();
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!()
+        };
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let normals = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .unwrap()
+            .as_float3()
+            .unwrap();
         indices
             .chunks(3)
-            .map(|tri| (tri.iter().map(|&i| Vec3::from(positions[i as usize])).collect::<Vec<_>>().try_into().unwrap(), Vec3::from(normals[tri[0] as usize])))
+            .map(|tri| {
+                (
+                    tri.iter()
+                        .map(|&i| Vec3::from(positions[i as usize]))
+                        .collect::<Vec<_>>()
+                        .try_into()
+                        .unwrap(),
+                    Vec3::from(normals[tri[0] as usize]),
+                )
+            })
             .collect()
     }
 
     // The volume a closed mesh wraps, which comes out right only when no face is missing,
     // doubled up or facing the wrong way.
     fn volume(mesh: &Mesh) -> f32 {
-        triangles(mesh).iter().map(|([a, b, c], _)| a.dot(b.cross(*c)) / 6.0).sum()
+        triangles(mesh)
+            .iter()
+            .map(|([a, b, c], _)| a.dot(b.cross(*c)) / 6.0)
+            .sum()
     }
 
     fn column_volume(columns: &Columns) -> f32 {
-        columns.cells.iter().flatten().map(|c| (c.top - c.bottom) as f32 * LAYER * columns.cell * columns.cell).sum()
+        columns
+            .cells
+            .iter()
+            .flatten()
+            .map(|c| (c.top - c.bottom) as f32 * LAYER * columns.cell * columns.cell)
+            .sum()
     }
 
     #[test]
@@ -612,10 +715,22 @@ mod tests {
         // a dome with a lip lifted off the base, a step down and a gap above a neighbour
         let columns = columns(
             8,
-            &[((2, 2), (0, 4)), ((3, 2), (0, 2)), ((2, 3), (1, 3)), ((1, 2), (1, 2)), ((3, 3), (2, 5)), ((4, 3), (0, 1))],
+            &[
+                ((2, 2), (0, 4)),
+                ((3, 2), (0, 2)),
+                ((2, 3), (1, 3)),
+                ((1, 2), (1, 2)),
+                ((3, 3), (2, 5)),
+                ((4, 3), (0, 1)),
+            ],
         );
         let mesh = cloud_mesh(&columns);
-        assert!((volume(&mesh) - column_volume(&columns)).abs() < 1.0, "{} vs {}", volume(&mesh), column_volume(&columns));
+        assert!(
+            (volume(&mesh) - column_volume(&columns)).abs() < 1.0,
+            "{} vs {}",
+            volume(&mesh),
+            column_volume(&columns)
+        );
     }
 
     #[test]
@@ -633,7 +748,11 @@ mod tests {
         }
         let mesh = cloud_mesh(&columns);
         let expected = column_volume(&columns);
-        assert!((volume(&mesh) - expected).abs() < expected * 1e-4, "{} vs {expected}", volume(&mesh));
+        assert!(
+            (volume(&mesh) - expected).abs() < expected * 1e-4,
+            "{} vs {expected}",
+            volume(&mesh)
+        );
         let tops: Vec<u8> = columns.cells.iter().flatten().map(|c| c.top).collect();
         for layers in 1..=MAX_LAYERS {
             assert!(tops.contains(&layers), "no cloud {layers} layers high");
@@ -647,8 +766,14 @@ mod tests {
         let mut vertices = vec![];
         for &(factor, _) in &LODS {
             let coarse = coarsen(&columns, factor);
-            assert!((cover(&coarse) / cover(&columns) - 1.0).abs() < 0.15, "cover at {factor}");
-            assert!((column_volume(&coarse) / column_volume(&columns) - 1.0).abs() < 0.2, "volume at {factor}");
+            assert!(
+                (cover(&coarse) / cover(&columns) - 1.0).abs() < 0.15,
+                "cover at {factor}"
+            );
+            assert!(
+                (column_volume(&coarse) / column_volume(&columns) - 1.0).abs() < 0.2,
+                "volume at {factor}"
+            );
             vertices.push(cloud_mesh(&coarse).count_vertices());
         }
         println!("vertices a copy at each LOD: {vertices:?}");
@@ -658,12 +783,16 @@ mod tests {
     #[test]
     fn test_wind_carries_on_seamlessly_past_the_hour() {
         let camera = Vec2::new(500.0, 900.0);
-        assert!(tile_origin(camera, 3600.0, IVec2::ZERO).abs_diff_eq(tile_origin(camera, 0.0, IVec2::ZERO), 0.05));
+        assert!(tile_origin(camera, 3600.0, IVec2::ZERO)
+            .abs_diff_eq(tile_origin(camera, 0.0, IVec2::ZERO), 0.05));
     }
 
     #[test]
     fn test_image_puts_x_along_u_and_shades_thick_clouds_more() {
-        let image = pattern_image(&columns(PATTERN, &[((3, 200), (0, MAX_LAYERS)), ((4, 200), (1, 2))]));
+        let image = pattern_image(&columns(
+            PATTERN,
+            &[((3, 200), (0, MAX_LAYERS)), ((4, 200), (1, 2))],
+        ));
         let data = image.data.as_deref().unwrap();
         assert_eq!(255, data[200 * PATTERN + 3]);
         assert!(data[200 * PATTERN + 4] > 0 && data[200 * PATTERN + 4] < 255);
@@ -675,8 +804,14 @@ mod tests {
         let camera = Vec2::new(10_000.0, -3_000.0);
         let origin = |offset| tile_origin(camera, 0.0, offset);
         assert_eq!(0, tile_lod(camera, origin(IVec2::ZERO)));
-        assert_eq!(LODS.len() - 1, tile_lod(camera, origin(IVec2::new(COPIES, 0))));
-        assert_eq!(LODS.len() - 1, tile_lod(camera, origin(IVec2::new(-COPIES, COPIES))));
+        assert_eq!(
+            LODS.len() - 1,
+            tile_lod(camera, origin(IVec2::new(COPIES, 0)))
+        );
+        assert_eq!(
+            LODS.len() - 1,
+            tile_lod(camera, origin(IVec2::new(-COPIES, COPIES)))
+        );
     }
 
     #[test]
@@ -685,7 +820,10 @@ mod tests {
         let camera = Vec2::new(10_000.0, -3_000.0);
         for elapsed in [0.0, 100.0, 5_000.0] {
             let origin = tile_origin(camera, elapsed, IVec2::ZERO);
-            assert!((camera - origin).cmpge(Vec2::ZERO).all() && (camera - origin).cmplt(Vec2::splat(span)).all());
+            assert!(
+                (camera - origin).cmpge(Vec2::ZERO).all()
+                    && (camera - origin).cmplt(Vec2::splat(span)).all()
+            );
         }
         let moved = tile_origin(camera, 1.0, IVec2::ZERO) - tile_origin(camera, 0.0, IVec2::ZERO);
         assert!((moved - WIND).length() < 1e-3 || (moved - WIND).abs().max_element() > span * 0.5);

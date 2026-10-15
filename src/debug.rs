@@ -2,12 +2,14 @@ use std::fmt::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::core_pipeline::core_3d::{AlphaMask3d, Opaque3d, Transparent3d};
 use bevy::core_pipeline::prepass::{AlphaMask3dPrepass, Opaque3dPrepass};
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::pbr::Shadow;
 use bevy::prelude::*;
-use bevy::render::render_phase::{BinnedPhaseItem, BinnedRenderPhase, ViewBinnedRenderPhases, ViewSortedRenderPhases};
+use bevy::render::render_phase::{
+    BinnedPhaseItem, BinnedRenderPhase, ViewBinnedRenderPhases, ViewSortedRenderPhases,
+};
 use bevy::render::{Render, RenderApp, RenderSystems};
 
 use crate::chunks::chunk_loader::Chunk;
@@ -31,7 +33,9 @@ impl Plugin for DebugOverlayPlugin {
             .add_systems(Startup, spawn_overlay)
             .add_systems(Update, (toggle_overlay, update_overlay).chain());
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.insert_resource(counts).add_systems(Render, count_draws.in_set(RenderSystems::Prepare));
+            render_app
+                .insert_resource(counts)
+                .add_systems(Render, count_draws.in_set(RenderSystems::Prepare));
         }
     }
 }
@@ -48,7 +52,13 @@ struct DrawCounts {
 // a multi-draw batch set is one draw call however many meshes it holds
 fn binned_draws<T: BinnedPhaseItem>(phases: &ViewBinnedRenderPhases<T>) -> u32 {
     let draws = |phase: &BinnedRenderPhase<T>| {
-        phase.multidrawable_meshes.len() + phase.batchable_meshes.len() + phase.unbatchable_meshes.values().map(|v| v.entities.len()).sum::<usize>()
+        phase.multidrawable_meshes.len()
+            + phase.batchable_meshes.len()
+            + phase
+                .unbatchable_meshes
+                .values()
+                .map(|v| v.entities.len())
+                .sum::<usize>()
     };
     phases.values().map(draws).sum::<usize>() as u32
 }
@@ -63,10 +73,24 @@ fn count_draws(
     shadow: Res<ViewBinnedRenderPhases<Shadow>>,
     blended: Res<ViewSortedRenderPhases<Transparent3d>>,
 ) {
-    counts.main.store(binned_draws(&opaque) + binned_draws(&masked), Ordering::Relaxed);
-    counts.prepass.store(binned_draws(&opaque_prepass) + binned_draws(&masked_prepass), Ordering::Relaxed);
-    counts.shadow.store(binned_draws(&shadow), Ordering::Relaxed);
-    counts.blended.store(blended.values().map(|phase| phase.items.len()).sum::<usize>() as u32, Ordering::Relaxed);
+    counts.main.store(
+        binned_draws(&opaque) + binned_draws(&masked),
+        Ordering::Relaxed,
+    );
+    counts.prepass.store(
+        binned_draws(&opaque_prepass) + binned_draws(&masked_prepass),
+        Ordering::Relaxed,
+    );
+    counts
+        .shadow
+        .store(binned_draws(&shadow), Ordering::Relaxed);
+    counts.blended.store(
+        blended
+            .values()
+            .map(|phase| phase.items.len())
+            .sum::<usize>() as u32,
+        Ordering::Relaxed,
+    );
 }
 
 #[derive(Component)]
@@ -89,11 +113,18 @@ fn spawn_overlay(mut commands: Commands) {
             padding: UiRect::all(Val::Px(6.0)),
             ..default()
         },
-        if std::env::var("RC_STATS").is_ok() { Visibility::Visible } else { Visibility::Hidden },
+        if std::env::var("RC_STATS").is_ok() {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        },
     ));
 }
 
-fn toggle_overlay(keys: Res<ButtonInput<KeyCode>>, mut overlay: Query<&mut Visibility, With<DebugOverlay>>) {
+fn toggle_overlay(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut overlay: Query<&mut Visibility, With<DebugOverlay>>,
+) {
     if !keys.just_pressed(TOGGLE_KEY) {
         return;
     }
@@ -135,7 +166,10 @@ fn update_overlay(
         let pos = player.translation();
         let noise = world.region_store.noise();
         let (x, z) = (pos.x as f64, pos.z as f64);
-        let biome = noise.biomes().name(noise.sample(x, z).biome).unwrap_or("base");
+        let biome = noise
+            .biomes()
+            .name(noise.sample(x, z).biome)
+            .unwrap_or("base");
         let climate = noise.climate(x, z);
         let _ = writeln!(out, "pos: {:.0} {:.0} {:.0}", pos.x, pos.y, pos.z);
         let _ = writeln!(
@@ -146,8 +180,17 @@ fn update_overlay(
     }
 
     let load = |count: &AtomicU32| count.load(Ordering::Relaxed);
-    let (main, prepass, blended, shadow) = (load(&counts.main), load(&counts.prepass), load(&counts.blended), load(&counts.shadow));
-    let _ = writeln!(out, "draw calls: {} (main {main}, depth {prepass}, water {blended}, shadows {shadow})", main + prepass + blended + shadow);
+    let (main, prepass, blended, shadow) = (
+        load(&counts.main),
+        load(&counts.prepass),
+        load(&counts.blended),
+        load(&counts.shadow),
+    );
+    let _ = writeln!(
+        out,
+        "draw calls: {} (main {main}, depth {prepass}, water {blended}, shadows {shadow})",
+        main + prepass + blended + shadow
+    );
 
     let mut per_level = vec![chunks.iter().count()];
     for node in &lod_nodes {

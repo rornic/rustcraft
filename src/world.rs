@@ -30,7 +30,10 @@ impl World {
     /// see `LodLayout::region_reach`.
     pub fn new(region_distance: u32) -> Self {
         // RC_SEED repeats a world, for chasing bugs that depend on its terrain
-        let seed = std::env::var("RC_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or_else(rand::random);
+        let seed = std::env::var("RC_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(rand::random);
         let height = WORLD_HEIGHT;
         let noise_generator = Arc::new(NoiseGenerator::new(seed));
         let (spawn_x, spawn_z, spawn_height) = noise_generator.find_spawn();
@@ -39,7 +42,10 @@ impl World {
             seed,
             height,
             chunks: HashMap::new(),
-            below: Arc::new(ChunkData::from_cells(std::iter::repeat_n(BlockType::Stone, (CHUNK_SIZE as usize).pow(3)))),
+            below: Arc::new(ChunkData::from_cells(std::iter::repeat_n(
+                BlockType::Stone,
+                (CHUNK_SIZE as usize).pow(3),
+            ))),
             above: Arc::new(ChunkData::default()),
             region_store: Arc::new(
                 RegionStore::new(noise_generator)
@@ -86,7 +92,8 @@ impl World {
     }
 
     fn chunk(&self, chunk_coord: ChunkCoordinate) -> Option<&Arc<ChunkData>> {
-        self.beyond_world(chunk_coord).or_else(|| self.chunks.get(&chunk_coord))
+        self.beyond_world(chunk_coord)
+            .or_else(|| self.chunks.get(&chunk_coord))
     }
 
     pub fn get_chunk_data(&mut self, chunk_coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
@@ -113,7 +120,8 @@ impl World {
     }
 
     pub fn is_chunk_empty(&mut self, chunk_coord: ChunkCoordinate) -> bool {
-        self.chunk(chunk_coord).is_some_and(|chunk_data| chunk_data.empty())
+        self.chunk(chunk_coord)
+            .is_some_and(|chunk_data| chunk_data.empty())
     }
 
     /// Whether the chunk and the chunks against its faces are all opaque, so it has no faces to draw.
@@ -174,7 +182,10 @@ mod tests {
         let chunk = |x, y, z| world.block_to_chunk_coordinate(I64Vec3::new(x, y, z));
         assert_eq!(ChunkCoordinate(I64Vec3::new(0, 1, 2)), chunk(5, 16, 47));
         // negative blocks belong to the chunk below, not chunk 0
-        assert_eq!(ChunkCoordinate(I64Vec3::new(-1, -1, -2)), chunk(-5, -16, -17));
+        assert_eq!(
+            ChunkCoordinate(I64Vec3::new(-1, -1, -2)),
+            chunk(-5, -16, -17)
+        );
     }
 
     #[test]
@@ -213,7 +224,11 @@ mod tests {
     fn test_beyond_the_world_is_solid_below_and_open_above() {
         let mut world = World::new(16);
         let top = World::layers(world.height).end;
-        let (below, inside, above) = (ChunkCoordinate(I64Vec3::new(3, -1, 2)), ChunkCoordinate(I64Vec3::new(3, 0, 2)), ChunkCoordinate(I64Vec3::new(3, top, 2)));
+        let (below, inside, above) = (
+            ChunkCoordinate(I64Vec3::new(3, -1, 2)),
+            ChunkCoordinate(I64Vec3::new(3, 0, 2)),
+            ChunkCoordinate(I64Vec3::new(3, top, 2)),
+        );
         assert!(world.is_chunk_generated(below) && world.is_chunk_generated(above));
         assert!(!world.is_chunk_generated(inside));
         assert!(world.get_chunk_data(below).unwrap().opaque());

@@ -30,11 +30,19 @@ pub struct Fractal {
 }
 
 impl Fractal {
-    pub fn new(seed: u32, wavelength: f64, octaves: usize, lacunarity: f64, persistence: f64) -> Self {
+    pub fn new(
+        seed: u32,
+        wavelength: f64,
+        octaves: usize,
+        lacunarity: f64,
+        persistence: f64,
+    ) -> Self {
         // `Fbm` seeds its octaves seed, seed + 1, ... and scales by the sum of their amplitudes
         let denom = (1..=octaves).fold(0.0, |acc, octave| acc + persistence.powi(octave as i32));
         Self {
-            sources: (0..octaves as u32).map(|i| Perlin::new(seed.wrapping_add(i))).collect(),
+            sources: (0..octaves as u32)
+                .map(|i| Perlin::new(seed.wrapping_add(i)))
+                .collect(),
             frequency: 1.0 / wavelength,
             lacunarity,
             persistence,
@@ -74,7 +82,11 @@ mod tests {
 
     #[test]
     fn test_matches_fbm_exactly_for_single_blocks() {
-        for (seed, wavelength, octaves, lacunarity) in [(7, 350.0, 5, 2.0), (3, 16000.0, 6, 2.0), (11, 32.0, 3, std::f64::consts::PI * 2.0 / 3.0)] {
+        for (seed, wavelength, octaves, lacunarity) in [
+            (7, 350.0, 5, 2.0),
+            (3, 16000.0, 6, 2.0),
+            (11, 32.0, 3, std::f64::consts::PI * 2.0 / 3.0),
+        ] {
             let fractal = Fractal::new(seed, wavelength, octaves, lacunarity, 0.5);
             let fbm = Fbm::<Perlin>::new(seed)
                 .set_frequency(1.0 / wavelength)
@@ -82,8 +94,15 @@ mod tests {
                 .set_persistence(0.5)
                 .set_lacunarity(lacunarity);
             for i in 0..2000 {
-                let (x, z) = ((i * 37 % 1999) as f64 * 13.7 - 9000.0, (i * 61 % 1993) as f64 * 11.3 - 7000.0);
-                assert_eq!(fbm.get([x, z]).to_bits(), fractal.get(x, z, 1.0).to_bits(), "seed {seed} at ({x}, {z})");
+                let (x, z) = (
+                    (i * 37 % 1999) as f64 * 13.7 - 9000.0,
+                    (i * 61 % 1993) as f64 * 11.3 - 7000.0,
+                );
+                assert_eq!(
+                    fbm.get([x, z]).to_bits(),
+                    fractal.get(x, z, 1.0).to_bits(),
+                    "seed {seed} at ({x}, {z})"
+                );
             }
         }
     }
@@ -111,7 +130,15 @@ mod tests {
     fn test_wide_cells_vary_less_between_neighbours() {
         // the same terrain sampled once every 64 blocks: smoother where fine octaves fade out
         let fractal = Fractal::new(9, 350.0, 5, 2.0, 0.5);
-        let roughness = |cell: f64| (0..400).map(|i| (fractal.get((i + 1) as f64 * 64.0, 0.0, cell) - fractal.get(i as f64 * 64.0, 0.0, cell)).abs()).sum::<f64>();
+        let roughness = |cell: f64| {
+            (0..400)
+                .map(|i| {
+                    (fractal.get((i + 1) as f64 * 64.0, 0.0, cell)
+                        - fractal.get(i as f64 * 64.0, 0.0, cell))
+                    .abs()
+                })
+                .sum::<f64>()
+        };
         assert!(roughness(64.0) < roughness(1.0) * 0.9);
     }
 }

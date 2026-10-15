@@ -1,25 +1,30 @@
 use rustcraft::settings::Settings;
 
-use bevy::post_process::bloom::Bloom;
-use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
+use bevy::post_process::bloom::Bloom;
+use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
     insert_terrain_resources,
-    material::{block_atlas, see_through_reach, ChunkMaterial, WaterMaterial},
+    material::{block_atlas, see_through_reach, ChunkMaterial, TerrainMaterials, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
-use rustcraft::player::{murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle};
+use rustcraft::player::{
+    murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle,
+};
+use rustcraft::sky::{
+    atmosphere_camera, match_sky_horizon, move_sun, spawn_atmosphere, sun, FOG_MAX_OPACITY,
+};
 use rustcraft::sun_glare::SunGlarePlugin;
-use rustcraft::sky::{atmosphere_camera, match_sky_horizon, move_sun, spawn_atmosphere, sun, FOG_MAX_OPACITY};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
+#[allow(clippy::too_many_arguments)]
 fn setup_scene(
     mut commands: Commands,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
@@ -136,9 +141,11 @@ fn setup_scene(
         &renderer,
         &settings.debug,
         world_height,
-        chunk_material_handle,
-        water_material_handle,
-        solid_water_material_handle,
+        TerrainMaterials {
+            chunk: chunk_material_handle,
+            water: water_material_handle,
+            solid_water: solid_water_material_handle,
+        },
         &mut chunk_materials,
         &mut water_materials,
     );
@@ -149,7 +156,10 @@ fn setup_scene(
 fn winit_settings() -> bevy::winit::WinitSettings {
     use bevy::winit::{UpdateMode, WinitSettings};
     if std::env::var("RC_STATS").is_ok() {
-        WinitSettings { focused_mode: UpdateMode::Continuous, unfocused_mode: UpdateMode::Continuous }
+        WinitSettings {
+            focused_mode: UpdateMode::Continuous,
+            unfocused_mode: UpdateMode::Continuous,
+        }
     } else {
         WinitSettings::game()
     }
@@ -181,10 +191,19 @@ fn main() {
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
         // once the camera's moved, see `TransformSystems::Propagate`
-        .add_systems(PostUpdate, match_sky_horizon.after(bevy::transform::TransformSystems::Propagate))
+        .add_systems(
+            PostUpdate,
+            match_sky_horizon.after(bevy::transform::TransformSystems::Propagate),
+        )
         .add_systems(
             Update,
-            (player_move, player_look, update_horizon, update_underwater_effects).chain(),
+            (
+                player_move,
+                player_look,
+                update_horizon,
+                update_underwater_effects,
+            )
+                .chain(),
         )
         .add_systems(Update, move_sun)
         .run();

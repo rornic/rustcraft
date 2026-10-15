@@ -57,7 +57,9 @@ impl Region {
         (min.y..=max.y)
             .flat_map(|z| (min.x..=max.x).map(move |x| (z * TILES + x) as usize))
             .map(|i| self.tile_range[i])
-            .fold((f32::MAX, f32::MIN), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)))
+            .fold((f32::MAX, f32::MIN), |(lo, hi), (a, b)| {
+                (lo.min(a), hi.max(b))
+            })
     }
 }
 
@@ -81,7 +83,12 @@ pub fn compute_region(noise: &NoiseGenerator, coord: RegionCoord) -> Region {
             *tile = (tile.0.min(height), tile.1.max(height));
         }
     }
-    Region { heights, biomes, trees, tile_range }
+    Region {
+        heights,
+        biomes,
+        trees,
+        tile_range,
+    }
 }
 
 #[cfg(test)]
@@ -90,9 +97,18 @@ mod tests {
 
     #[test]
     fn test_region_coord_from_world_handles_negative_coordinates() {
-        assert_eq!(RegionCoord(I64Vec2::new(-1, -1)), RegionCoord::from_world(-1, -1));
-        assert_eq!(RegionCoord(I64Vec2::new(-1, 0)), RegionCoord::from_world(-REGION_SIZE, 0));
-        assert_eq!(RegionCoord(I64Vec2::new(0, 0)), RegionCoord::from_world(0, REGION_SIZE - 1));
+        assert_eq!(
+            RegionCoord(I64Vec2::new(-1, -1)),
+            RegionCoord::from_world(-1, -1)
+        );
+        assert_eq!(
+            RegionCoord(I64Vec2::new(-1, 0)),
+            RegionCoord::from_world(-REGION_SIZE, 0)
+        );
+        assert_eq!(
+            RegionCoord(I64Vec2::new(0, 0)),
+            RegionCoord::from_world(0, REGION_SIZE - 1)
+        );
     }
 
     #[test]

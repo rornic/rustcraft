@@ -112,13 +112,19 @@ impl ChunkData {
                 _ => runs.push(Run { block, length: 1 }),
             }
         }
-        let chunk = Self { runs, ..Self::default() };
-        assert_eq!(chunk.runs.iter().map(|r| r.length as usize).sum::<usize>(), chunk.linear_index(U16Vec3::splat(chunk.size - 1)) + 1);
+        let chunk = Self {
+            runs,
+            ..Self::default()
+        };
+        assert_eq!(
+            chunk.runs.iter().map(|r| r.length as usize).sum::<usize>(),
+            chunk.linear_index(U16Vec3::splat(chunk.size - 1)) + 1
+        );
         chunk
     }
 
     fn is_block_in_chunk(&self, block_coord: U16Vec3) -> bool {
-        return block_coord.x < self.size && block_coord.y < self.size && block_coord.z < self.size;
+        block_coord.x < self.size && block_coord.y < self.size && block_coord.z < self.size
     }
 
     // x outer, z middle, y inner - matches generate_chunk's nested loop order, so terrain
@@ -182,7 +188,6 @@ impl ChunkData {
         self.runs.capacity() * size_of::<Run>() + self.trees.heap_size()
     }
 
-
     // Replaces the old `blocks().iter()` contract (the underlying map never stored Air):
     // yields every non-air block's coordinate and type, in no particular order.
     pub fn iter_non_air(&self) -> impl Iterator<Item = (U16Vec3, BlockType)> + '_ {
@@ -190,7 +195,11 @@ impl ChunkData {
         self.runs.iter().flat_map(move |run| {
             let first = start;
             start += run.length as usize;
-            let cells = if run.block == BlockType::Air { first..first } else { first..start };
+            let cells = if run.block == BlockType::Air {
+                first..first
+            } else {
+                first..start
+            };
             cells.map(move |i| (self.coord_from_index(i), run.block))
         })
     }
@@ -292,8 +301,14 @@ mod tests {
         let mut chunk_data = ChunkData::default();
         chunk_data.set_block_at(U16Vec3::new(4, 12, 5), BlockType::Grass);
 
-        assert_eq!(BlockType::Grass, chunk_data.get_block_at(U16Vec3::new(4, 12, 5)));
-        assert_eq!(BlockType::Air, chunk_data.get_block_at(U16Vec3::new(0, 0, 0)));
+        assert_eq!(
+            BlockType::Grass,
+            chunk_data.get_block_at(U16Vec3::new(4, 12, 5))
+        );
+        assert_eq!(
+            BlockType::Air,
+            chunk_data.get_block_at(U16Vec3::new(0, 0, 0))
+        );
     }
 
     #[test]
@@ -301,7 +316,10 @@ mod tests {
         let mut chunk_data = ChunkData::default();
         chunk_data.set_block_at(U16Vec3::new(7, 8, 9), BlockType::Stone);
 
-        assert_eq!(BlockType::Stone, chunk_data.get_block_at(U16Vec3::new(7, 8, 9)));
+        assert_eq!(
+            BlockType::Stone,
+            chunk_data.get_block_at(U16Vec3::new(7, 8, 9))
+        );
     }
 
     #[test]
@@ -311,9 +329,18 @@ mod tests {
         // column and confirm the cells immediately above/below it are untouched.
         chunk_data.set_block_at(U16Vec3::new(0, 5, 0), BlockType::Stone);
 
-        assert_eq!(BlockType::Air, chunk_data.get_block_at(U16Vec3::new(0, 4, 0)));
-        assert_eq!(BlockType::Stone, chunk_data.get_block_at(U16Vec3::new(0, 5, 0)));
-        assert_eq!(BlockType::Air, chunk_data.get_block_at(U16Vec3::new(0, 6, 0)));
+        assert_eq!(
+            BlockType::Air,
+            chunk_data.get_block_at(U16Vec3::new(0, 4, 0))
+        );
+        assert_eq!(
+            BlockType::Stone,
+            chunk_data.get_block_at(U16Vec3::new(0, 5, 0))
+        );
+        assert_eq!(
+            BlockType::Air,
+            chunk_data.get_block_at(U16Vec3::new(0, 6, 0))
+        );
     }
 
     #[test]
@@ -338,7 +365,10 @@ mod tests {
         }
 
         assert_eq!(1, chunk_data.runs.len());
-        assert_eq!(BlockType::Stone, chunk_data.get_block_at(U16Vec3::new(0, 0, 0)));
+        assert_eq!(
+            BlockType::Stone,
+            chunk_data.get_block_at(U16Vec3::new(0, 0, 0))
+        );
     }
 
     #[test]
@@ -412,8 +442,17 @@ mod tests {
 
     #[test]
     fn test_chunk_centre() {
-        assert_eq!(Vec3::new(8.0, 8.0, 8.0), ChunkCoordinate(I64Vec3::new(0, 0, 0)).centre());
-        assert_eq!(Vec3::new(-8.0, -8.0, 8.0), ChunkCoordinate(I64Vec3::new(-1, -1, 0)).centre());
-        assert_eq!(Vec3::new(-680.0, 360.0, -1592.0), ChunkCoordinate(I64Vec3::new(-43, 22, -100)).centre());
+        assert_eq!(
+            Vec3::new(8.0, 8.0, 8.0),
+            ChunkCoordinate(I64Vec3::new(0, 0, 0)).centre()
+        );
+        assert_eq!(
+            Vec3::new(-8.0, -8.0, 8.0),
+            ChunkCoordinate(I64Vec3::new(-1, -1, 0)).centre()
+        );
+        assert_eq!(
+            Vec3::new(-680.0, 360.0, -1592.0),
+            ChunkCoordinate(I64Vec3::new(-43, 22, -100)).centre()
+        );
     }
 }

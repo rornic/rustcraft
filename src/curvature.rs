@@ -1,9 +1,7 @@
 use bevy::{
     app::{App, Plugin, PostUpdate},
     asset::{Assets, Handle, RenderAssetUsages},
-    camera::{
-        primitives::Frustum, visibility::VisibilitySystems, Camera3d, Projection,
-    },
+    camera::{primitives::Frustum, visibility::VisibilitySystems, Camera3d, Projection},
     ecs::{
         query::With,
         resource::Resource,
@@ -45,7 +43,9 @@ impl Curve {
     pub const fn seen_from_the_top_to(chunks: f32) -> Self {
         let blocks = chunks * CHUNK_SIZE as f32;
         // solves `horizon_distance` at the top of the world for the radius
-        Self { radius: blocks * blocks / (8.0 * TALLEST) }
+        Self {
+            radius: blocks * blocks / (8.0 * TALLEST),
+        }
     }
 
     /// How far out land can be seen from `height` blocks up: out to the sea's horizon, and
@@ -131,7 +131,9 @@ fn update_curvature(
 /// still lies flat above it. Each side of the camera's frustum that faces down is loosened by
 /// as far as anything drawn can drop, letting through everything the curve could bring into
 /// view. Rebuilt from the camera every frame, as Bevy only rebuilds it when the camera moves.
-fn loosen_frustum(mut cameras: Query<(&GlobalTransform, &Projection, &mut Frustum), With<Camera3d>>) {
+fn loosen_frustum(
+    mut cameras: Query<(&GlobalTransform, &Projection, &mut Frustum), With<Camera3d>>,
+) {
     for (transform, projection, mut frustum) in &mut cameras {
         let Projection::Perspective(perspective) = projection else {
             continue;
@@ -170,7 +172,6 @@ impl Plugin for CurvaturePlugin {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,13 +192,21 @@ mod tests {
         let height = SEA + FADE_END;
         let sphere = 10_000.0f32.powi(2) / (2.0 * CURVE.radius);
         assert!((CURVE.drop_at(10_000.0, height) - sphere).abs() < 1e-3);
-        assert_eq!(CURVE.drop_at(10_000.0, height), CURVE.drop_at(10_000.0, height + 1000.0));
+        assert_eq!(
+            CURVE.drop_at(10_000.0, height),
+            CURVE.drop_at(10_000.0, height + 1000.0)
+        );
     }
 
     #[test]
     fn test_bends_more_the_higher_up() {
         let drops: Vec<f32> = (0..=10)
-            .map(|i| CURVE.drop_at(10_000.0, SEA + FADE_START + (FADE_END - FADE_START) * i as f32 / 10.0))
+            .map(|i| {
+                CURVE.drop_at(
+                    10_000.0,
+                    SEA + FADE_START + (FADE_END - FADE_START) * i as f32 / 10.0,
+                )
+            })
             .collect();
         assert!(drops.windows(2).all(|w| w[0] < w[1]), "{drops:?}");
     }
@@ -219,7 +228,9 @@ mod tests {
 
     #[test]
     fn test_horizon_grows_with_height() {
-        let distances: Vec<f32> = (0..10).map(|i| CURVE.horizon_distance(SEA + i as f32 * 100.0)).collect();
+        let distances: Vec<f32> = (0..10)
+            .map(|i| CURVE.horizon_distance(SEA + i as f32 * 100.0))
+            .collect();
         assert!(distances.windows(2).all(|w| w[0] < w[1]), "{distances:?}");
         assert_eq!(CURVE.horizon_distance(SEA), CURVE.horizon_distance(0.0));
     }
@@ -233,16 +244,31 @@ mod tests {
 
     #[test]
     fn test_loosened_frustum_keeps_what_drops_into_view() {
-        use bevy::{camera::{primitives::Sphere, PerspectiveProjection}, math::{Quat, Vec3A}};
+        use bevy::{
+            camera::{primitives::Sphere, PerspectiveProjection},
+            math::{Quat, Vec3A},
+        };
         // looking down from high up
-        let eye = GlobalTransform::from_translation(Vec3::new(0.0, 1000.0, 0.0))
-            .mul_transform(bevy::transform::components::Transform::from_rotation(Quat::from_rotation_x(-0.48)));
-        let projection = Projection::Perspective(PerspectiveProjection { far: 30_000.0, ..Default::default() });
+        let eye = GlobalTransform::from_translation(Vec3::new(0.0, 1000.0, 0.0)).mul_transform(
+            bevy::transform::components::Transform::from_rotation(Quat::from_rotation_x(-0.48)),
+        );
+        let projection = Projection::Perspective(PerspectiveProjection {
+            far: 30_000.0,
+            ..Default::default()
+        });
         let frustum = projection.compute_frustum(&eye);
         // the view's top edge is about 5° below level, the point 3° below flat and 7° dropped
         let drop = 1500.0;
         let wide = loosened(frustum, drop);
-        let seen = |frustum: &Frustum, p: Vec3| frustum.intersects_sphere(&Sphere { center: Vec3A::from(p), radius: 0.0 }, false);
+        let seen = |frustum: &Frustum, p: Vec3| {
+            frustum.intersects_sphere(
+                &Sphere {
+                    center: Vec3A::from(p),
+                    radius: 0.0,
+                },
+                false,
+            )
+        };
         // far ahead, above the top of the view where it lies, but in it once dropped
         let flat = Vec3::new(0.0, 0.0, -20_000.0);
         let dropped = flat - Vec3::Y * drop;

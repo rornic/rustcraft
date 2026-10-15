@@ -1,6 +1,8 @@
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 #[repr(u8)]
+#[derive(Default)]
 pub enum BlockType {
+    #[default]
     Air,
     Stone,
     Grass,
@@ -13,12 +15,6 @@ pub enum BlockType {
     Gravel,
     Ice,
     Sandstone,
-}
-
-impl Default for BlockType {
-    fn default() -> Self {
-        Self::Air
-    }
 }
 
 pub const BLOCK_COUNT: usize = 12;

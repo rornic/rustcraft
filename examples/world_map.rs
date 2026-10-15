@@ -12,10 +12,10 @@ use std::env;
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::DVec3;
 
-use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
 use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
+use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
 use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
+use rustcraft::chunks::generate::WATER_LEVEL;
 
 struct Args {
     seed: u32,
@@ -42,7 +42,9 @@ fn parse_args() -> Args {
             args.biomes = true;
             continue;
         }
-        let value = argv.next().unwrap_or_else(|| panic!("missing value for {flag}"));
+        let value = argv
+            .next()
+            .unwrap_or_else(|| panic!("missing value for {flag}"));
         match flag.as_str() {
             "--seed" => args.seed = value.parse().expect("--seed must be a u32"),
             "--center" => {
@@ -82,7 +84,9 @@ fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<(TerrainSample, Climat
 }
 
 fn lerp_rgb(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
-    DVec3::from(a).lerp(DVec3::from(b), t.clamp(0.0, 1.0)).into()
+    DVec3::from(a)
+        .lerp(DVec3::from(b), t.clamp(0.0, 1.0))
+        .into()
 }
 
 // Height above (or below) sea level to a map colour.
@@ -147,7 +151,8 @@ fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) ->
             }
 
             if args.biomes && above_sea <= 0.0 && above_sea > -60.0 {
-                let ice = (1.0 - at(x, z).1.temperature as f64 / FREEZE_TEMPERATURE as f64).clamp(0.0, 1.0);
+                let ice = (1.0 - at(x, z).1.temperature as f64 / FREEZE_TEMPERATURE as f64)
+                    .clamp(0.0, 1.0);
                 if ice > 0.0 {
                     colour = lerp_rgb(colour, SEA_ICE, (ice * 4.0).min(1.0));
                 }
@@ -155,8 +160,10 @@ fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) ->
 
             // Light from the north west, exaggerated so gentle slopes still read at map scale.
             if above_sea > 0.0 {
-                let dx = (height_at(x + 1, z) - height_at(x.saturating_sub(1), z)) / (2.0 * args.scale);
-                let dz = (height_at(x, z + 1) - height_at(x, z.saturating_sub(1))) / (2.0 * args.scale);
+                let dx =
+                    (height_at(x + 1, z) - height_at(x.saturating_sub(1), z)) / (2.0 * args.scale);
+                let dz =
+                    (height_at(x, z + 1) - height_at(x, z.saturating_sub(1))) / (2.0 * args.scale);
                 let shade = (1.0 - (dx + dz) * 3.0).clamp(0.4, 1.4);
                 colour = colour.map(|c| c * shade);
             }
@@ -172,14 +179,20 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 
 fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
     let samples: Vec<TerrainSample> = samples.iter().map(|s| s.0).collect();
-    let land = samples.iter().filter(|s| s.height >= WATER_LEVEL as f64).count();
+    let land = samples
+        .iter()
+        .filter(|s| s.height >= WATER_LEVEL as f64)
+        .count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
     for name in ["desert", "forest", "foothills", "glacier"] {
         let count = samples
             .iter()
             .filter(|s| s.height >= WATER_LEVEL as f64 && biomes.name(s.biome) == Some(name))
             .count();
-        println!("{name}: {:.1}% of land", 100.0 * count as f64 / land.max(1) as f64);
+        println!(
+            "{name}: {:.1}% of land",
+            100.0 * count as f64 / land.max(1) as f64
+        );
     }
 
     let mut heights: Vec<f64> = samples.iter().map(|s| s.height).collect();
@@ -202,12 +215,19 @@ fn main() {
 
     let start = std::time::Instant::now();
     let samples = sample_map(&noise, &args);
-    println!("sampled {}x{} in {:.1?}", args.pixels, args.pixels, start.elapsed());
+    println!(
+        "sampled {}x{} in {:.1?}",
+        args.pixels,
+        args.pixels,
+        start.elapsed()
+    );
 
     print_stats(&samples, noise.biomes());
     let spawn = noise.find_spawn();
     println!("spawn: x={} z={} height={:.1}", spawn.0, spawn.1, spawn.2);
 
-    render(&samples, noise.biomes(), &args).save(&args.out).expect("failed to save image");
+    render(&samples, noise.biomes(), &args)
+        .save(&args.out)
+        .expect("failed to save image");
     println!("wrote {}", args.out);
 }

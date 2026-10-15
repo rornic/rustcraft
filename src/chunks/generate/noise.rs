@@ -140,7 +140,9 @@ impl NoiseGenerator {
                 .set_persistence(0.5)
                 .set_lacunarity(2.0)
         };
-        let fractal = |i: u32, wavelength: f64, octaves: usize| Fractal::new(field_seed(i), wavelength, octaves, 2.0, 0.5);
+        let fractal = |i: u32, wavelength: f64, octaves: usize| {
+            Fractal::new(field_seed(i), wavelength, octaves, 2.0, 0.5)
+        };
         Self {
             seed,
             warp_x: fbm(0, WARP_WAVELENGTH, 3),
@@ -207,10 +209,16 @@ impl NoiseGenerator {
         let (wx, wz) = (x + warp_x, z + warp_z);
 
         let edge = edge_falloff(wx, z + warp_z * POLE_COAST_WARP);
-        let continentalness = (self.continents.get(wx, wz, cell) * CONTINENT_CONTRAST - OCEAN_BIAS)
-            .clamp(-1.0, 1.0);
-        let continentalness = (continentalness + POLAR_UPLIFT * smoothstep(POLAR_UPLIFT_LATITUDE.0, POLAR_UPLIFT_LATITUDE.1, wz.abs() / WORLD_HALF_SIZE as f64))
-            .lerp(-1.0, edge);
+        let continentalness =
+            (self.continents.get(wx, wz, cell) * CONTINENT_CONTRAST - OCEAN_BIAS).clamp(-1.0, 1.0);
+        let continentalness = (continentalness
+            + POLAR_UPLIFT
+                * smoothstep(
+                    POLAR_UPLIFT_LATITUDE.0,
+                    POLAR_UPLIFT_LATITUDE.1,
+                    wz.abs() / WORLD_HALF_SIZE as f64,
+                ))
+        .lerp(-1.0, edge);
         // Ruggedness and hilliness only shape land and the shallows, so open ocean skips them.
         let ruggedness = if continentalness > OPEN_OCEAN {
             self.ruggedness.get(wx, wz, cell)
@@ -228,7 +236,9 @@ impl NoiseGenerator {
             let ridge_z = z + warp_z * RIDGE_WARP;
             let uplift = smoothstep(0.0, 1.0, mountain_mask) * UPLIFT_HEIGHT;
             // Peaks grow towards the heart of a range, leaving foothills at its edges.
-            let ridges = self.ridged(ridge_x, ridge_z, cell).powf(1.3) * mountain_mask.powf(1.5) * RIDGE_HEIGHT;
+            let ridges = self.ridged(ridge_x, ridge_z, cell).powf(1.3)
+                * mountain_mask.powf(1.5)
+                * RIDGE_HEIGHT;
             uplift + ridges
         } else {
             0.0
@@ -237,9 +247,13 @@ impl NoiseGenerator {
         // Kept above zero, so hills rise out of flat valley floors instead of dipping into lakes.
         let hills = if continentalness > 0.0 {
             let hilliness = smoothstep(-0.25, 0.3, self.hilliness.get(wx, wz, cell));
-            let hill_amplitude = 0.15_f64.lerp(1.0, hilliness) * HILL_HEIGHT * smoothstep(0.0, 0.04, continentalness);
+            let hill_amplitude = 0.15_f64.lerp(1.0, hilliness)
+                * HILL_HEIGHT
+                * smoothstep(0.0, 0.04, continentalness);
             // Ranges carry their own relief, so hills fade out into them.
-            (self.hills.get(x, z, cell) * 0.8 + 0.3).max(0.0) * hill_amplitude * (1.0 - mountain_mask)
+            (self.hills.get(x, z, cell) * 0.8 + 0.3).max(0.0)
+                * hill_amplitude
+                * (1.0 - mountain_mask)
         } else {
             0.0
         };
@@ -257,7 +271,8 @@ impl NoiseGenerator {
         let shore_fade = smoothstep(0.0, 0.06, continentalness.abs());
         let texture = self.texture.get(x, z, cell) * land_texture * sea_floor_blend * shore_fade;
 
-        let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
+        let height =
+            ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + detail + texture).max(0.0);
         (continentalness, ruggedness, height)
     }
 
@@ -275,7 +290,8 @@ impl NoiseGenerator {
         let noise = (self.temperature.get([x, z]) * CLIMATE_CONTRAST * 0.5 + 0.5).clamp(0.0, 1.0);
         let latitude = (z.abs() / (WORLD_HALF_SIZE as f64 * POLE_LATITUDE)).min(1.0);
         let warmth = (latitude * std::f64::consts::FRAC_PI_2).cos();
-        let chill = POLAR_CHILL * smoothstep(POLAR_CHILL_LATITUDE.0, POLAR_CHILL_LATITUDE.1, latitude);
+        let chill =
+            POLAR_CHILL * smoothstep(POLAR_CHILL_LATITUDE.0, POLAR_CHILL_LATITUDE.1, latitude);
         ((noise * (1.0 - LATITUDE_WEIGHT) + warmth * LATITUDE_WEIGHT) * (1.0 - chill)) as f32
     }
 
@@ -340,7 +356,11 @@ fn ease_peaks(height: f64) -> f64 {
 fn edge_falloff(x: f64, z: f64) -> f64 {
     let half = WORLD_HALF_SIZE as f64;
     let sides = smoothstep(EDGE_FALLOFF_START, EDGE_FALLOFF_END, x.abs() / half);
-    sides.max(smoothstep(POLE_FALLOFF_START, POLE_FALLOFF_END, z.abs() / half))
+    sides.max(smoothstep(
+        POLE_FALLOFF_START,
+        POLE_FALLOFF_END,
+        z.abs() / half,
+    ))
 }
 
 fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -386,9 +406,16 @@ mod tests {
     #[test]
     fn test_world_edge_is_deep_ocean() {
         let noise = NoiseGenerator::new(9);
-        for (x, z) in [(WORLD_HALF_SIZE, 0), (0, -WORLD_HALF_SIZE - 2000), (40_000, 40_000)] {
+        for (x, z) in [
+            (WORLD_HALF_SIZE, 0),
+            (0, -WORLD_HALF_SIZE - 2000),
+            (40_000, 40_000),
+        ] {
             let height = noise.get(I64Vec2::new(x, z));
-            assert!(height < WATER_LEVEL as f64 - 30.0, "({x}, {z}) should be deep ocean, was {height}");
+            assert!(
+                height < WATER_LEVEL as f64 - 30.0,
+                "({x}, {z}) should be deep ocean, was {height}"
+            );
         }
     }
 
@@ -398,12 +425,26 @@ mod tests {
         for seed in [1, 7, 9, 42, 123] {
             let noise = NoiseGenerator::new(seed);
             for sign in [-1.0, 1.0] {
-                let height = |z: f64| (-60..60).map(|i| noise.get(I64Vec2::new(i * 250, (sign * z) as i64))).collect::<Vec<_>>();
+                let height = |z: f64| {
+                    (-60..60)
+                        .map(|i| noise.get(I64Vec2::new(i * 250, (sign * z) as i64)))
+                        .collect::<Vec<_>>()
+                };
                 let cap = height(half * 0.8);
-                let land = cap.iter().filter(|&&h| h > WATER_LEVEL as f64 + 2.0).count();
-                assert!(land > cap.len() / 2, "seed {seed}: only {land} of {} columns at the pole are land", cap.len());
+                let land = cap
+                    .iter()
+                    .filter(|&&h| h > WATER_LEVEL as f64 + 2.0)
+                    .count();
+                assert!(
+                    land > cap.len() / 2,
+                    "seed {seed}: only {land} of {} columns at the pole are land",
+                    cap.len()
+                );
                 let edge = height(half);
-                assert!(edge.iter().all(|&h| h < WATER_LEVEL as f64 - 30.0), "seed {seed}: land at the world's edge");
+                assert!(
+                    edge.iter().all(|&h| h < WATER_LEVEL as f64 - 30.0),
+                    "seed {seed}: land at the world's edge"
+                );
             }
         }
     }
@@ -416,18 +457,34 @@ mod tests {
             .map(|(x, z)| noise.climate(x, z))
             .collect();
         for value in [|c: &Climate| c.temperature, |c: &Climate| c.humidity] {
-            let (low, high) = samples.iter().map(value).fold((1.0f32, 0.0f32), |(l, h), v| (l.min(v), h.max(v)));
-            assert!(low < 0.15 && high > 0.85, "climate only spans {low}..{high}");
+            let (low, high) = samples
+                .iter()
+                .map(value)
+                .fold((1.0f32, 0.0f32), |(l, h), v| (l.min(v), h.max(v)));
+            assert!(
+                low < 0.15 && high > 0.85,
+                "climate only spans {low}..{high}"
+            );
         }
     }
 
     #[test]
     fn test_poles_are_colder_than_the_equator() {
         let noise = NoiseGenerator::new(9);
-        let mean = |z: f64| (-40..40).map(|i| noise.temperature(i as f64 * 400.0, z)).sum::<f32>() / 80.0;
+        let mean = |z: f64| {
+            (-40..40)
+                .map(|i| noise.temperature(i as f64 * 400.0, z))
+                .sum::<f32>()
+                / 80.0
+        };
         let pole = WORLD_HALF_SIZE as f64 * 0.95;
         assert!(mean(0.0) > 0.7, "equator was {}", mean(0.0));
-        assert!(mean(pole) < 0.1 && mean(-pole) < 0.1, "poles were {} and {}", mean(pole), mean(-pole));
+        assert!(
+            mean(pole) < 0.1 && mean(-pole) < 0.1,
+            "poles were {} and {}",
+            mean(pole),
+            mean(-pole)
+        );
     }
 
     #[test]
@@ -441,8 +498,12 @@ mod tests {
     #[test]
     fn test_ridge_signal_mean_matches_perlin() {
         let noise = NoiseGenerator::new(9);
-        let samples = (0..300).flat_map(|i| (0..300).map(move |j| (i as f64 * 0.0731, j as f64 * 0.0689)));
-        let mean = samples.map(|(x, z)| (1.0 - noise.ridges[0].get([x, z]).abs()).powi(2)).sum::<f64>() / 90_000.0;
+        let samples =
+            (0..300).flat_map(|i| (0..300).map(move |j| (i as f64 * 0.0731, j as f64 * 0.0689)));
+        let mean = samples
+            .map(|(x, z)| (1.0 - noise.ridges[0].get([x, z]).abs()).powi(2))
+            .sum::<f64>()
+            / 90_000.0;
         assert!((mean - RIDGE_SIGNAL_MEAN).abs() < 0.02, "measured {mean}");
     }
 
@@ -451,7 +512,10 @@ mod tests {
         let noise = NoiseGenerator::new(9);
         for i in 0..200 {
             let (x, z) = (i as f64 * 97.3 - 9000.0, i as f64 * -61.7 + 4000.0);
-            assert_eq!(noise.sample(x, z).height.to_bits(), noise.sample_for_cell(x, z, 1.0).height.to_bits());
+            assert_eq!(
+                noise.sample(x, z).height.to_bits(),
+                noise.sample_for_cell(x, z, 1.0).height.to_bits()
+            );
         }
     }
 
@@ -464,13 +528,25 @@ mod tests {
             let (mut filtered_error, mut point_error) = (0.0, 0.0);
             for i in 0..60 {
                 let (x, z) = (i as f64 * 517.0 - 15000.0, i as f64 * 311.0 - 9000.0);
-                let mean = (0..16).flat_map(|a| (0..16).map(move |b| (a, b)))
-                    .map(|(a, b)| noise.sample(x + (a as f64 - 7.5) * cell / 16.0, z + (b as f64 - 7.5) * cell / 16.0).height)
-                    .sum::<f64>() / 256.0;
+                let mean = (0..16)
+                    .flat_map(|a| (0..16).map(move |b| (a, b)))
+                    .map(|(a, b)| {
+                        noise
+                            .sample(
+                                x + (a as f64 - 7.5) * cell / 16.0,
+                                z + (b as f64 - 7.5) * cell / 16.0,
+                            )
+                            .height
+                    })
+                    .sum::<f64>()
+                    / 256.0;
                 filtered_error += (noise.sample_for_cell(x, z, cell).height - mean).abs();
                 point_error += (noise.sample(x, z).height - mean).abs();
             }
-            assert!(filtered_error < point_error, "cells {cell} wide: filtered {filtered_error} vs point sampled {point_error}");
+            assert!(
+                filtered_error < point_error,
+                "cells {cell} wide: filtered {filtered_error} vs point sampled {point_error}"
+            );
         }
     }
 

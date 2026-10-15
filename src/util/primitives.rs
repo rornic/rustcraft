@@ -160,7 +160,13 @@ mod tests {
     fn test_side_faces_put_the_top_of_their_tile_at_the_top() {
         for side in cube().chunks(4).take(4) {
             for v in side {
-                assert_eq!(v.position[1] < 0.0, v.uv[1] == 1.0, "{:?} {:?}", v.normal, v.uv);
+                assert_eq!(
+                    v.position[1] < 0.0,
+                    v.uv[1] == 1.0,
+                    "{:?} {:?}",
+                    v.normal,
+                    v.uv
+                );
             }
         }
     }

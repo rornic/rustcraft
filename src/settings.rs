@@ -84,7 +84,8 @@ mod tests {
 
     #[test]
     fn test_debug_settings_parse() {
-        let settings: Settings = toml::from_str("[renderer]\n[debug]\nsolid_leaves = true").unwrap();
+        let settings: Settings =
+            toml::from_str("[renderer]\n[debug]\nsolid_leaves = true").unwrap();
         assert!(settings.debug.solid_leaves);
         assert!(!settings.debug.still_leaves);
     }

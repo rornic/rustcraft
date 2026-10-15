@@ -2,15 +2,20 @@ use bevy::{
     asset::Assets,
     camera::{Camera3d, Exposure},
     color::Color,
-    ecs::{bundle::Bundle, component::Component, query::{With, Without}, system::{Commands, Query, Res, ResMut}},
+    ecs::{
+        bundle::Bundle,
+        component::Component,
+        query::{With, Without},
+        system::{Commands, Query, Res, ResMut},
+    },
     input::{keyboard::KeyCode, ButtonInput},
     light::{
         atmosphere::ScatteringMedium, Atmosphere, AtmosphereEnvironmentMapLight,
         CascadeShadowConfigBuilder, DirectionalLight, SunDisk,
     },
     math::{UVec2, UVec3, Vec2, Vec3},
-    time::Time,
     pbr::{AtmosphereSettings, DistanceFog, FogFalloff},
+    time::Time,
     transform::components::{GlobalTransform, Transform},
 };
 
@@ -53,7 +58,10 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
             ..Default::default()
         },
         Sun,
-        SunDisk { angular_size: SUN_DISC_SIZE, intensity: SUN_DISC_INTENSITY },
+        SunDisk {
+            angular_size: SUN_DISC_SIZE,
+            intensity: SUN_DISC_INTENSITY,
+        },
         Transform::default().looking_to(-SUN_DIRECTION, Vec3::Y),
         CascadeShadowConfigBuilder {
             num_cascades: cascades.max(1),
@@ -72,12 +80,20 @@ pub struct Sun;
 /// Toward the sun at `elevation` radians above the horizon, on `SUN_DIRECTION`'s side of the sky.
 pub fn sun_direction(elevation: f32) -> Vec3 {
     let side = Vec2::new(SUN_DIRECTION.x, SUN_DIRECTION.z).normalize();
-    Vec3::new(side.x * elevation.cos(), elevation.sin(), side.y * elevation.cos())
+    Vec3::new(
+        side.x * elevation.cos(),
+        elevation.sin(),
+        side.y * elevation.cos(),
+    )
 }
 
 /// Moves the sun down and up the sky with `[` and `]`, to see the world at any time of day:
 /// the sky, fog and sun disc all follow it.
-pub fn move_sun(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut sun: Query<&mut Transform, With<Sun>>) {
+pub fn move_sun(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut sun: Query<&mut Transform, With<Sun>>,
+) {
     let way = keys.pressed(SUN_UP_KEY) as i32 - keys.pressed(SUN_DOWN_KEY) as i32;
     let Ok(mut transform) = sun.single_mut() else {
         return;
@@ -87,12 +103,15 @@ pub fn move_sun(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut sun: Query
     }
     // the light shines along its forward, away from the sun
     let elevation = (-transform.forward().y).asin();
-    let moved = (elevation + way as f32 * SUN_SPEED * time.delta_secs()).clamp(SUN_LOWEST, SUN_HIGHEST);
+    let moved =
+        (elevation + way as f32 * SUN_SPEED * time.delta_secs()).clamp(SUN_LOWEST, SUN_HIGHEST);
     *transform = Transform::default().looking_to(-sun_direction(moved), Vec3::Y);
 }
 
 pub fn camera_exposure() -> Exposure {
-    Exposure { ev100: CAMERA_EV100 }
+    Exposure {
+        ev100: CAMERA_EV100,
+    }
 }
 
 /// What a camera needs to see the atmosphere, and to light with it.
@@ -100,7 +119,10 @@ pub fn atmosphere_camera() -> impl Bundle {
     (
         camera_exposure(),
         atmosphere_settings(),
-        AtmosphereEnvironmentMapLight { size: UVec2::splat(ENVIRONMENT_MAP_SIZE), ..Default::default() },
+        AtmosphereEnvironmentMapLight {
+            size: UVec2::splat(ENVIRONMENT_MAP_SIZE),
+            ..Default::default()
+        },
     )
 }
 
@@ -145,7 +167,11 @@ pub fn match_sky_horizon(
     let matched = atmosphere.inner_radius * ((1.0 + dip * dip).sqrt() - 1.0);
     // the planet's ground is at y = 0, as Bevy puts it, until the land's edge dips further
     let altitude = eye.y.max(matched);
-    *planet = GlobalTransform::from_translation(Vec3::new(eye.x, eye.y - altitude - atmosphere.inner_radius, eye.z));
+    *planet = GlobalTransform::from_translation(Vec3::new(
+        eye.x,
+        eye.y - altitude - atmosphere.inner_radius,
+        eye.z,
+    ));
 }
 
 #[cfg(test)]

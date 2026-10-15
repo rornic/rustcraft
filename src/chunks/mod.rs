@@ -8,8 +8,8 @@ pub mod material;
 
 use bevy::{
     app::{App, Plugin, Update},
-    asset::{Assets, Handle},
     app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
+    asset::Assets,
     ecs::{schedule::IntoScheduleConfigs, system::Commands},
 };
 
@@ -22,7 +22,7 @@ use group::{build_groups, load_groups};
 use lod::{
     load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_lod_selection, LodLoader,
 };
-use material::{ChunkMaterial, WaterMaterial};
+use material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 
 /// Loads, meshes and unloads full-detail chunks and LOD terrain around the camera.
 pub struct TerrainPlugin;
@@ -32,7 +32,14 @@ impl Plugin for TerrainPlugin {
         app.add_systems(
             Update,
             (
-                (gather_chunks, generate_chunks, mark_chunks, load_chunks, build_groups, load_groups)
+                (
+                    gather_chunks,
+                    generate_chunks,
+                    mark_chunks,
+                    load_chunks,
+                    build_groups,
+                    load_groups,
+                )
                     .before(unload_chunks),
                 (
                     update_lod_selection,
@@ -80,33 +87,29 @@ pub fn insert_terrain_resources(
     renderer: &RendererSettings,
     debug: &DebugSettings,
     world_height: u64,
-    chunk_material: Handle<ChunkMaterial>,
-    water_material: Handle<WaterMaterial>,
-    solid_water_material: Handle<WaterMaterial>,
+    materials: TerrainMaterials,
     chunk_materials: &mut Assets<ChunkMaterial>,
     water_materials: &mut Assets<WaterMaterial>,
 ) {
     let layout = renderer.lod_layout();
     commands.insert_resource(FadeMaterials::new(
         renderer.lod_fade_seconds,
-        chunk_material.clone(),
-        water_material.clone(),
-        solid_water_material.clone(),
+        &materials,
         chunk_materials,
         water_materials,
     ));
     commands.insert_resource(LodLoader::new(
         layout,
         world_height,
-        chunk_material.clone(),
-        water_material.clone(),
-        solid_water_material,
+        materials.chunk.clone(),
+        materials.water.clone(),
+        materials.solid_water,
     ));
     commands.insert_resource(ChunkLoader::new(
         layout,
         world_height,
         debug.solid_leaves,
-        chunk_material,
-        water_material,
+        materials.chunk,
+        materials.water,
     ));
 }

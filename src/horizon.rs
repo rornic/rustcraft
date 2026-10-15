@@ -33,7 +33,10 @@ pub fn render_distance_at(set_distance: f32, height: f32) -> f32 {
     let above_sea = (height - WATER_LEVEL as f32).max(0.0);
     let climbed = set_distance * (1.0 + (above_sea / ABOVE_SEA_AT_TOP).sqrt());
     let horizon = WORLD_CURVE.horizon_distance(height) / CHUNK_SIZE as f32;
-    climbed.min(horizon).min(MAX_RENDER_DISTANCE).max(set_distance)
+    climbed
+        .min(horizon)
+        .min(MAX_RENDER_DISTANCE)
+        .max(set_distance)
 }
 
 /// Draws terrain out to the horizon, further the higher the camera climbs, and moves the fog
@@ -62,7 +65,11 @@ pub fn update_horizon(
         perspective.far = end + WORLD_HEIGHT as f32;
     }
     // underwater, `update_underwater_effects` overrides the fog after this
-    if let FogFalloff::Linear { start, end: fog_end } = &mut fog.falloff {
+    if let FogFalloff::Linear {
+        start,
+        end: fog_end,
+    } = &mut fog.falloff
+    {
         let follow = 1.0 - (-time.delta_secs() / FOG_FOLLOW_SECONDS).exp();
         *start = start.lerp(half, follow);
         *fog_end = fog_end.lerp(end, follow);
@@ -100,7 +107,10 @@ mod tests {
         let horizon = |height: f32| WORLD_CURVE.horizon_distance(height) / CHUNK_SIZE as f32;
         assert_eq!(1536.0, render_distance_at(1536.0, SEA + 100.0));
         assert!(horizon(SEA + 200.0) > 1536.0);
-        assert_eq!(horizon(SEA + 200.0), render_distance_at(1536.0, SEA + 200.0));
+        assert_eq!(
+            horizon(SEA + 200.0),
+            render_distance_at(1536.0, SEA + 200.0)
+        );
         assert_eq!(MAX_RENDER_DISTANCE, render_distance_at(1024.0, SEA + 1.0e6));
         assert_eq!(4096.0, render_distance_at(4096.0, SEA + 1.0e6));
     }
