@@ -9,13 +9,14 @@ import bevy_render::globals::Globals;
 import super::block_texture::{block_alpha, material_fade};
 import super::dither::dither_threshold;
 import super::foliage::{is_leaf, swayed};
+import super::curvature::{curved, curved_last};
 
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
 @group(0) @binding(1) var<uniform> globals: Globals;
 
 // Bevy's prepass vertex shader, for meshes that are never skinned or morphed, with leaves
-// swaying just as in the main pass (the sway isn't in the motion vectors). Block meshes always carry
-// vertex colours, see `MeshBuffers`.
+// swaying and the land curving just as in the main pass (the sway isn't in the motion
+// vectors, the curve is). Block meshes always carry vertex colours, see `MeshBuffers`.
 @vertex
 fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
     let vertex = prepass_io::decompress_vertex(vertex_in, vertex_in.instance_index);
@@ -26,7 +27,7 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
 @if(VERTEX_UVS_B) {
     coarse = vertex.uv_b.y > 0.5;
 }
-    out.world_position = vec4<f32>(swayed(out.world_position.xyz, vertex.color.a, coarse, globals.time), 1.0);
+    out.world_position = vec4<f32>(curved(swayed(out.world_position.xyz, vertex.color.a, coarse, globals.time)), 1.0);
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
     // a mesh fading out sits a little farther than it is, as in the main pass, see `fade.rs`
@@ -49,7 +50,7 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
 @if(MOTION_VECTOR_PREPASS) {
     let previous_world_from_local = mesh_functions::get_previous_world_from_local(vertex.instance_index);
     let previous = mesh_functions::mesh_position_local_to_world(previous_world_from_local, vec4<f32>(vertex.position, 1.0));
-    out.previous_world_position = vec4<f32>(swayed(previous.xyz, vertex.color.a, coarse, globals.time), 1.0);
+    out.previous_world_position = vec4<f32>(curved_last(swayed(previous.xyz, vertex.color.a, coarse, globals.time)), 1.0);
 }
 @if(VERTEX_OUTPUT_INSTANCE_INDEX) {
     out.instance_index = vertex.instance_index;

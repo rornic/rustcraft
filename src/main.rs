@@ -12,10 +12,12 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
+use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle};
-use rustcraft::sky::{atmosphere_camera, spawn_atmosphere, sun, FOG_MAX_OPACITY};
+use rustcraft::sun_glare::SunGlarePlugin;
+use rustcraft::sky::{atmosphere_camera, match_sky_horizon, move_sun, spawn_atmosphere, sun, FOG_MAX_OPACITY};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
 fn setup_scene(
@@ -26,6 +28,7 @@ fn setup_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut murk_materials: ResMut<Assets<MurkMaterial>>,
     clouds: Res<CloudLayer>,
+    curvature: Res<Curvature>,
 ) {
     let settings = Settings::read("assets/settings.toml").expect("Failed to read settings.toml");
     let renderer = settings.renderer;
@@ -110,6 +113,7 @@ fn setup_scene(
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
+        curvature: curvature.buffer.clone(),
         debug: settings.debug,
     });
     let water_material_handle = water_materials.add(WaterMaterial {
@@ -119,6 +123,7 @@ fn setup_scene(
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
         see_through: see_through_reach(layout),
+        curvature: curvature.buffer.clone(),
         solid: false,
     });
     let solid_water = WaterMaterial {
@@ -168,14 +173,19 @@ fn main() {
             MaterialPlugin::<MurkMaterial>::default(),
             TerrainPlugin,
             CloudPlugin,
+            CurvaturePlugin,
+            SunGlarePlugin,
             DebugOverlayPlugin,
         ))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
+        // once the camera's moved, see `TransformSystems::Propagate`
+        .add_systems(PostUpdate, match_sky_horizon.after(bevy::transform::TransformSystems::Propagate))
         .add_systems(
             Update,
             (player_move, player_look, update_horizon, update_underwater_effects).chain(),
         )
+        .add_systems(Update, move_sun)
         .run();
 }

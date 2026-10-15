@@ -11,16 +11,14 @@ use bevy::{
 };
 
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::generate::noise::WORLD_SIZE;
 use crate::chunks::generate::{WATER_LEVEL, WORLD_HEIGHT};
 use crate::chunks::lod::LodLoader;
+use crate::curvature::WORLD_CURVE;
 
-/// How far below the horizon the edge of the world lies, as a slope: the higher up the
-/// camera, the further out terrain is drawn to keep it there, so climbing shows more of the
-/// world. The set render distance is how far it's drawn at sea level.
-const HORIZON_DIP: f32 = 0.05;
-/// Far enough to see the whole world from its middle.
-const MAX_RENDER_DISTANCE: f32 = (WORLD_SIZE / CHUNK_SIZE as i64) as f32;
+/// The farthest terrain is drawn, in chunks, however high up.
+pub const MAX_RENDER_DISTANCE: f32 = 2048.0;
+// How far above the sea the top of the world is.
+const ABOVE_SEA_AT_TOP: f32 = (WORLD_HEIGHT as i64 - WATER_LEVEL) as f32;
 // Smaller changes than this, as a share of the render distance, are let be, so bobbing up
 // and down doesn't keep selecting LOD nodes afresh.
 const RESELECT_CHANGE: f32 = 0.1;
@@ -28,15 +26,19 @@ const RESELECT_CHANGE: f32 = 0.1;
 // further terrain loads in rather than jumping ahead of it.
 const FOG_FOLLOW_SECONDS: f32 = 2.0;
 
-/// How far terrain is drawn, in chunks, from `height` blocks up with `set_distance` set.
+/// How far terrain is drawn, in chunks, from `height` blocks up with `set_distance` set: the
+/// set distance from the ground, growing to twice it at the top of the world, but never past
+/// the horizon, where the curve hides the rest, see `WORLD_CURVE`.
 pub fn render_distance_at(set_distance: f32, height: f32) -> f32 {
     let above_sea = (height - WATER_LEVEL as f32).max(0.0);
-    let further = above_sea / HORIZON_DIP / CHUNK_SIZE as f32;
-    (set_distance + further).min(MAX_RENDER_DISTANCE.max(set_distance))
+    let climbed = set_distance * (1.0 + (above_sea / ABOVE_SEA_AT_TOP).sqrt());
+    let horizon = WORLD_CURVE.horizon_distance(height) / CHUNK_SIZE as f32;
+    climbed.min(horizon).min(MAX_RENDER_DISTANCE).max(set_distance)
 }
 
-/// Draws terrain further out the higher the camera climbs, and moves the fog with it: half
-/// fogged where the farthest LOD level starts, fully fogged at the edge, see `fog.wesl`.
+/// Draws terrain out to the horizon, further the higher the camera climbs, and moves the fog
+/// with it: half fogged where the farthest LOD level starts, fully fogged at the edge, see
+/// `fog.wesl`.
 pub fn update_horizon(
     time: Res<Time>,
     mut lods: ResMut<LodLoader>,
@@ -71,21 +73,35 @@ pub fn update_horizon(
 mod tests {
     use super::*;
 
+    const SEA: f32 = WATER_LEVEL as f32;
+    const TOP: f32 = WORLD_HEIGHT as f32;
+
     #[test]
-    fn test_sea_level_draws_the_set_distance() {
-        assert_eq!(256.0, render_distance_at(256.0, WATER_LEVEL as f32));
-        assert_eq!(256.0, render_distance_at(256.0, 0.0));
+    fn test_the_ground_draws_the_set_distance() {
+        for set in [256.0, 512.0, 1024.0, 1536.0] {
+            assert_eq!(set, render_distance_at(set, SEA));
+            assert_eq!(set, render_distance_at(set, 0.0));
+        }
     }
 
     #[test]
-    fn test_climbing_draws_further_out_up_to_the_whole_world() {
-        let sea = WATER_LEVEL as f32;
-        let hill = render_distance_at(256.0, sea + 100.0);
-        let mountain = render_distance_at(256.0, sea + 300.0);
-        assert!(256.0 < hill && hill < mountain);
-        // the edge stays the same way below the horizon
-        let dip = |height: f32, distance: f32| height / ((distance - 256.0) * CHUNK_SIZE as f32);
-        assert!((dip(100.0, hill) - dip(300.0, mountain)).abs() < 1e-6);
-        assert_eq!(MAX_RENDER_DISTANCE, render_distance_at(256.0, sea + 5000.0));
+    fn test_climbing_to_the_top_draws_twice_as_far() {
+        for set in [256.0, 512.0, 1024.0] {
+            let hill = render_distance_at(set, SEA + 100.0);
+            let mountain = render_distance_at(set, SEA + 300.0);
+            assert!(set < hill && hill < mountain);
+            assert!((render_distance_at(set, TOP) - 2.0 * set).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn test_never_past_the_horizon_or_the_cap_or_short_of_the_set_distance() {
+        // set further than the world shows from the ground, it's drawn out to the horizon once that's further
+        let horizon = |height: f32| WORLD_CURVE.horizon_distance(height) / CHUNK_SIZE as f32;
+        assert_eq!(1536.0, render_distance_at(1536.0, SEA + 100.0));
+        assert!(horizon(SEA + 200.0) > 1536.0);
+        assert_eq!(horizon(SEA + 200.0), render_distance_at(1536.0, SEA + 200.0));
+        assert_eq!(MAX_RENDER_DISTANCE, render_distance_at(1024.0, SEA + 1.0e6));
+        assert_eq!(4096.0, render_distance_at(4096.0, SEA + 1.0e6));
     }
 }

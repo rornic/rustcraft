@@ -9,8 +9,9 @@ import bevy_pbr::render::{
 import super::fog::fogged;
 import super::dither::dither_threshold;
 import super::sky::sky_colour;
-import super::lighting::{SKY_GAIN, direct_sun, open_sky};
+import super::lighting::{cloud_light, daylight, sun_radiance};
 import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
+import super::curvature::{curved, uncurved};
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> material_color: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var material_color_texture: texture_2d<f32>;
@@ -114,11 +115,9 @@ const REFLECT_STRAIGHT_DOWN: f32 = 0.02;
 // How bright the sun's glint is, to how bright it would be off a perfect mirror.
 const GLINT: f32 = 0.6;
 
-// Clouds as reflected: their colour, lit as `clouds.wesl` lights them, and how far out they
+// Clouds as reflected: their colour, lit by `cloud_light` as the clouds are, and how far out they
 // fade, to the fog's end, as the clouds themselves do.
 const CLOUD_COLOR: vec3<f32> = vec3<f32>(0.95, 0.95, 0.92);
-const CLOUD_SUN_SCATTER: f32 = 0.8;
-const CLOUD_SKY_SCATTER: f32 = 1.4;
 
 // Water's colours are picked as they should look on screen, so they're turned back into
 // the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
@@ -234,8 +233,8 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     out.color = vertex.color;
 }
 
-    out.world_position = world_position;
-    out.position = position_world_to_clip(world_position.xyz);
+    out.world_position = vec4<f32>(curved(world_position.xyz), 1.0);
+    out.position = position_world_to_clip(out.world_position.xyz);
     out.uv = vertex.uv;
 
     return out;
@@ -342,7 +341,7 @@ fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     // seen from below, steeply, or from the side, low down
     let side = normalize(vec3<f32>(-direction.x, 0.0, -direction.z) + vec3<f32>(0.0, 0.0, 1e-4));
     let facing = normalize(mix(side, vec3<f32>(0.0, -1.0, 0.0), direction.y));
-    let lit = direct_sun(facing) * CLOUD_SUN_SCATTER + open_sky(facing) * CLOUD_SKY_SCATTER;
+    let lit = cloud_light(facing, vec3<f32>(hit.x, layer, hit.y));
     return mix(sky, CLOUD_COLOR * lit, cover);
 }
 
@@ -403,7 +402,7 @@ fn glint(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, world_position: ve
     let cos2 = n_dot_h * n_dot_h;
     let facets = exp((cos2 - 1.0) / (alpha2 * cos2)) / (3.14159265 * alpha2 * cos2 * cos2);
     let reflected = facets * fresnel(dot(half_way, to_eye)) / (4.0 * n_dot_v);
-    let radiance = (*sun).color.rgb * view_bindings::view.exposure / SKY_GAIN;
+    let radiance = sun_radiance(uncurved(world_position));
     // in the land's shadow, no glint
     if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
         return radiance * reflected * n_dot_l * GLINT;
@@ -489,7 +488,8 @@ fn fragment(
 
     // What the water shows of itself, from below the surface, and the sky and sun it
     // reflects. Looking up at it from underwater, only itself.
-    var scene = scene_colour(color.rgb);
+    // its colour's tuned for midday, so follows the light from there
+    var scene = scene_colour(color.rgb) * daylight(uncurved(world_position));
     let to_eye = -view_to_world / dist;
     // blocks a pixel spans across the water here, worked out where every fragment does
     let footprint = max(length(dpdx(world_position.xz)), length(dpdy(world_position.xz)));
@@ -518,10 +518,11 @@ fn fragment(
         let slope = ripple.xy + waves.slope;
         let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
         let variance = CALM_SLOPE_VARIANCE + ripple.z + waves.lost;
-        let rough = rough_reflection(world_position, slope, sqrt(ripple.z + waves.lost), to_eye);
+        // the clouds are flat, so they're reflected and cast shadows from where the water really is
+        let rough = rough_reflection(uncurved(world_position), slope, sqrt(ripple.z + waves.lost), to_eye);
         let sky = rough.rgb;
         let reflected = rough.a;
-        let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(world_position);
+        let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(uncurved(world_position));
         // blended over what's behind: the reflection and glint stay as bright however clear the water
         let body = scene * alpha * (1.0 - reflected);
         let covered = alpha * (1.0 - reflected) + reflected;
