@@ -15,11 +15,13 @@ use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
+use rustcraft::night_sky::NightSkyPlugin;
 use rustcraft::player::{
     murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle,
 };
 use rustcraft::sky::{
-    atmosphere_camera, match_sky_horizon, move_sun, spawn_atmosphere, sun, FOG_MAX_OPACITY,
+    atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, TimeOfDay,
+    FOG_MAX_OPACITY, START_TIME,
 };
 use rustcraft::sun_glare::SunGlarePlugin;
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
@@ -110,6 +112,7 @@ fn setup_scene(
     commands.insert_resource(murk_handle);
     let shadow_distance = (renderer.shadow_distance as f32 * 16.0).min(fog_distance);
     commands.spawn(sun(shadow_distance, renderer.shadow_cascades));
+    commands.spawn(moon());
 
     let atlas = images.add(block_atlas("assets/textures/blocks.png"));
     let chunk_material_handle = chunk_materials.add(ChunkMaterial {
@@ -165,6 +168,14 @@ fn winit_settings() -> bevy::winit::WinitSettings {
     }
 }
 
+// RC_TIME starts the clock at that time of day, in days, for looking at the sky at any hour
+fn start_time() -> f32 {
+    std::env::var("RC_TIME")
+        .ok()
+        .and_then(|time| time.parse().ok())
+        .unwrap_or(START_TIME)
+}
+
 fn main() {
     App::new()
         .add_plugins((
@@ -185,6 +196,7 @@ fn main() {
             CloudPlugin,
             CurvaturePlugin,
             SunGlarePlugin,
+            NightSkyPlugin,
             DebugOverlayPlugin,
         ))
         .insert_resource(winit_settings())
@@ -205,6 +217,7 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, move_sun)
+        .insert_resource(TimeOfDay(start_time()))
+        .add_systems(Update, move_sky)
         .run();
 }

@@ -9,7 +9,9 @@ import bevy_pbr::render::{
 import super::fog::fogged;
 import super::dither::dither_threshold;
 import super::sky::sky_colour;
-import super::lighting::{cloud_light, daylight, sun_radiance};
+import super::lighting::{cloud_light, daylight, moon_radiance, sun_radiance};
+import super::sky::{MOON_LIGHT, SUN_LIGHT};
+import super::stars::reflected_celestial;
 import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
 import super::curvature::{curved, uncurved};
 
@@ -326,7 +328,9 @@ fn ripples(xz: vec2<f32>, time: f32, footprint: f32) -> vec3<f32> {
 // The sky reflected along `direction` from `origin`, with the clouds in it where it rises to them.
 fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     // a reflection pointing down would be of the water itself, so it's kept to the sky
-    let sky = sky_colour(normalize(vec3<f32>(direction.x, max(direction.y, 0.02), direction.z)));
+    let up = normalize(vec3<f32>(direction.x, max(direction.y, 0.02), direction.z));
+    let night = reflected_celestial(up);
+    let sky = sky_colour(up) * (1.0 - night.a) + night.rgb;
     let layer = cloud_layer.x;
     if direction.y <= 0.0 || origin.y >= layer || cloud_layer.y <= 0.0 {
         return sky;
@@ -382,36 +386,44 @@ fn fresnel(cos_theta: f32) -> f32 {
     return REFLECT_STRAIGHT_DOWN + (1.0 - REFLECT_STRAIGHT_DOWN) * pow(1.0 - clamp(cos_theta, 0.0, 1.0), 5.0);
 }
 
-// The sun's glint towards `to_eye` off water turned to `normal`, whose slopes spread by
-// `variance`, in scene colour: a Beckmann highlight, widening as the water roughens.
-fn glint(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, world_position: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
-    if view_bindings::lights.n_directional_lights == 0u {
-        return vec3<f32>(0.0);
-    }
-    let sun = &view_bindings::lights.directional_lights[0];
-    let to_sun = (*sun).direction_to_light;
-    let n_dot_l = dot(normal, to_sun);
+// How much of the light from `to_light` water turned to `normal` glints towards `to_eye`, whose
+// slopes spread by `variance`: a Beckmann highlight, widening as the water roughens.
+fn highlight(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, to_light: vec3<f32>) -> f32 {
+    let n_dot_l = dot(normal, to_light);
     let n_dot_v = dot(normal, to_eye);
     if n_dot_l <= 0.0 || n_dot_v <= 0.0 {
-        return vec3<f32>(0.0);
+        return 0.0;
     }
-    let half_way = normalize(to_sun + to_eye);
+    let half_way = normalize(to_light + to_eye);
     let n_dot_h = max(dot(normal, half_way), 1e-4);
     // Beckmann's spread of facets, with its roughness squared twice the slopes' variance
     let alpha2 = 2.0 * variance;
     let cos2 = n_dot_h * n_dot_h;
     let facets = exp((cos2 - 1.0) / (alpha2 * cos2)) / (3.14159265 * alpha2 * cos2 * cos2);
     let reflected = facets * fresnel(dot(half_way, to_eye)) / (4.0 * n_dot_v);
-    let radiance = sun_radiance(uncurved(world_position));
+    return reflected * n_dot_l * GLINT;
+}
+
+// The sun's glint, and the moon's, towards `to_eye` off water turned to `normal`, in scene colour.
+fn glint(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, world_position: vec3<f32>, frag_coord: vec2<f32>) -> vec3<f32> {
+    if view_bindings::lights.n_directional_lights == 0u {
+        return vec3<f32>(0.0);
+    }
+    let sun = &view_bindings::lights.directional_lights[SUN_LIGHT];
+    var moonlit = vec3<f32>(0.0);
+    if view_bindings::lights.n_directional_lights > 1u {
+        moonlit = moon_radiance() * highlight(normal, to_eye, variance, view_bindings::lights.directional_lights[MOON_LIGHT].direction_to_light);
+    }
+    let sunlit = sun_radiance(uncurved(world_position)) * highlight(normal, to_eye, variance, (*sun).direction_to_light);
     // in the land's shadow, no glint
     if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
-        return radiance * reflected * n_dot_l * GLINT;
+        return sunlit + moonlit;
     }
     let view_z = position_world_to_view(world_position).z;
-    let shadow = fetch_directional_shadow(0u, vec4<f32>(world_position, 1.0), normal, view_z, frag_coord);
+    let shadow = fetch_directional_shadow(SUN_LIGHT, vec4<f32>(world_position, 1.0), normal, view_z, frag_coord);
     let reach = (*sun).cascades[(*sun).num_cascades - 1u].far_bound;
     let shaded = mix(shadow, 1.0, smoothstep(reach * 0.8, reach, -view_z));
-    return radiance * reflected * n_dot_l * GLINT * shaded;
+    return sunlit * shaded + moonlit;
 }
 
 @fragment
