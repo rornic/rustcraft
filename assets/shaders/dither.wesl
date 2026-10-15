@@ -1,8 +1,10 @@
-// An ordered 4x4 dither, for fading things in and out without blending: a fragment shows
-// when its threshold is under how visible the thing is.
+// An ordered 8x8 dither, for fading things in and out without blending: a fragment shows
+// when its threshold is under how visible the thing is. 64 levels, so a fade steps finely.
 
 fn dither_threshold(frag_coord: vec2<f32>) -> f32 {
-    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    let p = vec2<u32>(frag_coord) % 4u;
-    return (bayer[p.y * 4u + p.x] + 0.5) / 16.0;
+    // the Bayer matrix's entry, built from the bits of x ^ y and y, interleaved and reversed
+    let p = vec2<u32>(frag_coord) % 8u;
+    let z = p.x ^ p.y;
+    let level = ((z & 1u) << 5u) | ((p.y & 1u) << 4u) | ((z & 2u) << 2u) | ((p.y & 2u) << 1u) | ((z & 4u) >> 1u) | ((p.y & 4u) >> 2u);
+    return (f32(level) + 0.5) / 64.0;
 }
