@@ -37,7 +37,10 @@ const FACE_TANGENTS: [(IVec3, IVec3); 6] = [
     (IVec3::new(1, 0, 0), IVec3::new(0, 0, 1)), // top
     (IVec3::new(1, 0, 0), IVec3::new(0, 0, 1)), // bottom
 ];
-const AO_STRENGTH: f32 = 0.5;
+// How dark a fully occluded corner gets, 0..1; two solid sides already count as fully occluded, see `vertex_ao`.
+const AO_STRENGTH: f32 = 0.6;
+// AO reads as the brightness it should show, so it's raised to this to multiply in linear light: a 0.7 straight in linear shows as 0.85.
+const AO_GAMMA: f32 = 2.2;
 
 const SOLID_FLOOR: i64 = 16;
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
@@ -927,7 +930,7 @@ fn vertex_ao(
     let corner = source.block(block_coord + normal_off + offset_a + offset_b);
 
     let sum = side_a.occlusion_weight() + side_b.occlusion_weight() + corner.occlusion_weight();
-    1.0 - (sum / 3.0).clamp(0.0, 1.0) * AO_STRENGTH
+    1.0 - (sum / 2.0).clamp(0.0, 1.0) * AO_STRENGTH
 }
 
 // Sky light at a face's corner, 0..1: the average over the cells around the corner on the
@@ -1730,7 +1733,7 @@ fn mesh_opaque_greedy(
                             BlockType::Grass => source.forest_shade(position),
                             _ => 1.0,
                         };
-                        (tint * ao * shade).extend(atlas_cell).to_array()
+                        (tint * ao.powf(AO_GAMMA) * shade).extend(atlas_cell).to_array()
                     };
                     if w == 1 && h == 1 {
                         let positions: [Vec3; 4] = std::array::from_fn(|j| {
