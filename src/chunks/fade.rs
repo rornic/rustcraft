@@ -1,15 +1,15 @@
 use bevy::prelude::Resource;
 use bevy::{
     asset::{Assets, Handle},
+    camera::visibility::Visibility,
+    ecs::hierarchy::Children,
     ecs::{
         component::Component,
         entity::Entity,
         system::{Commands, Query, Res},
     },
-    ecs::hierarchy::Children,
     math::Vec4,
     pbr::MeshMaterial3d,
-    camera::visibility::Visibility,
     time::Time,
 };
 
@@ -27,7 +27,12 @@ const FADE_DEPTH_PUSH: f32 = 0.0005;
 
 // The window drawn at `step` of a fade out: one more level of the dither is gone each step.
 fn fade_window(step: usize) -> Vec4 {
-    Vec4::new((step + 1) as f32 / FADE_STEPS as f32, 1.0, FADE_DEPTH_PUSH, 0.0)
+    Vec4::new(
+        (step + 1) as f32 / FADE_STEPS as f32,
+        1.0,
+        FADE_DEPTH_PUSH,
+        0.0,
+    )
 }
 
 #[derive(Resource)]
@@ -157,7 +162,10 @@ pub fn apply_fades(
     materials: Res<FadeMaterials>,
     mut fading: Query<(Entity, &Fade, &mut Visibility, Option<&Children>)>,
     mut chunk_materials: Query<&mut MeshMaterial3d<ChunkMaterial>>,
-    mut water_materials: Query<(&mut MeshMaterial3d<WaterMaterial>, bevy::ecs::query::Has<SolidWater>)>,
+    mut water_materials: Query<(
+        &mut MeshMaterial3d<WaterMaterial>,
+        bevy::ecs::query::Has<SolidWater>,
+    )>,
 ) {
     let now = time.elapsed_secs();
 
@@ -175,7 +183,11 @@ pub fn apply_fades(
             (&materials.chunk, &materials.water, &materials.solid_water)
         } else {
             let step = ((progress.max(0.0) * FADE_STEPS as f32) as usize).min(FADE_STEPS - 1);
-            (&materials.chunk_steps[step], &materials.water_steps[step], &materials.solid_water_steps[step])
+            (
+                &materials.chunk_steps[step],
+                &materials.water_steps[step],
+                &materials.solid_water_steps[step],
+            )
         };
 
         if let Ok(mut material) = chunk_materials.get_mut(entity) {
@@ -198,8 +210,11 @@ pub fn apply_fades(
 #[cfg(test)]
 mod tests {
     use bevy::{
-        ecs::{system::Commands, world::{CommandQueue, World}},
         camera::visibility::Visibility,
+        ecs::{
+            system::Commands,
+            world::{CommandQueue, World},
+        },
     };
 
     use super::{fade_window, set_shown, Fade, FADE_STEPS};
@@ -216,13 +231,19 @@ mod tests {
     #[test]
     fn test_fade_out_hides_one_more_level_per_step() {
         for step in 0..FADE_STEPS {
-            let hidden = thresholds().filter(|&t| !draws(fade_window(step), t)).count();
+            let hidden = thresholds()
+                .filter(|&t| !draws(fade_window(step), t))
+                .count();
             assert_eq!(step + 1, hidden);
         }
     }
 
     // `set_shown` for an entity with this visibility and fade, then what's left of it.
-    fn shown(visibility: Visibility, fade: Option<Fade>, shown: bool) -> (Visibility, Option<(f32, bool)>) {
+    fn shown(
+        visibility: Visibility,
+        fade: Option<Fade>,
+        shown: bool,
+    ) -> (Visibility, Option<(f32, bool)>) {
         let mut world = World::new();
         let entity = match fade {
             Some(fade) => world.spawn((visibility, fade)).id(),
@@ -230,8 +251,19 @@ mod tests {
         };
         let mut queue = CommandQueue::default();
         let mut v = visibility;
-        let existing = world.get::<Fade>(entity).map(|f| Fade { start: f.start, out: f.out, despawn: f.despawn });
-        set_shown(&mut Commands::new(&mut queue, &world), entity, &mut v, existing.as_ref(), shown, 5.0);
+        let existing = world.get::<Fade>(entity).map(|f| Fade {
+            start: f.start,
+            out: f.out,
+            despawn: f.despawn,
+        });
+        set_shown(
+            &mut Commands::new(&mut queue, &world),
+            entity,
+            &mut v,
+            existing.as_ref(),
+            shown,
+            5.0,
+        );
         queue.apply(&mut world);
         (v, world.get::<Fade>(entity).map(|f| (f.start, f.out)))
     }
@@ -239,7 +271,10 @@ mod tests {
     #[test]
     fn test_a_new_mesh_is_shown_in_full_at_once() {
         // no fade in to leave gaps under what's dissolving
-        assert_eq!((Visibility::Inherited, None), shown(Visibility::Hidden, None, true));
+        assert_eq!(
+            (Visibility::Inherited, None),
+            shown(Visibility::Hidden, None, true)
+        );
     }
 
     #[test]
@@ -250,7 +285,11 @@ mod tests {
 
     #[test]
     fn test_bringing_back_one_fading_out_finishes_its_fade_at_once() {
-        let fading = Fade { start: 3.0, out: true, despawn: false };
+        let fading = Fade {
+            start: 3.0,
+            out: true,
+            despawn: false,
+        };
         let (visibility, fade) = shown(Visibility::Inherited, Some(fading), true);
         assert_eq!(Visibility::Inherited, visibility);
         // a fade that's long over, which resets its material
@@ -259,7 +298,11 @@ mod tests {
 
     #[test]
     fn test_one_fading_out_to_despawn_is_never_brought_back() {
-        let fading = Fade { start: 3.0, out: true, despawn: true };
+        let fading = Fade {
+            start: 3.0,
+            out: true,
+            despawn: true,
+        };
         let (_, fade) = shown(Visibility::Inherited, Some(fading), true);
         assert_eq!(Some((3.0, true)), fade);
     }

@@ -6,30 +6,28 @@ use std::{
 use bevy::prelude::Resource;
 use bevy::{
     asset::{Assets, Handle},
+    camera::{primitives::Aabb, visibility::Visibility},
     ecs::{
         component::Component,
         entity::Entity,
         query::{Added, Or, With, Without},
         system::{Commands, Local, Query, Res, ResMut, SystemParam},
     },
-    
     math::{I64Vec2, I64Vec3, Vec3},
     pbr::MeshMaterial3d,
+    platform::collections::{HashMap, HashSet},
     prelude::Mesh3d,
-    camera::{primitives::Aabb, visibility::Visibility},
     render::mesh::Mesh,
+    tasks::futures,
     tasks::{AsyncComputeTaskPool, Task},
     time::Time,
     transform::components::Transform,
-    tasks::futures,
-    platform::collections::{HashMap, HashSet},
 };
 
 use super::{
     chunk::{ChunkCoordinate, CHUNK_SIZE},
     chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
     fade::{fade_out_and_despawn, set_shown, Fade, SolidWater},
-    group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk},
     generate::{
         columns::COARSE_CELL,
         generator::{generate_lod_mesh, ChunkMeshes},
@@ -37,6 +35,7 @@ use super::{
         trees::{TREE_HEIGHT, TREE_REACH},
         WATER_LEVEL,
     },
+    group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk},
     material::{ChunkMaterial, WaterMaterial},
 };
 use crate::world::World;
@@ -191,7 +190,9 @@ impl LodKey {
 
     /// This node and each one above it, up to `top`.
     pub fn self_and_ancestors(self, top: u8) -> impl Iterator<Item = LodKey> {
-        std::iter::successors(Some(self), move |key| (key.level < top).then(|| key.parent()))
+        std::iter::successors(Some(self), move |key| {
+            (key.level < top).then(|| key.parent())
+        })
     }
 
     /// Whether the level-1 node `group` lies within this one.
@@ -205,11 +206,18 @@ impl LodKey {
     /// The level-1 nodes within this one, or just it if it's level 1.
     pub fn groups_in(self) -> impl Iterator<Item = LodKey> {
         let width = 1i64 << self.level.saturating_sub(1);
-        let min = if self.level == 0 { self.coord.div_euclid(I64Vec3::splat(2)) } else { self.coord * width };
+        let min = if self.level == 0 {
+            self.coord.div_euclid(I64Vec3::splat(2))
+        } else {
+            self.coord * width
+        };
         let count = if self.level == 0 { 1 } else { width };
         (0..count).flat_map(move |x| {
             (0..count).flat_map(move |y| {
-                (0..count).map(move |z| LodKey { level: 1, coord: min + I64Vec3::new(x, y, z) })
+                (0..count).map(move |z| LodKey {
+                    level: 1,
+                    coord: min + I64Vec3::new(x, y, z),
+                })
             })
         })
     }
@@ -387,7 +395,6 @@ impl LodState<'_> {
                 .any(|child| (self.node_exists)(child))
         }
     }
-
 }
 
 #[derive(Component)]
@@ -518,7 +525,9 @@ impl LodLoader {
     /// Draws terrain out to `render_distance` chunks, or the set render distance if that's
     /// further, selecting nodes afresh for it.
     pub fn set_render_distance(&mut self, render_distance: f32) {
-        let layout = self.set_layout.with_render_distance(render_distance.max(self.set_layout.render_distance()));
+        let layout = self
+            .set_layout
+            .with_render_distance(render_distance.max(self.set_layout.render_distance()));
         if layout.render_distance() != self.layout.render_distance() {
             self.layout = layout;
             self.anchor = None;
@@ -532,7 +541,11 @@ impl LodLoader {
     }
 
     /// Whether a chunk outside full detail can be unloaded without leaving a hole.
-    pub fn chunk_covered(&self, chunk: ChunkCoordinate, pending: &Query<(), With<GenerateLodMesh>>) -> bool {
+    pub fn chunk_covered(
+        &self,
+        chunk: ChunkCoordinate,
+        pending: &Query<(), With<GenerateLodMesh>>,
+    ) -> bool {
         let Some(anchor) = self.anchor else {
             return false;
         };
@@ -637,7 +650,11 @@ fn spawn_order(state: &LodState, unspawned: impl Iterator<Item = LodKey>) -> Vec
             (
                 // a level-1 node standing in for chunks that are still drawn
                 key.level == 1 && finer_drawn,
-                if gap { distance * GAP_DISTANCE_WEIGHT } else { distance },
+                if gap {
+                    distance * GAP_DISTANCE_WEIGHT
+                } else {
+                    distance
+                },
                 key,
             )
         })
@@ -664,7 +681,9 @@ pub fn update_lod_selection(
     if let Some(mut task) = lods.selecting.take() {
         match futures::check_ready(&mut task) {
             // one chosen under a layout since replaced is thrown away
-            Some(done) if done.generation == lods.generation => apply_selection(&mut lods, done, &chunks, &pending_lods),
+            Some(done) if done.generation == lods.generation => {
+                apply_selection(&mut lods, done, &chunks, &pending_lods)
+            }
             Some(_) => {}
             None => lods.selecting = Some(task),
         }
@@ -676,7 +695,9 @@ pub fn update_lod_selection(
         return;
     }
     let (layout, band, generation) = (lods.layout, lods.band, lods.generation);
-    let previous = lods.anchor.map(|_| (lods.selected.clone(), lods.stand_ins.clone()));
+    let previous = lods
+        .anchor
+        .map(|_| (lods.selected.clone(), lods.stand_ins.clone()));
     lods.selecting = Some(AsyncComputeTaskPool::get().spawn(async move {
         let (selected, stand_ins) = select_lods_and_stand_ins(anchor, layout, band);
         // whether a node or chunk shows depends on the anchor only through these two sets, so
@@ -690,12 +711,29 @@ pub fn update_lod_selection(
                     .collect()
             })
             .unwrap_or_default();
-        LodSelection { generation, anchor, selected, stand_ins, changed }
+        LodSelection {
+            generation,
+            anchor,
+            selected,
+            stand_ins,
+            changed,
+        }
     }));
 }
 
-fn apply_selection(lods: &mut LodLoader, done: LodSelection, chunks: &ChunkStates, pending_lods: &Query<(), With<GenerateLodMesh>>) {
-    let LodSelection { anchor, selected, stand_ins, changed, .. } = done;
+fn apply_selection(
+    lods: &mut LodLoader,
+    done: LodSelection,
+    chunks: &ChunkStates,
+    pending_lods: &Query<(), With<GenerateLodMesh>>,
+) {
+    let LodSelection {
+        anchor,
+        selected,
+        stand_ins,
+        changed,
+        ..
+    } = done;
     let first = lods.anchor.is_none();
     let nodes = &lods.nodes;
     let node_exists = |key: LodKey| nodes.contains_key(&key);
@@ -713,7 +751,8 @@ fn apply_selection(lods: &mut LodLoader, done: LodSelection, chunks: &ChunkState
     // The first selection, and one for a new layout, start from scratch and check everything.
     // After that only the keys that changed can need spawning or retiring, so nothing walks
     // every node, of which there can be hundreds of thousands.
-    let wanted = |key: &LodKey| selected.contains(key) || (stand_ins.contains(key) && !state.covered(*key));
+    let wanted =
+        |key: &LodKey| selected.contains(key) || (stand_ins.contains(key) && !state.covered(*key));
     let (to_spawn, retiring) = if first {
         let to_spawn = spawn_order(
             &state,
@@ -723,16 +762,28 @@ fn apply_selection(lods: &mut LodLoader, done: LodSelection, chunks: &ChunkState
                 .filter(|&key| !nodes.contains_key(key))
                 .copied(),
         );
-        let retiring = nodes.keys().filter(|&key| !selected.contains(key)).copied().collect();
+        let retiring = nodes
+            .keys()
+            .filter(|&key| !selected.contains(key))
+            .copied()
+            .collect();
         (to_spawn, retiring)
     } else {
         // new arrivals go on the end, so are spawned first until the queue is next sorted
         let mut to_spawn = std::mem::take(&mut lods.to_spawn);
-        to_spawn.extend(spawn_order(&state, changed.iter().copied().filter(|key| wanted(key) && !nodes.contains_key(key))));
+        to_spawn.extend(spawn_order(
+            &state,
+            changed
+                .iter()
+                .copied()
+                .filter(|key| wanted(key) && !nodes.contains_key(key)),
+        ));
         let mut retiring = std::mem::take(&mut lods.retiring);
         retiring.retain(|key| !selected.contains(key) && nodes.contains_key(key));
         let queued: HashSet<LodKey> = retiring.iter().copied().collect();
-        retiring.extend(changed.iter().copied().filter(|key| !selected.contains(key) && nodes.contains_key(key) && !queued.contains(key)));
+        retiring.extend(changed.iter().copied().filter(|key| {
+            !selected.contains(key) && nodes.contains_key(key) && !queued.contains(key)
+        }));
         (to_spawn, retiring)
     };
 
@@ -764,8 +815,7 @@ pub fn spawn_lods(
             let remaining = std::mem::take(&mut lods.to_spawn);
             let nodes = &lods.nodes;
             let node_exists = |key: LodKey| nodes.contains_key(&key);
-            let node_ready =
-                |key: LodKey| node_ready(nodes, &pending, key);
+            let node_ready = |key: LodKey| node_ready(nodes, &pending, key);
             let state = LodState {
                 anchor,
                 layout: lods.layout,
@@ -817,8 +867,7 @@ pub fn spawn_lods(
             .spawn((
                 LodNode { key },
                 GenerateLodMesh {
-                    task: task_pool
-                        .spawn(async move { generate_lod_mesh(regions, key) }),
+                    task: task_pool.spawn(async move { generate_lod_mesh(regions, key) }),
                 },
                 lod_transform(key),
                 Visibility::Hidden,
@@ -833,8 +882,14 @@ pub fn spawn_lods(
 }
 
 // Whether the node at `key` exists and has its mesh, or has nothing to draw.
-fn node_ready(nodes: &HashMap<LodKey, Option<Entity>>, pending: &Query<(), With<GenerateLodMesh>>, key: LodKey) -> bool {
-    nodes.get(&key).is_some_and(|slot| slot.map_or(true, |entity| !pending.contains(entity)))
+fn node_ready(
+    nodes: &HashMap<LodKey, Option<Entity>>,
+    pending: &Query<(), With<GenerateLodMesh>>,
+    key: LodKey,
+) -> bool {
+    nodes
+        .get(&key)
+        .is_some_and(|slot| slot.map_or(true, |entity| !pending.contains(entity)))
 }
 
 // Whether `key` is known to have nothing to draw, going by regions or coarse columns
@@ -901,13 +956,19 @@ pub fn load_lods(
             commands.entity(entity).insert(lod_aabb());
             // open sea is all water, with no opaque faces to upload
             if chunk_meshes.opaque.count_vertices() > 0 {
-                commands
-                    .entity(entity)
-                    .insert((Mesh3d(meshes.add(chunk_meshes.opaque)), MeshMaterial3d(lods.material.clone())));
+                commands.entity(entity).insert((
+                    Mesh3d(meshes.add(chunk_meshes.opaque)),
+                    MeshMaterial3d(lods.material.clone()),
+                ));
             }
             if let Some(water_mesh) = chunk_meshes.water {
                 let solid = node.key.level >= SOLID_WATER_LEVEL;
-                let water_material = if solid { &lods.solid_water_material } else { &lods.water_material }.clone();
+                let water_material = if solid {
+                    &lods.solid_water_material
+                } else {
+                    &lods.water_material
+                }
+                .clone();
                 commands.entity(entity).with_children(|parent| {
                     let mut water = parent.spawn((
                         Mesh3d(meshes.add(water_mesh)),
@@ -1030,7 +1091,10 @@ pub fn refresh_lod_visibility(
 
     if lods.refresh_all {
         for (entity, group) in all_groups.iter() {
-            set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
+            set(
+                entity,
+                state.chunk_visible(ChunkCoordinate(group.key.min_chunk())),
+            );
         }
         for (entity, node) in all_nodes.iter() {
             set(entity, node_shown(node.key));
@@ -1039,16 +1103,27 @@ pub fn refresh_lod_visibility(
         for &area in &lods.dirty_areas {
             // a group is drawn whole, so one chunk of it says whether it shows
             let in_area = |group: LodKey| {
-                chunk_loader.group_entity(group).filter(|&e| built_groups.contains(e)).map(|e| (group, e))
+                chunk_loader
+                    .group_entity(group)
+                    .filter(|&e| built_groups.contains(e))
+                    .map(|e| (group, e))
             };
             let width = 1usize << (3 * area.level.saturating_sub(1) as usize).min(40);
             let groups: Vec<(LodKey, Entity)> = if width <= chunk_loader.groups.len() {
                 LodKey::groups_in(area).filter_map(in_area).collect()
             } else {
-                chunk_loader.groups.keys().filter(|&&group| area.contains_group(group)).filter_map(|&group| in_area(group)).collect()
+                chunk_loader
+                    .groups
+                    .keys()
+                    .filter(|&&group| area.contains_group(group))
+                    .filter_map(|&group| in_area(group))
+                    .collect()
             };
             for (group, entity) in groups {
-                set(entity, state.chunk_visible(ChunkCoordinate(group.min_chunk())));
+                set(
+                    entity,
+                    state.chunk_visible(ChunkCoordinate(group.min_chunk())),
+                );
             }
             for (key, entity) in lods.nodes_under(area) {
                 set(entity, node_shown(key));
@@ -1058,7 +1133,10 @@ pub fn refresh_lod_visibility(
 
     // newly built groups arrive hidden, and fade in unless a node still covers them
     for (entity, group) in new_groups.iter() {
-        set(entity, state.chunk_visible(ChunkCoordinate(group.key.min_chunk())));
+        set(
+            entity,
+            state.chunk_visible(ChunkCoordinate(group.key.min_chunk())),
+        );
     }
 
     lods.refresh_all = false;
@@ -1074,7 +1152,10 @@ mod tests {
         platform::collections::{HashMap, HashSet},
     };
 
-    use super::{select_lods, select_lods_and_stand_ins, ChunkState, LodBand, LodKey, LodLayout, LodLoader, LodState};
+    use super::{
+        select_lods, select_lods_and_stand_ins, ChunkState, LodBand, LodKey, LodLayout, LodLoader,
+        LodState,
+    };
     use crate::chunks::chunk::ChunkCoordinate;
 
     const BAND: LodBand = LodBand {
@@ -1185,7 +1266,10 @@ mod tests {
     #[test]
     fn test_each_level_reaches_level_scale_times_further() {
         let layout = LodLayout::new(16, 1024, 4);
-        assert_eq!([16.0, 64.0, 256.0, 1024.0], [0, 1, 2, 3].map(|l| layout.reach(l)));
+        assert_eq!(
+            [16.0, 64.0, 256.0, 1024.0],
+            [0, 1, 2, 3].map(|l| layout.reach(l))
+        );
         let anchor = chunk(0, 4, 0);
         let selected = select_lods(anchor, layout, BAND);
         // a level-1 node 50 chunks out is drawn whole, a level-2 node that close is split
@@ -1230,9 +1314,7 @@ mod tests {
                         .count()
                         + layout.full_detail(c, anchor) as usize;
                     assert!(covering <= 1, "chunk {:?} drawn {covering} times", c.0);
-                    if LodKey::containing(c, 0).distance(anchor)
-                        < layout.render_distance()
-                    {
+                    if LodKey::containing(c, 0).distance(anchor) < layout.render_distance() {
                         assert_eq!(1, covering, "chunk {:?} not drawn", c.0);
                     }
                 }
@@ -1303,7 +1385,13 @@ mod tests {
         check: impl FnOnce(&LodState) -> R,
     ) -> R {
         let node_ready = |key| ready.get(&key).copied().unwrap_or(false);
-        let chunk_state = |_| if chunks_ready { ChunkState::Drawn } else { ChunkState::Missing };
+        let chunk_state = |_| {
+            if chunks_ready {
+                ChunkState::Drawn
+            } else {
+                ChunkState::Missing
+            }
+        };
         check(&LodState {
             anchor,
             layout: layout(3),
@@ -1458,11 +1546,11 @@ mod tests {
 
     #[test]
     fn test_known_empty_nodes_have_nothing_to_mesh() {
+        use crate::chunks::chunk::CHUNK_SIZE;
         use crate::chunks::generate::{
             generator::generate_lod_mesh, noise::NoiseGenerator, region_store::RegionStore,
             WATER_LEVEL, WORLD_HEIGHT,
         };
-        use crate::chunks::chunk::CHUNK_SIZE;
         use bevy::math::I64Vec2;
         use std::sync::Arc;
 
@@ -1508,7 +1596,11 @@ mod tests {
             }
         }
         // most of each column is air, rock or open water
-        assert!(empty > nodes.len() * 3 / 4, "only {empty} of {} nodes known to be empty", nodes.len());
+        assert!(
+            empty > nodes.len() * 3 / 4,
+            "only {empty} of {} nodes known to be empty",
+            nodes.len()
+        );
     }
 
     #[test]
@@ -1595,11 +1687,20 @@ mod tests {
             .chunk_visible(c)));
     }
     fn loader() -> LodLoader {
-        LodLoader::new(layout(4), 1024, Handle::default(), Handle::default(), Handle::default())
+        LodLoader::new(
+            layout(4),
+            1024,
+            Handle::default(),
+            Handle::default(),
+            Handle::default(),
+        )
     }
 
     fn key(level: u8, x: i64, y: i64, z: i64) -> LodKey {
-        LodKey { level, coord: I64Vec3::new(x, y, z) }
+        LodKey {
+            level,
+            coord: I64Vec3::new(x, y, z),
+        }
     }
 
     #[test]
@@ -1611,7 +1712,11 @@ mod tests {
         for (i, k) in inside.iter().chain(&outside).enumerate() {
             lods.add_node(*k, Some(Entity::from_raw_u32(i as u32).unwrap()));
         }
-        let found: HashSet<LodKey> = lods.nodes_under(key(3, 1, 0, 1)).into_iter().map(|(k, _)| k).collect();
+        let found: HashSet<LodKey> = lods
+            .nodes_under(key(3, 1, 0, 1))
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         // (1, 5, 1, 6) lies in (2, 2, 0, 3), which lies in (3, 1, 0, 1)
         assert_eq!(inside.into_iter().collect::<HashSet<_>>(), found);
     }
@@ -1635,7 +1740,11 @@ mod tests {
         lods.add_node(key(1, 2, 0, 2), None);
         lods.add_node(key(2, 1, 0, 1), Some(Entity::from_raw_u32(7).unwrap()));
         assert!(lods.nodes.contains_key(&key(1, 2, 0, 2)));
-        let found: Vec<LodKey> = lods.nodes_under(key(3, 0, 0, 0)).into_iter().map(|(k, _)| k).collect();
+        let found: Vec<LodKey> = lods
+            .nodes_under(key(3, 0, 0, 0))
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
         assert_eq!(vec![key(2, 1, 0, 1)], found);
         // an entity-less node later meshing to nothing, or the reverse, counts once
         lods.add_node(key(1, 2, 0, 2), None);
@@ -1661,7 +1770,11 @@ mod tests {
                 for z in -40..40 {
                     for y in [-8, 0, 7] {
                         let group = key(1, x, y, z);
-                        assert_eq!(inside.contains(&group), area.contains_group(group), "{area:?} {group:?}");
+                        assert_eq!(
+                            inside.contains(&group),
+                            area.contains_group(group),
+                            "{area:?} {group:?}"
+                        );
                     }
                 }
             }
@@ -1671,7 +1784,11 @@ mod tests {
     #[test]
     fn test_full_detail_changes_only_where_the_stand_ins_change() {
         let layout = layout(3);
-        for (from, to) in [((100, 5, 100), (101, 5, 100)), ((100, 5, 100), (100, 6, 100)), ((-3, 8, 70), (-3, 8, 69))] {
+        for (from, to) in [
+            ((100, 5, 100), (101, 5, 100)),
+            ((100, 5, 100), (100, 6, 100)),
+            ((-3, 8, 70), (-3, 8, 69)),
+        ] {
             let (a, b) = (chunk(from.0, from.1, from.2), chunk(to.0, to.1, to.2));
             let (_, before) = select_lods_and_stand_ins(a, layout, BAND);
             let (_, after) = select_lods_and_stand_ins(b, layout, BAND);

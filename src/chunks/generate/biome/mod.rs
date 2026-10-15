@@ -126,11 +126,20 @@ impl Biomes {
 
     // The biome's name, or None for the base terrain.
     pub fn name(&self, biome: BiomeId) -> Option<&'static str> {
-        biome.0.checked_sub(1).map(|i| self.biomes[i as usize].name())
+        biome
+            .0
+            .checked_sub(1)
+            .map(|i| self.biomes[i as usize].name())
     }
 
     // The block `biome` uses in place of the base terrain's `base`.
-    pub fn block(&self, biome: BiomeId, base: BlockType, above_sea: i64, gradient: f64) -> BlockType {
+    pub fn block(
+        &self,
+        biome: BiomeId,
+        base: BlockType,
+        above_sea: i64,
+        gradient: f64,
+    ) -> BlockType {
         match biome.0 {
             0 => base,
             i => self.biomes[i as usize - 1].block(base, above_sea, gradient),
@@ -159,7 +168,10 @@ const LEAF_TEXTURE_MEAN: f32 = 0.25;
 // Linear colour of grass in this climate.
 pub fn grass_colour(climate: Climate) -> Vec3 {
     let srgb = |c: [f32; 3]| Vec3::from(c) / 255.0;
-    let (t, h) = (climate.temperature.clamp(0.0, 1.0), climate.humidity.clamp(0.0, 1.0));
+    let (t, h) = (
+        climate.temperature.clamp(0.0, 1.0),
+        climate.humidity.clamp(0.0, 1.0),
+    );
     let dry = srgb(GRASS_COLD_DRY).lerp(srgb(GRASS_HOT_DRY), t);
     let wet = srgb(GRASS_COLD_WET).lerp(srgb(GRASS_HOT_WET), t);
     let colour = dry.lerp(wet, h);
@@ -208,14 +220,20 @@ mod tests {
             height: 500.0,
             continentalness: 0.3,
             ruggedness: -1.0,
-            climate: Climate { temperature, humidity: 0.5 },
+            climate: Climate {
+                temperature,
+                humidity: 0.5,
+            },
         }
     }
 
     #[test]
     fn test_biome_height_blends_in_with_strength() {
         let biomes = Biomes::with(vec![Box::new(Raise(10.0))]);
-        assert_eq!((500.0, BiomeId::BASE, BASE_TREE_DENSITY), biomes.shape(&column(0.0)));
+        assert_eq!(
+            (500.0, BiomeId::BASE, BASE_TREE_DENSITY),
+            biomes.shape(&column(0.0))
+        );
         assert_eq!(502.5, biomes.shape(&column(0.25)).0);
         assert_eq!(510.0, biomes.shape(&column(1.0)).0);
     }
@@ -224,14 +242,26 @@ mod tests {
     fn test_biome_owns_blocks_where_it_holds_over_half() {
         let biomes = Biomes::with(vec![Box::new(Raise(10.0))]);
         let owner = |t| biomes.shape(&column(t)).1;
-        assert_eq!(BlockType::Grass, biomes.block(owner(0.4), BlockType::Grass, 10, 0.0));
-        assert_eq!(BlockType::Snow, biomes.block(owner(0.6), BlockType::Grass, 10, 0.0));
+        assert_eq!(
+            BlockType::Grass,
+            biomes.block(owner(0.4), BlockType::Grass, 10, 0.0)
+        );
+        assert_eq!(
+            BlockType::Snow,
+            biomes.block(owner(0.6), BlockType::Grass, 10, 0.0)
+        );
     }
 
     #[test]
     fn test_strongest_biome_owns_the_column() {
         let biomes = Biomes::with(vec![Box::new(Raise(10.0)), Box::new(Desert::new(1))]);
-        let hot_dry = BaseColumn { climate: Climate { temperature: 1.0, humidity: 0.0 }, ..column(1.0) };
+        let hot_dry = BaseColumn {
+            climate: Climate {
+                temperature: 1.0,
+                humidity: 0.0,
+            },
+            ..column(1.0)
+        };
         let (_, owner, _) = biomes.shape(&hot_dry);
         // both hold fully, so the first listed keeps it
         assert_eq!(BiomeId(1), owner);
@@ -240,7 +270,10 @@ mod tests {
     }
 
     fn climate(temperature: f32, humidity: f32) -> Climate {
-        Climate { temperature, humidity }
+        Climate {
+            temperature,
+            humidity,
+        }
     }
 
     // How much yellower than green, as red over green.
@@ -252,8 +285,14 @@ mod tests {
     fn test_hot_dry_grass_is_yellower_than_wet() {
         let dry = grass_colour(climate(1.0, 0.0));
         let wet = grass_colour(climate(1.0, 1.0));
-        assert!(yellowness(dry) > 0.8, "dry grass should be yellow, was {dry}");
-        assert!(yellowness(wet) < 0.2, "wet grass should be green, was {wet}");
+        assert!(
+            yellowness(dry) > 0.8,
+            "dry grass should be yellow, was {dry}"
+        );
+        assert!(
+            yellowness(wet) < 0.2,
+            "wet grass should be green, was {wet}"
+        );
     }
 
     #[test]
@@ -261,8 +300,14 @@ mod tests {
         for step in 0..10 {
             let x = step as f32 / 10.0;
             let y = x + 0.1;
-            assert!(yellowness(grass_colour(climate(0.5, x))) > yellowness(grass_colour(climate(0.5, y))));
-            assert!(yellowness(grass_colour(climate(y, 0.3))) > yellowness(grass_colour(climate(x, 0.3))));
+            assert!(
+                yellowness(grass_colour(climate(0.5, x)))
+                    > yellowness(grass_colour(climate(0.5, y)))
+            );
+            assert!(
+                yellowness(grass_colour(climate(y, 0.3)))
+                    > yellowness(grass_colour(climate(x, 0.3)))
+            );
         }
     }
 

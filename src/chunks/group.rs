@@ -1,22 +1,19 @@
 use bevy::{
     asset::{Assets, RenderAssetUsages},
+    camera::{primitives::Aabb, visibility::Visibility},
     ecs::{
         component::Component,
         entity::Entity,
         query::{Or, With},
         system::{Commands, Query, Res, ResMut},
     },
-    
     math::Vec3,
     pbr::MeshMaterial3d,
     prelude::Mesh3d,
-    render::{
-        mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues},
-    },
-    camera::{primitives::Aabb, visibility::Visibility},
+    render::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues},
+    tasks::futures,
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::Transform,
-    tasks::futures,
 };
 
 use super::{
@@ -53,7 +50,11 @@ pub struct MeshedChunk;
 #[derive(Component)]
 pub struct GroupedChunk;
 
-type Unsettled = Or<(With<GenerateChunkData>, With<DirtyChunk>, With<GenerateChunkMesh>)>;
+type Unsettled = Or<(
+    With<GenerateChunkData>,
+    With<DirtyChunk>,
+    With<GenerateChunkMesh>,
+)>;
 
 fn group_aabb() -> Aabb {
     let width = (2 * CHUNK_SIZE) as f32;
@@ -83,7 +84,10 @@ pub fn build_groups(
     for key in ready {
         loader.waiting.remove(&key);
         let chunks: Vec<ChunkCoordinate> = key.chunks().collect();
-        let entities: Vec<Entity> = chunks.iter().filter_map(|&c| loader.chunk_entity(c)).collect();
+        let entities: Vec<Entity> = chunks
+            .iter()
+            .filter_map(|&c| loader.chunk_entity(c))
+            .collect();
         let origin = key.min_chunk();
         let parts: Vec<(Vec3, ChunkMeshes)> = chunks
             .iter()
@@ -124,9 +128,10 @@ pub fn load_groups(
         if merged.has_geometry() {
             commands.entity(entity).insert((BuiltGroup, group_aabb()));
             if merged.opaque.count_vertices() > 0 {
-                commands
-                    .entity(entity)
-                    .insert((Mesh3d(meshes.add(merged.opaque)), MeshMaterial3d(loader.material())));
+                commands.entity(entity).insert((
+                    Mesh3d(meshes.add(merged.opaque)),
+                    MeshMaterial3d(loader.material()),
+                ));
             }
             if let Some(water) = merged.water {
                 let water_material = loader.water_material();
@@ -150,7 +155,9 @@ pub fn load_groups(
 }
 
 fn float3(mesh: &Mesh, attribute: bevy::render::mesh::MeshVertexAttribute) -> &[[f32; 3]] {
-    mesh.attribute(attribute).and_then(VertexAttributeValues::as_float3).expect("float3 attribute")
+    mesh.attribute(attribute)
+        .and_then(VertexAttributeValues::as_float3)
+        .expect("float3 attribute")
 }
 
 fn float2(mesh: &Mesh, attribute: bevy::render::mesh::MeshVertexAttribute) -> Option<&[[f32; 2]]> {
@@ -169,7 +176,10 @@ fn float4(mesh: &Mesh, attribute: bevy::render::mesh::MeshVertexAttribute) -> &[
 
 // One mesh from `parts`, each moved by its offset. Parts with no vertices are skipped.
 fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
-    let parts: Vec<(Vec3, Mesh)> = parts.into_iter().filter(|(_, mesh)| mesh.count_vertices() > 0).collect();
+    let parts: Vec<(Vec3, Mesh)> = parts
+        .into_iter()
+        .filter(|(_, mesh)| mesh.count_vertices() > 0)
+        .collect();
     if parts.is_empty() {
         return None;
     }
@@ -182,7 +192,11 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
     let mut indices = Vec::new();
     for (offset, mesh) in &parts {
         let start = positions.len() as u32;
-        positions.extend(float3(mesh, Mesh::ATTRIBUTE_POSITION).iter().map(|&p| (Vec3::from(p) + *offset).to_array()));
+        positions.extend(
+            float3(mesh, Mesh::ATTRIBUTE_POSITION)
+                .iter()
+                .map(|&p| (Vec3::from(p) + *offset).to_array()),
+        );
         normals.extend_from_slice(float3(mesh, Mesh::ATTRIBUTE_NORMAL));
         uvs.extend_from_slice(float2(mesh, Mesh::ATTRIBUTE_UV_0).expect("uvs"));
         colors.extend_from_slice(float4(mesh, Mesh::ATTRIBUTE_COLOR));
@@ -195,12 +209,15 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
         };
         indices.extend(part.iter().map(|i| i + start));
     }
-    let mut merged = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
-        .with_inserted_indices(Indices::U32(indices));
+    let mut merged = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_indices(Indices::U32(indices));
     if !lights.is_empty() {
         assert_eq!(vertices, lights.len(), "only some vertices carry light");
         merged.insert_attribute(Mesh::ATTRIBUTE_UV_1, lights);
@@ -218,7 +235,12 @@ pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
     }
     ChunkMeshes {
         // an empty mesh, so there's always something to hand back
-        opaque: merge_meshes(opaque).unwrap_or_else(|| Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)),
+        opaque: merge_meshes(opaque).unwrap_or_else(|| {
+            Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::RENDER_WORLD,
+            )
+        }),
         water: merge_meshes(water),
     }
 }
@@ -249,12 +271,21 @@ mod tests {
     }
 
     fn positions(mesh: &Mesh) -> Vec<Vec3> {
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().iter().map(|&p| p.into()).collect()
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap()
+            .iter()
+            .map(|&p| p.into())
+            .collect()
     }
 
     #[test]
     fn test_merged_meshes_keep_every_vertex_where_it_was() {
-        let (a, b) = (block_mesh(U16Vec3::new(4, 4, 4)), block_mesh(U16Vec3::new(4, 4, 4)));
+        let (a, b) = (
+            block_mesh(U16Vec3::new(4, 4, 4)),
+            block_mesh(U16Vec3::new(4, 4, 4)),
+        );
         let alone = positions(&a.opaque);
         let offset = Vec3::new(16.0, 0.0, 32.0);
         let merged = merge_chunk_meshes(vec![(Vec3::ZERO, a), (offset, b)]);
@@ -267,13 +298,25 @@ mod tests {
 
     #[test]
     fn test_merged_indices_point_into_their_own_part() {
-        let (a, b) = (block_mesh(U16Vec3::new(1, 1, 1)), block_mesh(U16Vec3::new(2, 2, 2)));
-        let (a_vertices, a_indices) = (a.opaque.count_vertices(), a.opaque.indices().unwrap().len());
+        let (a, b) = (
+            block_mesh(U16Vec3::new(1, 1, 1)),
+            block_mesh(U16Vec3::new(2, 2, 2)),
+        );
+        let (a_vertices, a_indices) =
+            (a.opaque.count_vertices(), a.opaque.indices().unwrap().len());
         let merged = merge_chunk_meshes(vec![(Vec3::ZERO, a), (Vec3::new(16.0, 0.0, 0.0), b)]);
-        let Some(Indices::U32(indices)) = merged.opaque.indices() else { panic!() };
-        assert!(indices[..a_indices].iter().all(|&i| (i as usize) < a_vertices));
-        assert!(indices[a_indices..].iter().all(|&i| (i as usize) >= a_vertices));
-        assert!(indices.iter().all(|&i| (i as usize) < merged.opaque.count_vertices()));
+        let Some(Indices::U32(indices)) = merged.opaque.indices() else {
+            panic!()
+        };
+        assert!(indices[..a_indices]
+            .iter()
+            .all(|&i| (i as usize) < a_vertices));
+        assert!(indices[a_indices..]
+            .iter()
+            .all(|&i| (i as usize) >= a_vertices));
+        assert!(indices
+            .iter()
+            .all(|&i| (i as usize) < merged.opaque.count_vertices()));
     }
 
     #[test]

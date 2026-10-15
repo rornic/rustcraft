@@ -43,7 +43,10 @@ impl Desert {
 
     // 0..1 along the rows of dunes, 1 on each crest
     fn dune(&self, x: f64, z: f64) -> f64 {
-        let bend = self.crest_bend.get([x / CREST_BEND_WAVELENGTH, z / CREST_BEND_WAVELENGTH]) * CREST_BEND;
+        let bend = self
+            .crest_bend
+            .get([x / CREST_BEND_WAVELENGTH, z / CREST_BEND_WAVELENGTH])
+            * CREST_BEND;
         let t = (x / DUNE_SPACING + bend).rem_euclid(1.0);
         if t < WINDWARD {
             smoothstep(0.0, WINDWARD, t)
@@ -60,7 +63,8 @@ impl Biome for Desert {
 
     fn strength(&self, column: &BaseColumn) -> f64 {
         let climate = column.climate;
-        smoothstep(HOT.0, HOT.1, climate.temperature as f64) * smoothstep(DRY.0, DRY.1, climate.humidity as f64)
+        smoothstep(HOT.0, HOT.1, climate.temperature as f64)
+            * smoothstep(DRY.0, DRY.1, climate.humidity as f64)
     }
 
     fn height(&self, column: &BaseColumn) -> f64 {
@@ -70,7 +74,14 @@ impl Biome for Desert {
         if room <= 0.0 {
             return column.height;
         }
-        let field = smoothstep(-0.5, 0.3, self.dune_field.get([column.x / DUNE_FIELD_WAVELENGTH, column.z / DUNE_FIELD_WAVELENGTH]));
+        let field = smoothstep(
+            -0.5,
+            0.3,
+            self.dune_field.get([
+                column.x / DUNE_FIELD_WAVELENGTH,
+                column.z / DUNE_FIELD_WAVELENGTH,
+            ]),
+        );
         // cells too wide to see the rows of dunes see their average height, half a crest
         let resolved = resolved(DUNE_SPACING, column.cell);
         let shape = if resolved == 1.0 {
@@ -100,13 +111,21 @@ mod tests {
     use crate::chunks::generate::biome::Climate;
 
     fn climate(temperature: f32, humidity: f32) -> Climate {
-        Climate { temperature, humidity }
+        Climate {
+            temperature,
+            humidity,
+        }
     }
 
     #[test]
     fn test_only_hot_dry_climates_are_desert() {
         let desert = Desert::new(1);
-        let strength = |climate| desert.strength(&BaseColumn { climate, ..column(0.0, 30.0) });
+        let strength = |climate| {
+            desert.strength(&BaseColumn {
+                climate,
+                ..column(0.0, 30.0)
+            })
+        };
         assert_eq!(1.0, strength(climate(0.9, 0.1)));
         assert_eq!(0.0, strength(climate(0.9, 0.6)));
         assert_eq!(0.0, strength(climate(0.4, 0.1)));
@@ -117,7 +136,13 @@ mod tests {
     fn test_grass_turns_to_sand_but_rock_and_snow_stay() {
         let desert = Desert::new(1);
         assert_eq!(BlockType::Sand, desert.block(BlockType::Grass, 10, 0.0));
-        for block in [BlockType::Stone, BlockType::Snow, BlockType::Water, BlockType::Sand, BlockType::Air] {
+        for block in [
+            BlockType::Stone,
+            BlockType::Snow,
+            BlockType::Water,
+            BlockType::Sand,
+            BlockType::Air,
+        ] {
             assert_eq!(block, desert.block(block, 10, 0.0));
         }
     }
@@ -138,11 +163,20 @@ mod tests {
     fn test_dunes_rise_inland_but_not_on_beaches_or_mountains() {
         let desert = Desert::new(1);
         let rise = |above_sea: f64| {
-            (0..200).map(|x| desert.height(&column(x as f64 * 3.0, above_sea)) - column(0.0, above_sea).height).fold(0.0, f64::max)
+            (0..200)
+                .map(|x| {
+                    desert.height(&column(x as f64 * 3.0, above_sea))
+                        - column(0.0, above_sea).height
+                })
+                .fold(0.0, f64::max)
         };
         assert_eq!(0.0, rise(1.0));
         assert_eq!(0.0, rise(200.0));
-        assert!(rise(30.0) > DUNE_HEIGHT * 0.8, "dunes only rose {}", rise(30.0));
+        assert!(
+            rise(30.0) > DUNE_HEIGHT * 0.8,
+            "dunes only rose {}",
+            rise(30.0)
+        );
         assert!(rise(30.0) <= DUNE_HEIGHT);
     }
 

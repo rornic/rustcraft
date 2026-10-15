@@ -24,7 +24,10 @@ impl SkyLight {
         // whether anything light can pass through is shaded, so light has somewhere to spread
         let mut shade = false;
         // each column is a contiguous run of cells, lowest first
-        for (column, opacity) in levels.chunks_mut(size.y as usize).zip(opacity.chunks(size.y as usize)) {
+        for (column, opacity) in levels
+            .chunks_mut(size.y as usize)
+            .zip(opacity.chunks(size.y as usize))
+        {
             // straight down, it keeps its full strength through open air
             let mut level = sky;
             for (cell, &opacity) in column.iter_mut().zip(opacity).rev() {
@@ -151,8 +154,17 @@ mod tests {
 
     #[test]
     fn test_deep_water_darkens() {
-        let light = light(IVec3::new(1, 20, 1), |c| if c.y < 19 { BlockType::Water } else { BlockType::Air });
-        let depths: Vec<u8> = (0..20).rev().map(|y| light.level(IVec3::new(0, y, 0))).collect();
+        let light = light(IVec3::new(1, 20, 1), |c| {
+            if c.y < 19 {
+                BlockType::Water
+            } else {
+                BlockType::Air
+            }
+        });
+        let depths: Vec<u8> = (0..20)
+            .rev()
+            .map(|y| light.level(IVec3::new(0, y, 0)))
+            .collect();
         assert!(depths.windows(2).all(|w| w[0] >= w[1]), "{depths:?}");
         assert_eq!(0, light.level(IVec3::ZERO));
     }

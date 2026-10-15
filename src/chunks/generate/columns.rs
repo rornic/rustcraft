@@ -103,7 +103,8 @@ impl ColumnGrid {
     /// each way, summed, measured between the cells either side.
     pub fn gradient(&self, cx: i32, cz: i32) -> f64 {
         let across = |a: f64, b: f64| (a - b).abs() / self.cell as f64;
-        across(self.height(cx + 1, cz), self.height(cx - 1, cz)) + across(self.height(cx, cz + 1), self.height(cx, cz - 1))
+        across(self.height(cx + 1, cz), self.height(cx - 1, cz))
+            + across(self.height(cx, cz + 1), self.height(cx, cz - 1))
     }
 
     pub fn biome(&self, cx: i32, cz: i32) -> BiomeId {
@@ -147,8 +148,11 @@ impl ChunkColumns {
                 columns.heights.push(height);
                 columns.gradients.push(gradient_x.abs() + gradient_z.abs());
                 columns.biomes.push(heights.biome(world_x, world_z));
-                columns.temperatures.push(noise.temperature(world_x as f64, world_z as f64));
-                (columns.lowest, columns.highest) = (columns.lowest.min(height), columns.highest.max(height));
+                columns
+                    .temperatures
+                    .push(noise.temperature(world_x as f64, world_z as f64));
+                (columns.lowest, columns.highest) =
+                    (columns.lowest.min(height), columns.highest.max(height));
             }
         }
         columns
@@ -187,7 +191,10 @@ struct Recent<K, V> {
 
 impl<K: Hash + Eq, V> Recent<K, V> {
     fn new(kept: usize) -> Self {
-        Self { kept, slots: Mutex::new((0, HashMap::new())) }
+        Self {
+            kept,
+            slots: Mutex::new((0, HashMap::new())),
+        }
     }
 
     // Blocks while another thread works it out, so only call from a task, never a system.
@@ -196,7 +203,9 @@ impl<K: Hash + Eq, V> Recent<K, V> {
             let mut guard = self.slots.lock().unwrap();
             let (tick, slots) = &mut *guard;
             *tick += 1;
-            let slot = slots.entry(key).or_insert_with(|| (Arc::new(OnceLock::new()), 0));
+            let slot = slots
+                .entry(key)
+                .or_insert_with(|| (Arc::new(OnceLock::new()), 0));
             slot.1 = *tick;
             let slot = slot.0.clone();
             if slots.len() > self.kept {
@@ -232,8 +241,15 @@ impl Default for ColumnCache {
 impl ColumnCache {
     /// The columns under full-detail chunks at chunk `x`, `z`, sampling them if no chunk over
     /// them has yet. Blocks while another thread samples them, so only call from a task.
-    pub fn chunk_columns(&self, noise: &NoiseGenerator, heights: &mut HeightSampler, x: i64, z: i64) -> Arc<ChunkColumns> {
-        self.chunk_columns.get((x, z), || ChunkColumns::sample(noise, heights, x, z))
+    pub fn chunk_columns(
+        &self,
+        noise: &NoiseGenerator,
+        heights: &mut HeightSampler,
+        x: i64,
+        z: i64,
+    ) -> Arc<ChunkColumns> {
+        self.chunk_columns
+            .get((x, z), || ChunkColumns::sample(noise, heights, x, z))
     }
 
     /// The grid under `key`, sampling it if no node over the same column has yet. Blocks
@@ -254,7 +270,11 @@ impl ColumnCache {
     /// The lowest and highest ground under `key`'s column, if a node over it has been
     /// sampled. Never blocks.
     pub fn height_range(&self, key: LodKey) -> Option<(f32, f32)> {
-        self.ranges.read().unwrap().get(&ColumnKey::from(key)).copied()
+        self.ranges
+            .read()
+            .unwrap()
+            .get(&ColumnKey::from(key))
+            .copied()
     }
 }
 
@@ -281,14 +301,20 @@ mod tests {
         for (cx, cz) in [(-1, -1), (0, 0), (7, 12), (16, 16)] {
             let x = base.x + cx as i64 * cell + cell / 2;
             let z = base.z + cz as i64 * cell + cell / 2;
-            assert_eq!(noise.sample_for_cell(x as f64, z as f64, cell as f64).height as f32 as f64, grid.height(cx, cz));
+            assert_eq!(
+                noise
+                    .sample_for_cell(x as f64, z as f64, cell as f64)
+                    .height as f32 as f64,
+                grid.height(cx, cz)
+            );
         }
         assert!(grid.lowest <= grid.highest);
     }
 
     #[test]
     fn test_chunk_columns_match_the_regions_and_are_shared_up_the_stack() {
-        let regions = super::super::region_store::RegionStore::new(Arc::new(NoiseGenerator::new(4)));
+        let regions =
+            super::super::region_store::RegionStore::new(Arc::new(NoiseGenerator::new(4)));
         let (x, z) = (-3, 5);
         let mut heights = regions.sampler();
         let columns = regions.chunk_columns(&mut heights, x, z);
@@ -296,14 +322,26 @@ mod tests {
         for (cx, cz) in [(0, 0), (3, 11), (15, 15)] {
             let (world_x, world_z) = (x * size + cx, z * size + cz);
             let (gx, gz) = heights.gradient(world_x, world_z);
-            assert_eq!(heights.height(world_x, world_z).round() as i64, columns.height(cx, cz));
+            assert_eq!(
+                heights.height(world_x, world_z).round() as i64,
+                columns.height(cx, cz)
+            );
             assert_eq!(gx.abs() + gz.abs(), columns.gradient(cx, cz));
             assert_eq!(heights.biome(world_x, world_z), columns.biome(cx, cz));
-            assert_eq!(regions.noise().temperature(world_x as f64, world_z as f64), columns.temperature(cx, cz));
+            assert_eq!(
+                regions.noise().temperature(world_x as f64, world_z as f64),
+                columns.temperature(cx, cz)
+            );
             assert!((columns.lowest..=columns.highest).contains(&columns.height(cx, cz)));
         }
-        assert!(Arc::ptr_eq(&columns, &regions.chunk_columns(&mut heights, x, z)));
-        assert!(!Arc::ptr_eq(&columns, &regions.chunk_columns(&mut heights, x + 1, z)));
+        assert!(Arc::ptr_eq(
+            &columns,
+            &regions.chunk_columns(&mut heights, x, z)
+        ));
+        assert!(!Arc::ptr_eq(
+            &columns,
+            &regions.chunk_columns(&mut heights, x + 1, z)
+        ));
     }
 
     #[test]
@@ -326,7 +364,10 @@ mod tests {
         let low = cache.grid(&noise, key(2, 1, 0, 1));
         let high = cache.grid(&noise, key(2, 1, 9, 1));
         assert!(Arc::ptr_eq(&low, &high));
-        assert_eq!(Some((low.lowest, low.highest)), cache.height_range(key(2, 1, 5, 1)));
+        assert_eq!(
+            Some((low.lowest, low.highest)),
+            cache.height_range(key(2, 1, 5, 1))
+        );
         assert_eq!(None, cache.height_range(key(2, 2, 0, 1)));
     }
 }

@@ -3,18 +3,18 @@ use std::{cell::LazyCell, collections::HashMap, ops::Deref, sync::Arc};
 use bevy::{
     asset::RenderAssetUsages,
     math::{I64Vec2, I64Vec3, IVec3, U16Vec3, UVec2, Vec3},
-    render::{
-        mesh::{Indices, Mesh, VertexAttributeValues},
-    },
+    render::mesh::{Indices, Mesh, VertexAttributeValues},
 };
 
 use super::biome::{grass_tint, BiomeId, Biomes};
+use super::columns::{ColumnGrid, COARSE_CELL};
 use super::light::{SkyLight, MAX_LIGHT};
 use super::noise::NoiseGenerator;
 use super::region_store::{RegionStore, SLOPE_SPAN};
+use super::trees::{
+    grows_into, trees_near, Tree, TreeGround, TreeTints, THIN_TRUNK_CELL, TREE_HEIGHT, TREE_REACH,
+};
 use super::WATER_LEVEL;
-use super::columns::{ColumnGrid, COARSE_CELL};
-use super::trees::{grows_into, trees_near, Tree, TreeGround, TreeTints, THIN_TRUNK_CELL, TREE_HEIGHT, TREE_REACH};
 use crate::block::{BlockType, Face, Tile, TILE_COUNT};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::lod::LodKey;
@@ -156,12 +156,19 @@ struct Canopy {
 impl Canopy {
     fn new(trees: &[Tree], base: I64Vec3, cell: i64, size: i32) -> Self {
         let padded = ((size + 2) * (size + 2)) as usize;
-        let (mut hits, mut tops, mut tints) = (vec![0u32; padded], vec![0.0; padded], vec![Vec3::ZERO; padded]);
+        let (mut hits, mut tops, mut tints) = (
+            vec![0u32; padded],
+            vec![0.0; padded],
+            vec![Vec3::ZERO; padded],
+        );
         let mut weights = vec![0u32; padded];
         let step = cell as f64 / CANOPY_SAMPLES as f64;
         for tree in trees {
-            let column_of = |x: i64, base: i64| ((x - base).div_euclid(cell) as i32).clamp(-1, size);
-            let reach = |x: i64, base: i64| column_of(x - TREE_REACH, base)..=column_of(x + TREE_REACH, base);
+            let column_of =
+                |x: i64, base: i64| ((x - base).div_euclid(cell) as i32).clamp(-1, size);
+            let reach = |x: i64, base: i64| {
+                column_of(x - TREE_REACH, base)..=column_of(x + TREE_REACH, base)
+            };
             let (top, tint) = (tree.crown_top(), tree.tint());
             for cx in reach(tree.base.x, base.x) {
                 for cz in reach(tree.base.z, base.z) {
@@ -185,16 +192,33 @@ impl Canopy {
             }
         }
         let samples = (CANOPY_SAMPLES * CANOPY_SAMPLES) as f32;
-        let cover = hits.iter().map(|h| h.count_ones() as f32 / samples).collect();
-        let tints = tints.iter().zip(&weights).map(|(&t, &w)| if w > 0 { t / w as f32 } else { Vec3::ONE }).collect();
-        let tops = tops.iter().zip(&weights).map(|(&t, &w)| if w > 0 { t / w as f64 } else { 0.0 }).collect();
-        Self { hits, cover, tops, tints }
+        let cover = hits
+            .iter()
+            .map(|h| h.count_ones() as f32 / samples)
+            .collect();
+        let tints = tints
+            .iter()
+            .zip(&weights)
+            .map(|(&t, &w)| if w > 0 { t / w as f32 } else { Vec3::ONE })
+            .collect();
+        let tops = tops
+            .iter()
+            .zip(&weights)
+            .map(|(&t, &w)| if w > 0 { t / w as f64 } else { 0.0 })
+            .collect();
+        Self {
+            hits,
+            cover,
+            tops,
+            tints,
+        }
     }
 
     // Whether `tree` is part of the canopy, which is drawn in its place: the column it stands in is.
     fn covers(&self, tree: &Tree, base: I64Vec3, cell: i64, size: i32) -> bool {
         let at = |x: i64, base: i64| ((x - base).div_euclid(cell) as i32).clamp(-1, size);
-        self.cover[LodBlocks::column(size, at(tree.base.x, base.x), at(tree.base.z, base.z))] >= CANOPY_COVER
+        self.cover[LodBlocks::column(size, at(tree.base.x, base.x), at(tree.base.z, base.z))]
+            >= CANOPY_COVER
     }
 
     // The canopy over this node's columns whose ground is in it, as boxes from the ground up to
@@ -238,15 +262,23 @@ impl Canopy {
                         lowest = lowest.min(ground_heights[column]);
                         tint += self.tints[column];
                         count += 1.0;
-                        for i in (0..CANOPY_SAMPLES * CANOPY_SAMPLES).filter(|i| self.hits[column] & (1 << i) != 0) {
-                            let point = UVec2::new((x * CANOPY_SAMPLES + i % CANOPY_SAMPLES) as u32, (z * CANOPY_SAMPLES + i / CANOPY_SAMPLES) as u32);
+                        for i in (0..CANOPY_SAMPLES * CANOPY_SAMPLES)
+                            .filter(|i| self.hits[column] & (1 << i) != 0)
+                        {
+                            let point = UVec2::new(
+                                (x * CANOPY_SAMPLES + i % CANOPY_SAMPLES) as u32,
+                                (z * CANOPY_SAMPLES + i / CANOPY_SAMPLES) as u32,
+                            );
                             (near, far) = (near.min(point), far.max(point));
                         }
                     }
                 }
                 // each point stands for the square round it
                 let samples = CANOPY_SAMPLES as f32;
-                let (near, far) = (near.as_vec2() / samples - 0.5, (far + 1).as_vec2() / samples - 0.5);
+                let (near, far) = (
+                    near.as_vec2() / samples - 0.5,
+                    (far + 1).as_vec2() / samples - 0.5,
+                );
                 // from a little under the ground, so no gap shows on slopes
                 let bottom = mesh_y(lowest as f64 - 2.0);
                 boxes.push(TreeBox {
@@ -335,7 +367,9 @@ struct GridGround<'a> {
 
 impl GridGround<'_> {
     fn column(&self, x: i64, z: i64) -> (i32, i32) {
-        let index = |world: i64, base: i64| ((world - base).div_euclid(self.cell) as i32).clamp(-1, self.size);
+        let index = |world: i64, base: i64| {
+            ((world - base).div_euclid(self.cell) as i32).clamp(-1, self.size)
+        };
         (index(x, self.base.x), index(z, self.base.y))
     }
 }
@@ -403,7 +437,11 @@ impl LodBlocks {
         let grid = regions.column_grid(key);
         let noise = regions.noise();
         let real_trees = cell <= TREE_MAX_CELL;
-        let mut forest = if real_trees { Vec::new() } else { vec![0.0; padded * padded] };
+        let mut forest = if real_trees {
+            Vec::new()
+        } else {
+            vec![0.0; padded * padded]
+        };
         let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
         for cx in -1..=size {
@@ -417,19 +455,47 @@ impl LodBlocks {
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
-                let ground = column_block(noise.biomes(), biome, height - 1, height, gradient, temperature);
+                let ground = column_block(
+                    noise.biomes(),
+                    biome,
+                    height - 1,
+                    height,
+                    gradient,
+                    temperature,
+                );
                 tops[Self::column(size, cx, cz)] = ground_top(height);
                 if !real_trees && ground == BlockType::Grass {
-                    forest[Self::column(size, cx, cz)] = (grid.trees(cx, cz) * FOREST_COVER).min(1.0) as f32;
+                    forest[Self::column(size, cx, cz)] =
+                        (grid.trees(cx, cz) * FOREST_COVER).min(1.0) as f32;
                 }
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
-                    let mut block = under_grass(column_block(noise.biomes(), biome, world_y, height, gradient, temperature), world_y, height, cell);
+                    let mut block = under_grass(
+                        column_block(
+                            noise.biomes(),
+                            biome,
+                            world_y,
+                            height,
+                            gradient,
+                            temperature,
+                        ),
+                        world_y,
+                        height,
+                        cell,
+                    );
                     block = freeze_cell(block, temperature, world_y + cell / 2, cell);
                     if block == BlockType::Air && base.y + cy as i64 * cell < ground_top(height) {
-                        block = column_block(noise.biomes(), biome, ground_top(height) - 1, height, gradient, temperature);
+                        block = column_block(
+                            noise.biomes(),
+                            biome,
+                            ground_top(height) - 1,
+                            height,
+                            gradient,
+                            temperature,
+                        );
                     }
-                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = underwater(block, base.y + cy as i64 * cell, cell, height);
+                    cells[Self::index(size, IVec3::new(cx, cy, cz))] =
+                        underwater(block, base.y + cy as i64 * cell, cell, height);
                 }
             }
         }
@@ -437,7 +503,13 @@ impl LodBlocks {
             let span = (size + 1) as i64 * cell;
             if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
                 let min = I64Vec2::new(base.x, base.z) - cell;
-                let mut ground = GridGround { grid: &grid, noise, base: I64Vec2::new(base.x, base.z), cell, size };
+                let mut ground = GridGround {
+                    grid: &grid,
+                    noise,
+                    base: I64Vec2::new(base.x, base.z),
+                    cell,
+                    size,
+                };
                 let trees = trees_near(noise, &mut ground, min, min + span + cell);
                 let canopy = (cell >= CANOPY_CELL).then(|| Canopy::new(&trees, base, cell, size));
                 if let Some(canopy) = &canopy {
@@ -445,44 +517,75 @@ impl LodBlocks {
                     boxes = canopy.boxes(&ground_heights, base, cell, size);
                 }
                 // trees in a canopy are drawn as part of it
-                let in_canopy = |tree: &Tree| canopy.as_ref().is_some_and(|c| c.covers(tree, base, cell, size));
+                let in_canopy = |tree: &Tree| {
+                    canopy
+                        .as_ref()
+                        .is_some_and(|c| c.covers(tree, base, cell, size))
+                };
                 for tree in trees.iter().filter(|t| !in_canopy(t)) {
                     // each tree's boxes are drawn by the one node its base is in
                     let at = (tree.base - base).div_euclid(I64Vec3::splat(cell));
-                    if at.cmpge(I64Vec3::ZERO).all() && at.cmplt(I64Vec3::splat(size as i64)).all() {
+                    if at.cmpge(I64Vec3::ZERO).all() && at.cmplt(I64Vec3::splat(size as i64)).all()
+                    {
                         let mesh_at = |block: Vec3| (block - base.as_vec3()) / cell as f32 - 0.5;
                         if (THIN_TRUNK_CELL..=TRUNK_MAX_CELL).contains(&cell) {
                             let width = tree.width();
-                            let (min, max) = (tree.base.as_vec3(), (tree.base + I64Vec3::new(width, tree.trunk, width)).as_vec3());
-                            boxes.push(TreeBox { min: mesh_at(min), max: mesh_at(max), block: BlockType::Log, tint: Vec3::ONE, faces: BoxFaces::Sides });
+                            let (min, max) = (
+                                tree.base.as_vec3(),
+                                (tree.base + I64Vec3::new(width, tree.trunk, width)).as_vec3(),
+                            );
+                            boxes.push(TreeBox {
+                                min: mesh_at(min),
+                                max: mesh_at(max),
+                                block: BlockType::Log,
+                                tint: Vec3::ONE,
+                                faces: BoxFaces::Sides,
+                            });
                         }
                         if cell >= BOX_CROWN_CELL {
                             for (min, max) in tree.crown_boxes(crown_layers(cell)) {
-                                boxes.push(TreeBox { min: mesh_at(min.as_vec3()), max: mesh_at(max.as_vec3()), block: BlockType::Leaves, tint: tree.tint(), faces: BoxFaces::All });
+                                boxes.push(TreeBox {
+                                    min: mesh_at(min.as_vec3()),
+                                    max: mesh_at(max.as_vec3()),
+                                    block: BlockType::Leaves,
+                                    tint: tree.tint(),
+                                    faces: BoxFaces::All,
+                                });
                             }
                         }
                     }
                     if cell < BOX_CROWN_CELL {
-                        tree.plant(base, cell, (IVec3::splat(-1), IVec3::splat(size)), |coord, block| {
-                            let cell = &mut cells[Self::index(size, coord)];
-                            if grows_into(*cell, block) {
-                                *cell = block;
-                            }
-                        });
+                        tree.plant(
+                            base,
+                            cell,
+                            (IVec3::splat(-1), IVec3::splat(size)),
+                            |coord, block| {
+                                let cell = &mut cells[Self::index(size, coord)];
+                                if grows_into(*cell, block) {
+                                    *cell = block;
+                                }
+                            },
+                        );
                     }
                 }
             }
             // leaves darken down from the top of each column's highest, see `canopy_shade`
             for cx in -1..=size {
                 for cz in -1..=size {
-                    let top = (-1..=size).rev().find(|&cy| cells[Self::index(size, IVec3::new(cx, cy, cz))] == BlockType::Leaves);
+                    let top = (-1..=size).rev().find(|&cy| {
+                        cells[Self::index(size, IVec3::new(cx, cy, cz))] == BlockType::Leaves
+                    });
                     if let Some(cy) = top {
                         canopy_tops[Self::column(size, cx, cz)] = base.y + (cy as i64 + 1) * cell;
                     }
                 }
             }
         }
-        Self::new(size, cells, tops, base.y, cell).with_ground_heights(ground_heights).with_canopy_tops(canopy_tops).with_forest(forest).with_boxes(boxes)
+        Self::new(size, cells, tops, base.y, cell)
+            .with_ground_heights(ground_heights)
+            .with_canopy_tops(canopy_tops)
+            .with_forest(forest)
+            .with_boxes(boxes)
     }
 
     // From full-detail regions, with real trees.
@@ -516,12 +619,32 @@ impl LodBlocks {
                 tops[Self::column(size, cx, cz)] = top;
                 for cy in -1..=size {
                     let world_y = base.y + cy as i64 * cell + cell / 2;
-                    let mut block = under_grass(column_block(biomes, biome, world_y, column_height, combined_gradient, temperature), world_y, column_height, cell);
+                    let mut block = under_grass(
+                        column_block(
+                            biomes,
+                            biome,
+                            world_y,
+                            column_height,
+                            combined_gradient,
+                            temperature,
+                        ),
+                        world_y,
+                        column_height,
+                        cell,
+                    );
                     block = freeze_cell(block, temperature, world_y + cell / 2, cell);
                     if block == BlockType::Air && base.y + cy as i64 * cell < top {
-                        block = column_block(biomes, biome, top - 1, column_height, combined_gradient, temperature);
+                        block = column_block(
+                            biomes,
+                            biome,
+                            top - 1,
+                            column_height,
+                            combined_gradient,
+                            temperature,
+                        );
                     }
-                    cells[Self::index(size, IVec3::new(cx, cy, cz))] = underwater(block, base.y + cy as i64 * cell, cell, column_height);
+                    cells[Self::index(size, IVec3::new(cx, cy, cz))] =
+                        underwater(block, base.y + cy as i64 * cell, cell, column_height);
                 }
             }
         }
@@ -532,16 +655,23 @@ impl LodBlocks {
             let min = I64Vec2::new(base.x, base.z) - cell;
             trees = trees_near(regions.noise(), &mut heights, min, min + span + cell);
             for tree in &trees {
-                tree.plant(base, cell, (IVec3::splat(-1), IVec3::splat(size)), |coord, block| {
-                    let cell = &mut cells[Self::index(size, coord)];
-                    if grows_into(*cell, block) {
-                        *cell = block;
-                    }
-                });
+                tree.plant(
+                    base,
+                    cell,
+                    (IVec3::splat(-1), IVec3::splat(size)),
+                    |coord, block| {
+                        let cell = &mut cells[Self::index(size, coord)];
+                        if grows_into(*cell, block) {
+                            *cell = block;
+                        }
+                    },
+                );
             }
         }
 
-        Self::new(size, cells, tops, base.y, cell).with_ground_heights(ground_heights).with_trees(TreeTints::new(&trees, base, cell))
+        Self::new(size, cells, tops, base.y, cell)
+            .with_ground_heights(ground_heights)
+            .with_trees(TreeTints::new(&trees, base, cell))
     }
 
     fn with_ground_heights(mut self, ground_heights: Vec<f32>) -> Self {
@@ -570,7 +700,20 @@ impl LodBlocks {
     }
 
     fn new(size: i32, cells: Vec<BlockType>, tops: Vec<i64>, base_y: i64, cell: i64) -> Self {
-        let mut blocks = Self { size, cells, tops, base_y, cell, surface_tops: Vec::new(), any_surface_tops: false, canopy_tops: Vec::new(), ground_heights: Vec::new(), forest: Vec::new(), boxes: Vec::new(), trees: TreeTints::default() };
+        let mut blocks = Self {
+            size,
+            cells,
+            tops,
+            base_y,
+            cell,
+            surface_tops: Vec::new(),
+            any_surface_tops: false,
+            canopy_tops: Vec::new(),
+            ground_heights: Vec::new(),
+            forest: Vec::new(),
+            boxes: Vec::new(),
+            trees: TreeTints::default(),
+        };
         blocks.surface_tops = vec![None; blocks.cells.len()];
         for x in -1..=size {
             for z in -1..=size {
@@ -674,8 +817,16 @@ impl BlockSource for LodBlocks {
         if water_depth(self, coord) == 0 {
             return 0.0;
         }
-        let column = Self::column(self.size, coord.x.clamp(-1, self.size), coord.z.clamp(-1, self.size));
-        let ground = self.ground_heights.get(column).copied().unwrap_or(self.tops[column] as f32);
+        let column = Self::column(
+            self.size,
+            coord.x.clamp(-1, self.size),
+            coord.z.clamp(-1, self.size),
+        );
+        let ground = self
+            .ground_heights
+            .get(column)
+            .copied()
+            .unwrap_or(self.tops[column] as f32);
         (WATER_LEVEL as f32 - ground).max(1.0)
     }
 
@@ -706,7 +857,11 @@ impl BlockSource for LodBlocks {
             // The wall hangs from this node's own surface edge, so it's there whatever the cell
             // beyond holds: that is sampled at this node's resolution, and a coarser neighbour
             // that draws its ground lower would be left with a gap.
-            let inner = IVec3::new(coord.x.clamp(0, self.size - 1), coord.y, coord.z.clamp(0, self.size - 1));
+            let inner = IVec3::new(
+                coord.x.clamp(0, self.size - 1),
+                coord.y,
+                coord.z.clamp(0, self.size - 1),
+            );
             for cell in [inner, coord] {
                 if is_solid(self.raw(cell)) {
                     for dy in 1..=SKIRT_CELLS {
@@ -722,12 +877,18 @@ impl BlockSource for LodBlocks {
             // node's ground is far above it, so it grows no walls.
             let ground = self.tops[Self::column(self.size, inner.x, inner.z)];
             let bottom = self.base_y + inner.y as i64 * self.cell;
-            if is_solid(self.raw(inner)) && bottom + self.cell > ground - SKIRT_CELLS as i64 * self.cell {
+            if is_solid(self.raw(inner))
+                && bottom + self.cell > ground - SKIRT_CELLS as i64 * self.cell
+            {
                 return BlockType::Air;
             }
         }
         // full detail can have the ground a block below a surface cell in the node above, so lid it
-        if coord.y == self.size && !outside(coord.x) && !outside(coord.z) && self.ground_tops_out_in(coord) {
+        if coord.y == self.size
+            && !outside(coord.x)
+            && !outside(coord.z)
+            && self.ground_tops_out_in(coord)
+        {
             return BlockType::Air;
         }
         block
@@ -753,7 +914,11 @@ impl BlockSource for LodBlocks {
 // The cell at the water's surface over ground below it is water, not ground: filled by its
 // ground it would draw as a beach at sea level, where the water over it is mostly of the cell.
 fn underwater(block: BlockType, bottom: i64, cell: i64, column_height: i64) -> BlockType {
-    if is_solid(block) && bottom < WATER_LEVEL && WATER_LEVEL <= bottom + cell && ground_top(column_height) < WATER_LEVEL {
+    if is_solid(block)
+        && bottom < WATER_LEVEL
+        && WATER_LEVEL <= bottom + cell
+        && ground_top(column_height) < WATER_LEVEL
+    {
         BlockType::Water
     } else {
         block
@@ -800,7 +965,8 @@ fn freeze_cell(block: BlockType, temperature: f32, cell_top: i64, cell: i64) -> 
 
 // Height above the sea where snow starts to settle, lower in the cold.
 fn snow_line(temperature: f32) -> i64 {
-    (SNOW_LINE as f64 + (temperature as f64 - 0.5) * SNOW_LINE_PER_DEGREE).max(COLDEST_SNOW_LINE as f64) as i64
+    (SNOW_LINE as f64 + (temperature as f64 - 0.5) * SNOW_LINE_PER_DEGREE)
+        .max(COLDEST_SNOW_LINE as f64) as i64
 }
 
 // The steepest ground snow settles on, `above_sea` blocks up: only gentle ground at the snow
@@ -815,7 +981,12 @@ fn ground_top(column_height: i64) -> i64 {
     column_height.max(SOLID_FLOOR)
 }
 
-fn terrain_block(world_y: i64, column_height: i64, combined_gradient: f64, temperature: f32) -> BlockType {
+fn terrain_block(
+    world_y: i64,
+    column_height: i64,
+    combined_gradient: f64,
+    temperature: f32,
+) -> BlockType {
     if world_y < ground_top(column_height) {
         let above_sea = world_y - WATER_LEVEL;
         let line = snow_line(temperature);
@@ -874,9 +1045,21 @@ pub(super) fn column_block(
 
 // `neighbor_chunks` holds all 26 chunks in the 3x3x3 neighborhood (see `ChunkCoordinate::neighbors_26`),
 // since AO sampling near a chunk corner can need a diagonal-adjacent chunk, not just a face-adjacent one.
-fn resolve_block(chunk: &ChunkData, neighbor_chunks: &[Option<Arc<ChunkData>>], coord: IVec3) -> BlockType {
+fn resolve_block(
+    chunk: &ChunkData,
+    neighbor_chunks: &[Option<Arc<ChunkData>>],
+    coord: IVec3,
+) -> BlockType {
     let size = chunk.size as i32;
-    let out = |c: i32| if c < 0 { -1 } else if c >= size { 1 } else { 0 };
+    let out = |c: i32| {
+        if c < 0 {
+            -1
+        } else if c >= size {
+            1
+        } else {
+            0
+        }
+    };
     let wrap = |c: i32, out: i32| match out {
         -1 => size - 1,
         1 => 0,
@@ -896,7 +1079,13 @@ fn resolve_block(chunk: &ChunkData, neighbor_chunks: &[Option<Arc<ChunkData>>], 
     let idx = neighbor_26_index(out_x, out_y, out_z);
     neighbor_chunks[idx]
         .as_ref()
-        .map(|c| c.get_block_at(U16Vec3::new(wrapped.x as u16, wrapped.y as u16, wrapped.z as u16)))
+        .map(|c| {
+            c.get_block_at(U16Vec3::new(
+                wrapped.x as u16,
+                wrapped.y as u16,
+                wrapped.z as u16,
+            ))
+        })
         .unwrap_or_default()
 }
 
@@ -907,7 +1096,15 @@ fn resolve_block(chunk: &ChunkData, neighbor_chunks: &[Option<Arc<ChunkData>>], 
 // above it).
 fn tangent_offsets(face_index: usize, vertex_local_pos: [f32; 3]) -> (IVec3, IVec3) {
     let (ta, tb) = FACE_TANGENTS[face_index];
-    let axis_index = |v: IVec3| if v.x != 0 { 0 } else if v.y != 0 { 1 } else { 2 };
+    let axis_index = |v: IVec3| {
+        if v.x != 0 {
+            0
+        } else if v.y != 0 {
+            1
+        } else {
+            2
+        }
+    };
     let sign_a = vertex_local_pos[axis_index(ta)].signum() as i32;
     let sign_b = vertex_local_pos[axis_index(tb)].signum() as i32;
     (ta * sign_a, tb * sign_b)
@@ -952,7 +1149,11 @@ fn vertex_light(
         side_b.then_some(front + offset_b),
         corner.then_some(front + offset_a + offset_b),
     ];
-    let levels: Vec<f32> = cells.into_iter().flatten().map(|c| light.level(c) as f32).collect();
+    let levels: Vec<f32> = cells
+        .into_iter()
+        .flatten()
+        .map(|c| light.level(c) as f32)
+        .collect();
     levels.iter().sum::<f32>() / levels.len() as f32 / MAX_LIGHT as f32
 }
 
@@ -1024,10 +1225,7 @@ fn vertex_shore_distance(
     }
 }
 
-pub fn generate_chunk(
-    regions: Arc<RegionStore>,
-    chunk_pos: ChunkCoordinate,
-) -> ChunkData {
+pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> ChunkData {
     let mut heights = regions.sampler();
     let biomes = regions.noise().biomes();
     // the same for every chunk stacked over these columns, so worked out once for them all
@@ -1046,9 +1244,18 @@ pub fn generate_chunk(
                 cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
                 continue;
             }
-            let (gradient, biome, temperature) = (columns.gradient(x, z), columns.biome(x, z), columns.temperature(x, z));
+            let (gradient, biome, temperature) = (
+                columns.gradient(x, z),
+                columns.biome(x, z),
+                columns.temperature(x, z),
+            );
             cells.extend((world_y..world_y + size).map(|y| {
-                under_grass(column_block(biomes, biome, y, column_height, gradient, temperature), y, column_height, 1)
+                under_grass(
+                    column_block(biomes, biome, y, column_height, gradient, temperature),
+                    y,
+                    column_height,
+                    1,
+                )
             }));
         }
     }
@@ -1059,12 +1266,17 @@ pub fn generate_chunk(
         let min = I64Vec2::new(origin.x, origin.z);
         let trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
         for tree in &trees {
-            tree.plant(origin, 1, (IVec3::ZERO, IVec3::splat(size as i32 - 1)), |coord, block| {
-                let coord = coord.as_u16vec3();
-                if grows_into(chunk_data.get_block_at(coord), block) {
-                    chunk_data.set_block_at(coord, block);
-                }
-            });
+            tree.plant(
+                origin,
+                1,
+                (IVec3::ZERO, IVec3::splat(size as i32 - 1)),
+                |coord, block| {
+                    let coord = coord.as_u16vec3();
+                    if grows_into(chunk_data.get_block_at(coord), block) {
+                        chunk_data.set_block_at(coord, block);
+                    }
+                },
+            );
         }
         chunk_data.trees = TreeTints::new(&trees, origin, 1);
     }
@@ -1176,12 +1388,17 @@ impl MeshBuffers {
                 uv,
             });
             let (u, v) = (i / w as f32, j / h as f32);
-            self.colors.push((quad.color)(blend(quad.ao, u, v), position));
+            self.colors
+                .push((quad.color)(blend(quad.ao, u, v), position));
             self.lights.push(blend(quad.light, u, v));
             self.vertices.len() as u32 - 1
         };
         let (uv_min, uv_max) = ((quad.uv_at)(0, 0), (quad.uv_at)(w, h));
-        let centre = push(w as f32 / 2.0, h as f32 / 2.0, [0, 1].map(|k| (uv_min[k] + uv_max[k]) / 2.0));
+        let centre = push(
+            w as f32 / 2.0,
+            h as f32 / 2.0,
+            [0, 1].map(|k| (uv_min[k] + uv_max[k]) / 2.0),
+        );
         let first = centre + 1;
         for &(i, j) in &ring {
             push(i as f32, j as f32, (quad.uv_at)(i, j));
@@ -1234,20 +1451,34 @@ impl MeshBuffers {
             VertexAttributeValues::Float32x4(self.colors),
         );
         if !self.lights.is_empty() {
-            assert_eq!(self.lights.len(), self.vertices.len(), "only some vertices carry light");
+            assert_eq!(
+                self.lights.len(),
+                self.vertices.len(),
+                "only some vertices carry light"
+            );
             let mut lights: Vec<[f32; 2]> = self
                 .lights
                 .into_iter()
                 .enumerate()
                 .map(|(i, l)| match self.boxes {
                     Some((start, flag)) if i >= start => [l, flag],
-                    _ => [l, if self.untextured { UNTEXTURED } else { TEXTURED }],
+                    _ => [
+                        l,
+                        if self.untextured {
+                            UNTEXTURED
+                        } else {
+                            TEXTURED
+                        },
+                    ],
                 })
                 .collect();
             for (i, shade) in self.grass_sides {
                 lights[i][1] = -shade;
             }
-            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, VertexAttributeValues::Float32x2(lights));
+            mesh.insert_attribute(
+                Mesh::ATTRIBUTE_UV_1,
+                VertexAttributeValues::Float32x2(lights),
+            );
         }
         mesh
     }
@@ -1370,7 +1601,11 @@ const LIGHT_MARGIN: i32 = 8;
 
 // Sky light for the chunk and a block around it, from the chunk and its 26 neighbours, as
 // high as the top of the chunk above, with open sky above that.
-fn neighbourhood_light(chunk: &ChunkData, neighbours: &[Option<Arc<ChunkData>>], coord: ChunkCoordinate) -> SkyLight {
+fn neighbourhood_light(
+    chunk: &ChunkData,
+    neighbours: &[Option<Arc<ChunkData>>],
+    coord: ChunkCoordinate,
+) -> SkyLight {
     let size = CHUNK_SIZE as i32;
     let min = IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN);
     let span = IVec3::new(size + LIGHT_MARGIN, 2 * size, size + LIGHT_MARGIN) - min;
@@ -1409,8 +1644,13 @@ const BOX_TEXTURE_MAX_CELL: i64 = 8;
 // A quad's `uvs` scaled to count blocks across it, so a texture isn't stretched over a whole box.
 fn tiled_uvs(positions: &[[f32; 3]; 4], uvs: &[[f32; 2]; 4], cell: f32) -> [[f32; 2]; 4] {
     let length = |axis: usize| {
-        let other = |j: usize, k: usize| uvs[j][1 - axis] == uvs[k][1 - axis] && uvs[j][axis] != uvs[k][axis];
-        let (j, k) = (0..4).flat_map(|j| (0..4).map(move |k| (j, k))).find(|&(j, k)| other(j, k)).unwrap_or((0, 0));
+        let other = |j: usize, k: usize| {
+            uvs[j][1 - axis] == uvs[k][1 - axis] && uvs[j][axis] != uvs[k][axis]
+        };
+        let (j, k) = (0..4)
+            .flat_map(|j| (0..4).map(move |k| (j, k)))
+            .find(|&(j, k)| other(j, k))
+            .unwrap_or((0, 0));
         (Vec3::from(positions[j]) - Vec3::from(positions[k])).length() * cell
     };
     let blocks = [length(0), length(1)];
@@ -1427,7 +1667,12 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
     // the padded cells are already in `SkyLight::index` order
     let light = LazyCell::new(|| {
         let opacity = blocks.cells.iter().map(BlockType::light_opacity).collect();
-        SkyLight::new(IVec3::splat(-1), IVec3::splat(blocks.size + 2), sky_above(top, cell_size), opacity)
+        SkyLight::new(
+            IVec3::splat(-1),
+            IVec3::splat(blocks.size + 2),
+            sky_above(top, cell_size),
+            opacity,
+        )
     });
     let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
     // untextured leaves are drawn solid, so hide the leaves behind them
@@ -1455,7 +1700,9 @@ fn axis_of(v: IVec3) -> usize {
 // Which tangent (0 or 1) UV component `k` runs along on this face, so a merged quad can repeat it.
 fn uv_tangent(face: &[Vertex], k: usize, a_axis: usize) -> usize {
     let high = |v: &Vertex| v.position[a_axis] > 0.0;
-    let follows_a = face.iter().all(|v| (high(v) == high(&face[0])) == (v.uv[k] == face[0].uv[k]));
+    let follows_a = face
+        .iter()
+        .all(|v| (high(v) == high(&face[0])) == (v.uv[k] == face[0].uv[k]));
     if follows_a {
         0
     } else {
@@ -1543,7 +1790,10 @@ impl FaceCell {
     // first tangent and 1 for its second, with `corners` where each corner is along them.
     fn even_along(&self, corners: &[[bool; 2]; 4], axis: usize) -> bool {
         (0..4).all(|j| {
-            (0..4).all(|k| corners[j][1 - axis] != corners[k][1 - axis] || (self.ao[j] == self.ao[k] && self.light[j] == self.light[k]))
+            (0..4).all(|k| {
+                corners[j][1 - axis] != corners[k][1 - axis]
+                    || (self.ao[j] == self.ao[k] && self.light[j] == self.light[k])
+            })
         })
     }
 
@@ -1577,7 +1827,9 @@ fn face_span(
     let neighbour = coord + normal;
     let neighbour_block = source.block(neighbour);
     let covered = neighbour_block.is_opaque()
-        || (leaves_cover_leaves && block == BlockType::Leaves && neighbour_block == BlockType::Leaves)
+        || (leaves_cover_leaves
+            && block == BlockType::Leaves
+            && neighbour_block == BlockType::Leaves)
         || (block == BlockType::Ice && neighbour_block == BlockType::Ice);
     // every face is asked about, and most are hidden, so those leave before any lookups
     if !source.has_surface_tops() || normal.y < 0 {
@@ -1589,7 +1841,11 @@ fn face_span(
     }
     let bottom = coord.y as f32 - 0.5;
     // a lowered neighbour leaves this side bare above the ground's real height
-    let floor = if covered { source.surface_top(neighbour)? } else { bottom };
+    let floor = if covered {
+        source.surface_top(neighbour)?
+    } else {
+        bottom
+    };
     let top = source.surface_top(coord);
     let ceiling = top.unwrap_or(bottom + 1.0);
     if ceiling <= floor {
@@ -1628,7 +1884,13 @@ fn mesh_opaque_greedy(
         let normal = FACE_NORMAL_OFFSET[i];
         let (ta, tb) = FACE_TANGENTS[i];
         let (a_axis, b_axis) = (axis_of(ta), axis_of(tb));
-        let uv_axes = [0, 1].map(|k| if uv_tangent(template, k, a_axis) == 0 { a_axis } else { b_axis });
+        let uv_axes = [0, 1].map(|k| {
+            if uv_tangent(template, k, a_axis) == 0 {
+                a_axis
+            } else {
+                b_axis
+            }
+        });
         let uv_ascending = [0, 1].map(|k| {
             template
                 .iter()
@@ -1637,10 +1899,22 @@ fn mesh_opaque_greedy(
         });
         let normal_axis = axis_of(normal);
         let normal_unit = normal.abs();
-        let (p0, p1, p2) = (Vec3::from(template[0].position), Vec3::from(template[1].position), Vec3::from(template[2].position));
-        let ccw_in_ab = (p1 - p0).cross(p2 - p0).dot(ta.as_vec3().cross(tb.as_vec3())) > 0.0;
+        let (p0, p1, p2) = (
+            Vec3::from(template[0].position),
+            Vec3::from(template[1].position),
+            Vec3::from(template[2].position),
+        );
+        let ccw_in_ab = (p1 - p0)
+            .cross(p2 - p0)
+            .dot(ta.as_vec3().cross(tb.as_vec3()))
+            > 0.0;
         // whether each corner is at the far end along each tangent
-        let corners: [[bool; 2]; 4] = std::array::from_fn(|j| [template[j].position[a_axis] > 0.0, template[j].position[b_axis] > 0.0]);
+        let corners: [[bool; 2]; 4] = std::array::from_fn(|j| {
+            [
+                template[j].position[a_axis] > 0.0,
+                template[j].position[b_axis] > 0.0,
+            ]
+        });
         let by_corner = |values: [f32; 4]| {
             let mut out = [[0.0; 2]; 2];
             for (j, [far_a, far_b]) in corners.iter().enumerate() {
@@ -1663,27 +1937,41 @@ fn mesh_opaque_greedy(
                     let smooth = ambient_occlusion && block != BlockType::Leaves;
                     // a step above lowered ground faces into that ground's cell, which is dark: it's
                     // lit by the air over it, and is too thin to shade smoothly
-                    let step = span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
+                    let step =
+                        span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
                     // A skirt wall hangs from the node's own ground over solid cells beyond, whose
                     // occlusion and light are none, so it is lit as that ground is, by the open air above.
                     let skirt = !inside && normal.y == 0 && source.has_skirts();
                     let smooth = smooth && !step && !skirt;
-                    let lit_from = if step { coord + normal + IVec3::Y } else { coord + normal };
+                    let lit_from = if step {
+                        coord + normal + IVec3::Y
+                    } else {
+                        coord + normal
+                    };
                     let skirt_light = skirt.then(|| {
-                        let air = (0..=SKIRT_CELLS + 1).find(|&dy| !is_solid(source.terrain(coord + IVec3::Y * dy)));
+                        let air = (0..=SKIRT_CELLS + 1)
+                            .find(|&dy| !is_solid(source.terrain(coord + IVec3::Y * dy)));
                         face_light(air.map_or(MAX_LIGHT, |dy| light.level(coord + IVec3::Y * dy)))
                     });
                     mask[(b * size + a) as usize] = span.map(|span| FaceCell {
                         span,
                         block,
-                        tint: if block == BlockType::Leaves { source.leaf_tint(coord) } else { Vec3::ONE },
+                        tint: if block == BlockType::Leaves {
+                            source.leaf_tint(coord)
+                        } else {
+                            Vec3::ONE
+                        },
                         ao: if smooth {
-                            std::array::from_fn(|j| vertex_ao(source, coord, i, template[j].position))
+                            std::array::from_fn(|j| {
+                                vertex_ao(source, coord, i, template[j].position)
+                            })
                         } else {
                             [1.0; 4]
                         },
                         light: if smooth {
-                            std::array::from_fn(|j| vertex_light(source, light, coord, i, template[j].position))
+                            std::array::from_fn(|j| {
+                                vertex_light(source, light, coord, i, template[j].position)
+                            })
                         } else {
                             [skirt_light.unwrap_or_else(|| face_light(light.level(lit_from))); 4]
                         },
@@ -1701,15 +1989,26 @@ fn mesh_opaque_greedy(
                     // a trimmed side's top and bottom sit off the cell grid, so it merges only
                     // along the ground's contour, where its neighbours share those heights
                     let trimmed_side = cell.span.is_some() && normal.y == 0;
-                    let (grow_a, grow_b) = (!trimmed_side || a_axis != 1, !trimmed_side || b_axis != 1);
+                    let (grow_a, grow_b) =
+                        (!trimmed_side || a_axis != 1, !trimmed_side || b_axis != 1);
                     #[cfg(test)]
-                    let (grow_a, grow_b) = if NO_MERGING.get() { (false, false) } else { (grow_a, grow_b) };
-                    while grow_a && a0 + w < n && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_along(&o, &corners, 0)) {
+                    let (grow_a, grow_b) = if NO_MERGING.get() {
+                        (false, false)
+                    } else {
+                        (grow_a, grow_b)
+                    };
+                    while grow_a
+                        && a0 + w < n
+                        && mask[b0 * n + a0 + w].is_some_and(|o| cell.merges_along(&o, &corners, 0))
+                    {
                         w += 1;
                     }
                     while grow_b
                         && b0 + h < n
-                        && (a0..a0 + w).all(|a| mask[(b0 + h) * n + a].is_some_and(|o| cell.merges_along(&o, &corners, 1)))
+                        && (a0..a0 + w).all(|a| {
+                            mask[(b0 + h) * n + a]
+                                .is_some_and(|o| cell.merges_along(&o, &corners, 1))
+                        })
                     {
                         h += 1;
                     }
@@ -1720,11 +2019,19 @@ fn mesh_opaque_greedy(
                     }
 
                     let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
-                    let tile = if textured { cell.block.tile(Face::of_normal_y(normal.y as f32)) } else { cell.block.lod_tile() };
+                    let tile = if textured {
+                        cell.block.tile(Face::of_normal_y(normal.y as f32))
+                    } else {
+                        cell.block.lod_tile()
+                    };
                     let atlas_cell = tile.atlas_cell();
                     let color = |ao: f32, position: Vec3| {
                         // leaves share grass's tint, over a darker texture
-                        let tint = if tile.tinted() { grass_tint.at(position) * cell.tint } else { Vec3::ONE };
+                        let tint = if tile.tinted() {
+                            grass_tint.at(position) * cell.tint
+                        } else {
+                            Vec3::ONE
+                        };
                         let shade = match cell.block {
                             BlockType::Leaves => source.canopy_shade(position),
                             BlockType::Grass => source.forest_shade(position),
@@ -1736,14 +2043,24 @@ fn mesh_opaque_greedy(
                         let positions: [Vec3; 4] = std::array::from_fn(|j| {
                             let mut position = Vec3::from(template[j].position) + origin;
                             if let Some([floor, ceiling]) = cell.span {
-                                position.y = if template[j].position[1] > 0.0 { ceiling } else { floor };
+                                position.y = if template[j].position[1] > 0.0 {
+                                    ceiling
+                                } else {
+                                    floor
+                                };
                             }
                             position
                         });
                         let uvs = std::array::from_fn(|j| template[j].uv.map(|c| c * uv_tiles));
                         let colors = std::array::from_fn(|j| color(cell.ao[j], positions[j]));
                         let positions = positions.map(|p| p.to_array());
-                        buffers.push_tiled_quad(positions, template[0].normal, uvs, colors, cell.light);
+                        buffers.push_tiled_quad(
+                            positions,
+                            template[0].normal,
+                            uvs,
+                            colors,
+                            cell.light,
+                        );
                         continue;
                     }
 
@@ -1757,7 +2074,11 @@ fn mesh_opaque_greedy(
                         Some([floor, ceiling]) => {
                             corner.y = floor;
                             // the side's one step up spans just its trimmed height
-                            let up = if a_axis == 1 { &mut ta_step } else { &mut tb_step };
+                            let up = if a_axis == 1 {
+                                &mut ta_step
+                            } else {
+                                &mut tb_step
+                            };
                             up.y *= ceiling - floor;
                         }
                         None => {}
@@ -1767,7 +2088,11 @@ fn mesh_opaque_greedy(
                         let along = [i as f32, j as f32];
                         [0, 1].map(|k| {
                             let t = (uv_axes[k] == b_axis) as usize;
-                            (if uv_ascending[k] { along[t] } else { extent[t] - along[t] }) * uv_tiles
+                            (if uv_ascending[k] {
+                                along[t]
+                            } else {
+                                extent[t] - along[t]
+                            }) * uv_tiles
                         })
                     };
                     buffers.push_fan_quad(FanQuad {
@@ -1830,8 +2155,11 @@ fn mesh_blocks(
 
     // columns' water depths, shared between the corners that sample them
     let mut depths = HashMap::new();
-    let mut depth_of =
-        |coord: IVec3| *depths.entry(coord).or_insert_with(|| source.water_depth_blocks(coord));
+    let mut depth_of = |coord: IVec3| {
+        *depths
+            .entry(coord)
+            .or_insert_with(|| source.water_depth_blocks(coord))
+    };
 
     let size = CHUNK_SIZE as i32;
     let mut blocks = vec![BlockType::Air; (size * size * size) as usize];
@@ -1870,7 +2198,8 @@ fn mesh_blocks(
                 .iter()
                 .map(|v| {
                     let depth_factor = if is_top {
-                        vertex_water_depth(&mut depth_of, block_coord, i, v.position) / CHUNK_SIZE as f32
+                        vertex_water_depth(&mut depth_of, block_coord, i, v.position)
+                            / CHUNK_SIZE as f32
                     } else {
                         0.0
                     };
@@ -1882,15 +2211,29 @@ fn mesh_blocks(
                     } else {
                         (0.0, 1.0)
                     };
-                    [shore, depth_factor, if is_top { 1.0 } else { 0.0 }, shore_distance]
+                    [
+                        shore,
+                        depth_factor,
+                        if is_top { 1.0 } else { 0.0 },
+                        shore_distance,
+                    ]
                 })
                 .collect();
-            water.push_face(water_face_vertices[i], world_position, Tile::Water.atlas_cell(), &colors);
+            water.push_face(
+                water_face_vertices[i],
+                world_position,
+                Tile::Water.atlas_cell(),
+                &colors,
+            );
         }
     }
 
     mesh_opaque_greedy(
-        &GridView { size, blocks: &blocks, source },
+        &GridView {
+            size,
+            blocks: &blocks,
+            source,
+        },
         &face_vertices,
         &mut opaque,
         ambient_occlusion,
@@ -1906,10 +2249,20 @@ fn mesh_blocks(
     // past them, so wide a box would show through to its back where leaves' holes line up, so
     // they're filled
     let box_holes = cell_size <= BOX_TEXTURE_MAX_CELL;
-    opaque.boxes = Some((opaque.vertices.len(), if box_holes { TEXTURED } else { TEXTURED_SOLID }));
+    opaque.boxes = Some((
+        opaque.vertices.len(),
+        if box_holes { TEXTURED } else { TEXTURED_SOLID },
+    ));
     for tree_box in source.tree_boxes() {
-        let (centre, extent) = ((tree_box.min + tree_box.max) / 2.0, tree_box.max - tree_box.min);
-        let tint = if tree_box.block.lod_tile().tinted() { grass_tint.at(centre) * tree_box.tint } else { Vec3::ONE };
+        let (centre, extent) = (
+            (tree_box.min + tree_box.max) / 2.0,
+            tree_box.max - tree_box.min,
+        );
+        let tint = if tree_box.block.lod_tile().tinted() {
+            grass_tint.at(centre) * tree_box.tint
+        } else {
+            Vec3::ONE
+        };
         let faces = match tree_box.faces {
             BoxFaces::All => &face_vertices[..],
             BoxFaces::NoBottom => &face_vertices[..5],
@@ -1917,9 +2270,21 @@ fn mesh_blocks(
         };
         for face in faces {
             let tile = tree_box.block.tile(Face::of_normal_y(face[0].normal[1]));
-            let positions = std::array::from_fn(|j| (centre + Vec3::from(face[j].position) * extent).to_array());
-            let uvs = tiled_uvs(&positions, &std::array::from_fn(|j| face[j].uv), cell_size as f32);
-            opaque.push_tiled_quad(positions, face[0].normal, uvs, [tint.extend(tile.atlas_cell()).to_array(); 4], [BOX_LIGHT; 4]);
+            let positions = std::array::from_fn(|j| {
+                (centre + Vec3::from(face[j].position) * extent).to_array()
+            });
+            let uvs = tiled_uvs(
+                &positions,
+                &std::array::from_fn(|j| face[j].uv),
+                cell_size as f32,
+            );
+            opaque.push_tiled_quad(
+                positions,
+                face[0].normal,
+                uvs,
+                [tint.extend(tile.atlas_cell()).to_array(); 4],
+                [BOX_LIGHT; 4],
+            );
         }
     }
 
@@ -1939,18 +2304,17 @@ fn mesh_blocks(
 mod tests {
     use std::sync::Arc;
 
-    use bevy::math::{I64Vec3, IVec3, U16Vec3};
     use bevy::math::Vec3;
-    use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
+    use bevy::math::{I64Vec3, IVec3, U16Vec3};
     use bevy::platform::collections::HashMap;
+    use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
 
     use crate::block::{BlockType, Tile};
 
     use super::{
-        under_grass,
-        freeze_cell, generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, vertex_ao,
-        vertex_water_depth, water_depth, BlockSource, ChunkMeshes, ChunkNeighbourhood, GrassTint, LodBlocks, AO_STRENGTH,
-        FREEZE_TEMPERATURE, WATER_LEVEL,
+        freeze_cell, generate_chunk, generate_chunk_mesh, resolve_block, terrain_block,
+        under_grass, vertex_ao, vertex_water_depth, water_depth, BlockSource, ChunkMeshes,
+        ChunkNeighbourhood, GrassTint, LodBlocks, AO_STRENGTH, FREEZE_TEMPERATURE, WATER_LEVEL,
     };
     use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
     use crate::chunks::generate::noise::NoiseGenerator;
@@ -2061,8 +2425,7 @@ mod tests {
 
         // the corner between them, on the +z side: seen from each column's top face
         let deep = vertex_water_depth(&mut depth_of, IVec3::new(4, 5, 4), 4, [0.5, 0.5, 0.5]);
-        let shallow =
-            vertex_water_depth(&mut depth_of, IVec3::new(5, 5, 4), 4, [-0.5, 0.5, 0.5]);
+        let shallow = vertex_water_depth(&mut depth_of, IVec3::new(5, 5, 4), 4, [-0.5, 0.5, 0.5]);
         assert_eq!(deep, shallow);
         // averaged with the two dry columns on the +z side
         assert_eq!((5.0 + 2.0) / 4.0, deep);
@@ -2088,8 +2451,16 @@ mod tests {
         };
         let surface = |p: I64Vec2| {
             let top = regions.get_height(p.x, p.y).round() as i64 - 1;
-            let coord = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), top.div_euclid(16), p.y.div_euclid(16)));
-            let local = U16Vec3::new(p.x.rem_euclid(16) as u16, top.rem_euclid(16) as u16, p.y.rem_euclid(16) as u16);
+            let coord = ChunkCoordinate(I64Vec3::new(
+                p.x.div_euclid(16),
+                top.div_euclid(16),
+                p.y.div_euclid(16),
+            ));
+            let local = U16Vec3::new(
+                p.x.rem_euclid(16) as u16,
+                top.rem_euclid(16) as u16,
+                p.y.rem_euclid(16) as u16,
+            );
             generate_chunk(regions.clone(), coord).get_block_at(local)
         };
         assert_eq!(BlockType::Sand, surface(lowland(true)));
@@ -2103,7 +2474,12 @@ mod tests {
 
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let mut heights = regions.sampler();
-        let trees = trees_near(regions.noise(), &mut heights, I64Vec2::splat(-800), I64Vec2::splat(800));
+        let trees = trees_near(
+            regions.noise(),
+            &mut heights,
+            I64Vec2::splat(-800),
+            I64Vec2::splat(800),
+        );
         let chunk_of = |p: I64Vec3| p.div_euclid(I64Vec3::splat(16));
         let tree = trees
             .iter()
@@ -2116,32 +2492,50 @@ mod tests {
         let mut chunks = HashMap::new();
         let (low, high) = tree.bounds();
         let mut checked = 0;
-        tree.plant(low, 1, (IVec3::ZERO, (high - low).as_ivec3()), |cell, block| {
-            let p = low + cell.as_i64vec3();
-            let coord = chunk_of(p);
-            let chunk = chunks
-                .entry(coord)
-                .or_insert_with(|| generate_chunk(regions.clone(), ChunkCoordinate(coord)));
-            let local = (p - coord * 16).as_u16vec3();
-            let found = chunk.get_block_at(local);
-            // only another tree's log may stand in for this one's leaves
-            assert!(found == block || (block == BlockType::Leaves && found == BlockType::Log), "{block:?} at {p} is {found:?}");
-            checked += 1;
-        });
-        assert!(chunks.len() >= 2 && checked > 20, "{} blocks over {} chunks", checked, chunks.len());
+        tree.plant(
+            low,
+            1,
+            (IVec3::ZERO, (high - low).as_ivec3()),
+            |cell, block| {
+                let p = low + cell.as_i64vec3();
+                let coord = chunk_of(p);
+                let chunk = chunks
+                    .entry(coord)
+                    .or_insert_with(|| generate_chunk(regions.clone(), ChunkCoordinate(coord)));
+                let local = (p - coord * 16).as_u16vec3();
+                let found = chunk.get_block_at(local);
+                // only another tree's log may stand in for this one's leaves
+                assert!(
+                    found == block || (block == BlockType::Leaves && found == BlockType::Log),
+                    "{block:?} at {p} is {found:?}"
+                );
+                checked += 1;
+            },
+        );
+        assert!(
+            chunks.len() >= 2 && checked > 20,
+            "{} blocks over {} chunks",
+            checked,
+            chunks.len()
+        );
     }
 
     #[test]
     fn test_cold_sea_freezes_from_the_top_and_thicker_when_colder() {
         let ice_layers = |temperature| {
-            (WATER_LEVEL - 10..WATER_LEVEL).filter(|&y| terrain_block(y, 0, 0.0, temperature) == BlockType::Ice).count()
+            (WATER_LEVEL - 10..WATER_LEVEL)
+                .filter(|&y| terrain_block(y, 0, 0.0, temperature) == BlockType::Ice)
+                .count()
         };
         assert_eq!(0, ice_layers(0.5));
         assert_eq!(0, ice_layers(FREEZE_TEMPERATURE));
         assert_eq!(1, ice_layers(FREEZE_TEMPERATURE - 0.01));
         assert_eq!(3, ice_layers(0.0));
         assert_eq!(BlockType::Ice, terrain_block(WATER_LEVEL - 1, 0, 0.0, 0.0));
-        assert_eq!(BlockType::Water, terrain_block(WATER_LEVEL - 4, 0, 0.0, 0.0));
+        assert_eq!(
+            BlockType::Water,
+            terrain_block(WATER_LEVEL - 4, 0, 0.0, 0.0)
+        );
         assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0, 0.0));
     }
 
@@ -2149,18 +2543,36 @@ mod tests {
     fn test_wide_cells_freeze_when_they_reach_the_ice() {
         let top = WATER_LEVEL;
         assert_eq!(BlockType::Ice, freeze_cell(BlockType::Water, 0.0, top, 32));
-        assert_eq!(BlockType::Water, freeze_cell(BlockType::Water, 0.0, top - 32, 32));
-        assert_eq!(BlockType::Water, freeze_cell(BlockType::Water, 0.5, top, 32));
-        assert_eq!(BlockType::Stone, freeze_cell(BlockType::Stone, 0.0, top, 32));
+        assert_eq!(
+            BlockType::Water,
+            freeze_cell(BlockType::Water, 0.0, top - 32, 32)
+        );
+        assert_eq!(
+            BlockType::Water,
+            freeze_cell(BlockType::Water, 0.5, top, 32)
+        );
+        assert_eq!(
+            BlockType::Stone,
+            freeze_cell(BlockType::Stone, 0.0, top, 32)
+        );
     }
 
     #[test]
     fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
         let ground = WATER_LEVEL + 20;
         assert_eq!(BlockType::Snow, terrain_block(ground - 1, ground, 0.0, 0.1));
-        assert_eq!(BlockType::Grass, terrain_block(ground - 1, ground, 0.0, 0.5));
-        assert_eq!(BlockType::Snow, under_grass(BlockType::Ice, ground - 5, ground, 1));
-        assert_eq!(BlockType::Ice, under_grass(BlockType::Ice, ground - 1, ground, 1));
+        assert_eq!(
+            BlockType::Grass,
+            terrain_block(ground - 1, ground, 0.0, 0.5)
+        );
+        assert_eq!(
+            BlockType::Snow,
+            under_grass(BlockType::Ice, ground - 5, ground, 1)
+        );
+        assert_eq!(
+            BlockType::Ice,
+            under_grass(BlockType::Ice, ground - 1, ground, 1)
+        );
     }
 
     #[test]
@@ -2169,7 +2581,10 @@ mod tests {
         assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0, 0.5));
         assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0, 0.5));
         assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0, 0.5));
-        assert_eq!(BlockType::Grass, terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0, 0.5));
+        assert_eq!(
+            BlockType::Grass,
+            terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0, 0.5)
+        );
     }
 
     #[test]
@@ -2275,22 +2690,34 @@ mod tests {
     fn mesh_lod(lod: &LodBlocks) -> Mesh {
         let top = lod.base_y + (lod.size as i64 + 1) * lod.cell;
         let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
-        let light = Box::new(super::SkyLight::new(IVec3::splat(-1), IVec3::splat(lod.size + 2), super::sky_above(top, lod.cell), opacity));
+        let light = Box::new(super::SkyLight::new(
+            IVec3::splat(-1),
+            IVec3::splat(lod.size + 2),
+            super::sky_above(top, lod.cell),
+            opacity,
+        ));
         let tint = GrassTint::new(&NoiseGenerator::new(3), Vec3::ZERO, lod.cell as f32);
         super::mesh_blocks(lod, lod.cell, false, false, true, &tint, &light).opaque
     }
 
     // each face's normal and its vertices' positions
     fn faces(mesh: &Mesh) -> Vec<([f32; 3], Vec<[f32; 3]>)> {
-        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
             panic!("missing positions");
         };
-        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
             panic!("missing normals");
         };
         let mut faces: Vec<([f32; 3], Vec<[f32; 3]>)> = Vec::new();
         for (p, n) in positions.iter().zip(normals) {
-            match faces.iter_mut().find(|(normal, vs)| normal == n && vs.len() < 4) {
+            match faces
+                .iter_mut()
+                .find(|(normal, vs)| normal == n && vs.len() < 4)
+            {
                 Some((_, vs)) => vs.push(*p),
                 None => faces.push((*n, vec![*p])),
             }
@@ -2309,7 +2736,14 @@ mod tests {
 
     #[test]
     fn test_lod_surface_under_water_fills_its_cell() {
-        let LodBlocks { size, mut cells, tops, base_y, cell, .. } = sloped_lod();
+        let LodBlocks {
+            size,
+            mut cells,
+            tops,
+            base_y,
+            cell,
+            ..
+        } = sloped_lod();
         cells[LodBlocks::index(16, IVec3::new(2, 2, 2))] = BlockType::Water;
         // nor does one beside water, which would show a gap under the water's side
         cells[LodBlocks::index(16, IVec3::new(6, 1, 2))] = BlockType::Water;
@@ -2328,7 +2762,10 @@ mod tests {
             .flat_map(|(_, vs)| vs.iter().map(|v| v[1]))
             .collect();
         assert!(tops.contains(&1.0) && tops.contains(&1.25));
-        assert!(tops.iter().all(|&y| y == 1.0 || y == 1.25), "tops at {tops:?}");
+        assert!(
+            tops.iter().all(|&y| y == 1.0 || y == 1.25),
+            "tops at {tops:?}"
+        );
         // the higher ground's side, facing the lower, covers just the step between them
         let step: Vec<_> = faces
             .iter()
@@ -2339,34 +2776,53 @@ mod tests {
         let vertices: usize = step.iter().map(|(_, vs)| vs.len()).sum();
         assert!(vertices < 16 * 4, "{vertices} vertices along the step");
         for (_, vs) in step {
-            assert!(vs.iter().all(|v| v[1] == 1.0 || v[1] == 1.25), "step at {vs:?}");
+            assert!(
+                vs.iter().all(|v| v[1] == 1.0 || v[1] == 1.25),
+                "step at {vs:?}"
+            );
         }
     }
 
     #[test]
     fn test_lod_steps_are_lit_by_the_air_above_the_lower_ground() {
         let mesh = mesh_lod(&sloped_lod());
-        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
             panic!("missing positions");
         };
-        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
             panic!("missing normals");
         };
-        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1)
+        else {
             panic!("missing light");
         };
         let step: Vec<f32> = (0..positions.len())
-            .filter(|&i| normals[i] == [-1.0, 0.0, 0.0] && positions[i][0] == 7.5 && positions[i][1] >= 1.0)
+            .filter(|&i| {
+                normals[i] == [-1.0, 0.0, 0.0] && positions[i][0] == 7.5 && positions[i][1] >= 1.0
+            })
             .map(|i| lights[i][0])
             .collect();
         assert!(!step.is_empty());
-        assert!(step.iter().all(|&l| l == 1.0), "steps under open sky lit {step:?}");
+        assert!(
+            step.iter().all(|&l| l == 1.0),
+            "steps under open sky lit {step:?}"
+        );
     }
 
     fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
         // well above the sea, under open sky
         let coord = ChunkCoordinate(I64Vec3::new(0, 40, 0));
-        generate_chunk_mesh(Arc::new(chunk), vec![None; 26], coord, &NoiseGenerator::new(3), false)
+        generate_chunk_mesh(
+            Arc::new(chunk),
+            vec![None; 26],
+            coord,
+            &NoiseGenerator::new(3),
+            false,
+        )
     }
 
     fn mesh_vertices(chunk: ChunkData) -> usize {
@@ -2391,12 +2847,19 @@ mod tests {
         // each quad is a centre point plus a vertex per block step round its border: the top
         // is 16x16, the four sides 16x1. The underside shades as light creeps in under it.
         let mesh = mesh_chunk(chunk).opaque;
-        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
             panic!("missing normals");
         };
         let facing = |n: [f32; 3]| normals.iter().filter(|&&v| v == n).count();
         assert_eq!(1 + 64, facing([0.0, 1.0, 0.0]));
-        for side in [[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, -1.0]] {
+        for side in [
+            [1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -1.0],
+        ] {
             assert_eq!(1 + 34, facing(side));
         }
     }
@@ -2423,10 +2886,12 @@ mod tests {
     #[test]
     fn test_merged_quads_tile_their_uvs_and_carry_the_atlas_cell() {
         let mesh = mesh_chunk(floor_chunk()).opaque;
-        let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0) else {
+        let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
             panic!("missing uvs");
         };
-        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
             panic!("missing colors");
         };
         let tiles = uvs.iter().flatten().fold(0.0f32, |m, &c| m.max(c));
@@ -2435,10 +2900,14 @@ mod tests {
     }
 
     fn top_face_triangles(mesh: &Mesh) -> Vec<f32> {
-        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
             panic!("missing positions");
         };
-        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
             panic!("missing normals");
         };
         let Some(Indices::U32(indices)) = mesh.indices() else {
@@ -2462,13 +2931,17 @@ mod tests {
         let single = mesh_chunk(single).opaque;
         let merged = mesh_chunk(floor_chunk()).opaque;
         let expected = top_face_triangles(&single)[0].signum();
-        assert!(top_face_triangles(&merged).iter().all(|area| area.signum() == expected));
+        assert!(top_face_triangles(&merged)
+            .iter()
+            .all(|area| area.signum() == expected));
     }
 
     #[test]
     fn test_merged_quad_borders_share_vertices_with_unit_faces() {
         let mesh = mesh_chunk(floor_chunk()).opaque;
-        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
             panic!("missing positions");
         };
         for step in 0..=16 {
@@ -2478,7 +2951,8 @@ mod tests {
     }
 
     fn tints(mesh: &Mesh) -> Vec<Vec3> {
-        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
             panic!("missing colors");
         };
         colors.iter().map(|c| Vec3::new(c[0], c[1], c[2])).collect()
@@ -2497,7 +2971,10 @@ mod tests {
     #[test]
     fn test_grass_top_cell_matches_world_shader() {
         let shader = std::fs::read_to_string("assets/shaders/world.wesl").unwrap();
-        assert!(shader.contains(&format!("const GRASS_TOP_CELL: f32 = {:.1};", Tile::GrassTop.atlas_cell())));
+        assert!(shader.contains(&format!(
+            "const GRASS_TOP_CELL: f32 = {:.1};",
+            Tile::GrassTop.atlas_cell()
+        )));
     }
 
     #[test]
@@ -2506,8 +2983,13 @@ mod tests {
         chunk.set_block_at(U16Vec3::new(10, 4, 10), BlockType::Grass);
         chunk.set_block_at(U16Vec3::new(11, 4, 10), BlockType::Grass);
         let mesh = mesh_chunk(chunk).opaque;
-        let (Some(VertexAttributeValues::Float32x4(colors)), Some(VertexAttributeValues::Float32x2(modes))) =
-            (mesh.attribute(Mesh::ATTRIBUTE_COLOR), mesh.attribute(Mesh::ATTRIBUTE_UV_1))
+        let (
+            Some(VertexAttributeValues::Float32x4(colors)),
+            Some(VertexAttributeValues::Float32x2(modes)),
+        ) = (
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR),
+            mesh.attribute(Mesh::ATTRIBUTE_UV_1),
+        )
         else {
             panic!("mesh lacks colours or uv_b");
         };
@@ -2538,14 +3020,17 @@ mod tests {
         let mut chunk = ChunkData::default();
         chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Log);
         let mesh = mesh_chunk(chunk).opaque;
-        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
             panic!("missing colors");
         };
         let count = |tile: Tile| colors.iter().filter(|c| c[3] == tile.atlas_cell()).count();
         assert_eq!(8, count(Tile::LogEnd));
         assert_eq!(16, count(Tile::LogBark));
         let merged = mesh_chunk(floor_chunk()).opaque;
-        let Some(VertexAttributeValues::Float32x4(colors)) = merged.attribute(Mesh::ATTRIBUTE_COLOR) else {
+        let Some(VertexAttributeValues::Float32x4(colors)) =
+            merged.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
             panic!("missing colors");
         };
         assert!(colors.iter().all(|c| c[3] == Tile::Stone.atlas_cell()));
@@ -2554,29 +3039,43 @@ mod tests {
     #[test]
     fn test_grass_tint_matches_along_shared_edges() {
         let noise = NoiseGenerator::new(3);
-        let chunk_tint = |x: i64, z: i64| GrassTint::new(&noise, Vec3::new(x as f32, 0.0, z as f32) * 16.0, 1.0);
+        let chunk_tint =
+            |x: i64, z: i64| GrassTint::new(&noise, Vec3::new(x as f32, 0.0, z as f32) * 16.0, 1.0);
         let (here, east, south) = (chunk_tint(5, 5), chunk_tint(6, 5), chunk_tint(5, 6));
         for step in 0..=16 {
             let along = step as f32 - 0.5;
-            assert!(here.at(Vec3::new(15.5, 0.0, along)).abs_diff_eq(east.at(Vec3::new(-0.5, 0.0, along)), 1e-5));
-            assert!(here.at(Vec3::new(along, 0.0, 15.5)).abs_diff_eq(south.at(Vec3::new(along, 0.0, -0.5)), 1e-5));
+            assert!(here
+                .at(Vec3::new(15.5, 0.0, along))
+                .abs_diff_eq(east.at(Vec3::new(-0.5, 0.0, along)), 1e-5));
+            assert!(here
+                .at(Vec3::new(along, 0.0, 15.5))
+                .abs_diff_eq(south.at(Vec3::new(along, 0.0, -0.5)), 1e-5));
         }
 
         // a LOD node four chunks across, its local units 4 blocks wide, starting at chunk (4, 4)
         let node = GrassTint::new(&noise, Vec3::new(64.0, 0.0, 64.0) + Vec3::splat(1.5), 4.0);
-        assert!(node.at(Vec3::splat(-0.5)).abs_diff_eq(chunk_tint(4, 4).at(Vec3::splat(-0.5)), 1e-5));
-        assert!(node.at(Vec3::splat(15.5)).abs_diff_eq(chunk_tint(7, 7).at(Vec3::splat(15.5)), 1e-5));
+        assert!(node
+            .at(Vec3::splat(-0.5))
+            .abs_diff_eq(chunk_tint(4, 4).at(Vec3::splat(-0.5)), 1e-5));
+        assert!(node
+            .at(Vec3::splat(15.5))
+            .abs_diff_eq(chunk_tint(7, 7).at(Vec3::splat(15.5)), 1e-5));
     }
 
     // top-face sky light at each vertex, by position
     fn top_lights(mesh: &Mesh) -> Vec<([f32; 3], f32)> {
-        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
             panic!("missing positions");
         };
-        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
             panic!("missing normals");
         };
-        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1)
+        else {
             panic!("missing light");
         };
         (0..positions.len())
@@ -2603,8 +3102,14 @@ mod tests {
         let lights = top_lights(&mesh_chunk(chunk).opaque);
         let floor: Vec<_> = lights.iter().filter(|(p, _)| p[1] == 0.5).collect();
         let (darkest, _) = floor.iter().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
-        assert!(floor.iter().any(|(_, l)| *l == 1.0), "nowhere on the floor is in the open");
-        assert!((4.5..=11.5).contains(&darkest[0]) && (4.5..=11.5).contains(&darkest[2]), "darkest at {darkest:?}");
+        assert!(
+            floor.iter().any(|(_, l)| *l == 1.0),
+            "nowhere on the floor is in the open"
+        );
+        assert!(
+            (4.5..=11.5).contains(&darkest[0]) && (4.5..=11.5).contains(&darkest[2]),
+            "darkest at {darkest:?}"
+        );
         let mut levels: Vec<f32> = floor.iter().map(|(_, l)| *l).collect();
         levels.sort_by(f32::total_cmp);
         levels.dedup();
@@ -2624,10 +3129,16 @@ mod tests {
             .find(|p| (150.0..250.0).contains(&(noise.get(*p) - WATER_LEVEL as f64)))
             .expect("no mountainside near the centre");
         let height = noise.get(p) as i64;
-        let chunk = ChunkCoordinate(I64Vec3::new(p.x.div_euclid(16), height.div_euclid(16), p.y.div_euclid(16)));
+        let chunk = ChunkCoordinate(I64Vec3::new(
+            p.x.div_euclid(16),
+            height.div_euclid(16),
+            p.y.div_euclid(16),
+        ));
         let regions = Arc::new(RegionStore::new(noise));
         let key = crate::chunks::lod::LodKey::containing(chunk, 1);
-        let mesh = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
+        let mesh = super::generate_lod_mesh(regions, key)
+            .expect("no mesh")
+            .opaque;
         let lights = top_lights(&mesh);
         assert!(!lights.is_empty());
         let dark: Vec<_> = lights.iter().filter(|(_, l)| *l < 1.0).collect();
@@ -2636,7 +3147,8 @@ mod tests {
 
     // whether each vertex draws its block's mean colour instead of its texture, see `world.wesl`
     fn untextured_flags(mesh: &Mesh) -> Vec<f32> {
-        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1)
+        else {
             panic!("missing light");
         };
         lights.iter().map(|l| l[1]).collect()
@@ -2658,9 +3170,16 @@ mod tests {
         let regions = Arc::new(RegionStore::new(noise));
         let key = crate::chunks::lod::LodKey::containing(chunk, 5);
         assert!(key.cell_size() > super::BOX_TEXTURE_MAX_CELL);
-        let flags = untextured_flags(&super::generate_lod_mesh(regions, key).expect("no mesh").opaque);
+        let flags = untextured_flags(
+            &super::generate_lod_mesh(regions, key)
+                .expect("no mesh")
+                .opaque,
+        );
         // but for tree boxes, textured with their leaves' holes filled, which come last
-        let ground = flags.iter().take_while(|&&f| f == super::UNTEXTURED).count();
+        let ground = flags
+            .iter()
+            .take_while(|&&f| f == super::UNTEXTURED)
+            .count();
         assert!(ground > 0 && flags[ground..].iter().all(|&f| f == super::TEXTURED_SOLID));
     }
 
@@ -2668,14 +3187,24 @@ mod tests {
     fn test_tree_boxes_stay_textured_up_to_eight_wide_cells_with_a_tile_a_block() {
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let mut heights = regions.sampler();
-        let trees = crate::chunks::generate::trees::trees_near(regions.noise(), &mut heights, bevy::math::I64Vec2::splat(-300), bevy::math::I64Vec2::splat(300));
+        let trees = crate::chunks::generate::trees::trees_near(
+            regions.noise(),
+            &mut heights,
+            bevy::math::I64Vec2::splat(-300),
+            bevy::math::I64Vec2::splat(300),
+        );
         let tree = &trees[0];
         let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
         let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), 3);
         assert!(key.cell_size() <= super::BOX_TEXTURE_MAX_CELL);
-        let opaque = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
+        let opaque = super::generate_lod_mesh(regions, key)
+            .expect("no mesh")
+            .opaque;
         let flags = untextured_flags(&opaque);
-        let VertexAttributeValues::Float32x2(uvs) = opaque.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() else { panic!() };
+        let VertexAttributeValues::Float32x2(uvs) = opaque.attribute(Mesh::ATTRIBUTE_UV_0).unwrap()
+        else {
+            panic!()
+        };
         // boxes come last: textured, and counting more than one tile across a crown
         let boxed = flags.len() - flags.iter().rev().take_while(|&&f| f == 0.0).count();
         assert!(boxed < flags.len(), "no textured tree boxes");
@@ -2693,13 +3222,17 @@ mod tests {
         let regions = Arc::new(RegionStore::new(noise));
         let key = crate::chunks::lod::LodKey::containing(chunk, 2);
         assert_eq!(4, key.cell_size());
-        let mesh = super::generate_lod_mesh(regions, key).expect("no mesh").opaque;
+        let mesh = super::generate_lod_mesh(regions, key)
+            .expect("no mesh")
+            .opaque;
         let flags = untextured_flags(&mesh);
         // grass sides mark their shade instead, see `MeshBuffers::tint_grass_sides`
         assert!(!flags.is_empty() && flags.iter().all(|&f| f == 0.0 || f < 0.0));
         // a face one cell wide spans four tiles, so none comes out a tile wide
         let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap();
-        let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else { panic!() };
+        let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else {
+            panic!()
+        };
         let tiles = |axis: usize| uvs.iter().map(|uv| uv[axis]).fold(0.0f32, f32::max);
         assert!(tiles(0) >= 4.0 || tiles(1) >= 4.0);
     }
@@ -2730,12 +3263,33 @@ mod tests {
 
     // Each vertex's position, normal, colour and light.
     fn shaded_vertices(mesh: &Mesh) -> Vec<(Vec3, Vec3, Vec3, f32)> {
-        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
-        let normals = mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().as_float3().unwrap();
-        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!() };
-        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else { panic!() };
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let normals = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!()
+        };
+        let Some(VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1)
+        else {
+            panic!()
+        };
         (0..positions.len())
-            .map(|i| (Vec3::from(positions[i]), Vec3::from(normals[i]), Vec3::new(colors[i][0], colors[i][1], colors[i][2]), lights[i][0]))
+            .map(|i| {
+                (
+                    Vec3::from(positions[i]),
+                    Vec3::from(normals[i]),
+                    Vec3::new(colors[i][0], colors[i][1], colors[i][2]),
+                    lights[i][0],
+                )
+            })
             .collect()
     }
 
@@ -2750,7 +3304,9 @@ mod tests {
         let merged = mesh_chunk(walled_chunk()).opaque;
         assert!(merged.count_vertices() < unmerged.count_vertices());
         let vertices = shaded_vertices(&merged);
-        let Some(Indices::U32(indices)) = merged.indices() else { panic!() };
+        let Some(Indices::U32(indices)) = merged.indices() else {
+            panic!()
+        };
         // every corner of every face drawn alone is shaded the same by the merged quad over it
         for (p, normal, color, light) in shaded_vertices(&unmerged) {
             let found = indices.chunks(3).find_map(|tri| {
@@ -2760,15 +3316,31 @@ mod tests {
                 }
                 // barycentric weights of p in the triangle
                 let (v0, v1, v2) = (b.0 - a.0, c.0 - a.0, p - a.0);
-                let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
+                let (d00, d01, d11, d20, d21) =
+                    (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
                 let denom = d00 * d11 - d01 * d01;
-                let (wb, wc) = ((d11 * d20 - d01 * d21) / denom, (d00 * d21 - d01 * d20) / denom);
+                let (wb, wc) = (
+                    (d11 * d20 - d01 * d21) / denom,
+                    (d00 * d21 - d01 * d20) / denom,
+                );
                 let wa = 1.0 - wb - wc;
-                (wa.min(wb).min(wc) > -1e-4).then(|| (a.2 * wa + b.2 * wb + c.2 * wc, a.3 * wa + b.3 * wb + c.3 * wc))
+                (wa.min(wb).min(wc) > -1e-4).then(|| {
+                    (
+                        a.2 * wa + b.2 * wb + c.2 * wc,
+                        a.3 * wa + b.3 * wb + c.3 * wc,
+                    )
+                })
             });
-            let (found_color, found_light) = found.unwrap_or_else(|| panic!("nothing drawn at {p} facing {normal}"));
-            assert!((found_color - color).abs().max_element() < 2e-3, "at {p} facing {normal}: {found_color} for {color}");
-            assert!((found_light - light).abs() < 1e-4, "at {p} facing {normal}: light {found_light} for {light}");
+            let (found_color, found_light) =
+                found.unwrap_or_else(|| panic!("nothing drawn at {p} facing {normal}"));
+            assert!(
+                (found_color - color).abs().max_element() < 2e-3,
+                "at {p} facing {normal}: {found_color} for {color}"
+            );
+            assert!(
+                (found_light - light).abs() < 1e-4,
+                "at {p} facing {normal}: light {found_light} for {light}"
+            );
         }
     }
 
@@ -2798,10 +3370,14 @@ mod tests {
 
     // how many vertices lie on faces in the plane at `plane` across their normal's axis
     fn vertices_in_plane(mesh: &Mesh, plane: f32) -> usize {
-        let Some(VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else {
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
             panic!("missing positions");
         };
-        let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else {
+        let Some(VertexAttributeValues::Float32x3(normals)) =
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+        else {
             panic!("missing normals");
         };
         positions
@@ -2827,15 +3403,22 @@ mod tests {
         blocks.push((IVec3::new(6, 7, 7), BlockType::Log));
         let faces = faces(&mesh_lod(&lod_with(&blocks)));
         // the log's face into the leaves stays: only leaves hide leaves
-        assert!(faces.iter().any(|(n, vs)| *n == [1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 6.5)));
+        assert!(faces
+            .iter()
+            .any(|(n, vs)| *n == [1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 6.5)));
     }
 
     #[test]
     fn test_untextured_leaves_on_the_nodes_edge_keep_their_faces() {
         // past the edge the leaves may be drawn at another detail, with none just there
-        let lod = lod_with(&[(IVec3::new(15, 4, 4), BlockType::Leaves), (IVec3::new(16, 4, 4), BlockType::Leaves)]);
+        let lod = lod_with(&[
+            (IVec3::new(15, 4, 4), BlockType::Leaves),
+            (IVec3::new(16, 4, 4), BlockType::Leaves),
+        ]);
         let faces = faces(&mesh_lod(&lod));
-        assert!(faces.iter().any(|(n, vs)| *n == [1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 15.5)));
+        assert!(faces
+            .iter()
+            .any(|(n, vs)| *n == [1.0, 0.0, 0.0] && vs.iter().all(|v| v[0] == 15.5)));
     }
 
     fn leaf_cube_chunk() -> ChunkData {
@@ -2856,7 +3439,14 @@ mod tests {
     #[test]
     fn test_full_detail_solid_leaves_hide_the_leaves_behind_them() {
         let coord = ChunkCoordinate(I64Vec3::new(0, 40, 0));
-        let mesh = generate_chunk_mesh(Arc::new(leaf_cube_chunk()), vec![None; 26], coord, &NoiseGenerator::new(3), true).opaque;
+        let mesh = generate_chunk_mesh(
+            Arc::new(leaf_cube_chunk()),
+            vec![None; 26],
+            coord,
+            &NoiseGenerator::new(3),
+            true,
+        )
+        .opaque;
         assert_eq!(0, vertices_in_plane(&mesh, 4.5));
         assert!(vertices_in_plane(&mesh, 3.5) > 0 && vertices_in_plane(&mesh, 5.5) > 0);
     }
@@ -2883,16 +3473,26 @@ mod tests {
         let tint = super::GrassTint::new(&noise, Vec3::ZERO, 1.0);
         let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
         let light = std::cell::LazyCell::new(|| {
-            crate::chunks::generate::light::SkyLight::new(IVec3::splat(-1), IVec3::splat(18), crate::chunks::generate::light::MAX_LIGHT, opacity)
+            crate::chunks::generate::light::SkyLight::new(
+                IVec3::splat(-1),
+                IVec3::splat(18),
+                crate::chunks::generate::light::MAX_LIGHT,
+                opacity,
+            )
         });
         let mesh = super::mesh_blocks(&lod, 1, true, false, true, &tint, &light).opaque;
-        let Some(bevy::render::mesh::VertexAttributeValues::Float32x2(lights)) = mesh.attribute(Mesh::ATTRIBUTE_UV_1) else {
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x2(lights)) =
+            mesh.attribute(Mesh::ATTRIBUTE_UV_1)
+        else {
             panic!("no light on the mesh");
         };
         // the top and the four walls, each from a corner to a corner of the node
         assert!(lights.len() >= 4 * 5);
         let darkest = lights.iter().map(|l| l[0]).fold(f32::MAX, f32::min);
-        assert!(darkest > 0.6, "a vertex is lit {darkest}, so a skirt wall is dark");
+        assert!(
+            darkest > 0.6,
+            "a vertex is lit {darkest}, so a skirt wall is dark"
+        );
     }
 
     #[test]
@@ -2909,7 +3509,13 @@ mod tests {
             }
         }
         // the ground's top is in the node above, 3 cells over the top row
-        let lod = LodBlocks::new(size, cells.clone(), vec![size as i64 + 3; padded * padded], 0, 1);
+        let lod = LodBlocks::new(
+            size,
+            cells.clone(),
+            vec![size as i64 + 3; padded * padded],
+            0,
+            1,
+        );
         assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 8, 4)));
         // ground ending in the top row: the cells within two of it have walls, though the top row is solid
         let lod = LodBlocks::new(size, cells, vec![size as i64 + 1; padded * padded], 0, 1);
@@ -2926,7 +3532,10 @@ mod tests {
             for x in -6..6i64 {
                 for z in -6..6i64 {
                     let width = 1i64 << level;
-                    let key = LodKey { level, coord: I64Vec3::new(x, (WATER_LEVEL / 16).div_euclid(width), z) };
+                    let key = LodKey {
+                        level,
+                        coord: I64Vec3::new(x, (WATER_LEVEL / 16).div_euclid(width), z),
+                    };
                     let lod = LodBlocks::sample(&regions, key);
                     for cx in 0..lod.size {
                         for cz in 0..lod.size {
@@ -2978,7 +3587,9 @@ mod tests {
     #[test]
     fn test_buried_chunk_has_no_geometry() {
         let mut stone = ChunkData::default();
-        for (x, y, z) in (0..16).flat_map(|x| (0..16).flat_map(move |y| (0..16).map(move |z| (x, y, z)))) {
+        for (x, y, z) in
+            (0..16).flat_map(|x| (0..16).flat_map(move |y| (0..16).map(move |z| (x, y, z))))
+        {
             stone.set_block_at(U16Vec3::new(x, y, z), BlockType::Stone);
         }
         let stone = Arc::new(stone);
@@ -3001,8 +3612,15 @@ mod tests {
             }
         }
         let mesh = mesh_chunk(chunk).opaque;
-        let (Some(VertexAttributeValues::Float32x3(positions)), Some(VertexAttributeValues::Float32x3(normals)), Some(VertexAttributeValues::Float32x2(uvs))) =
-            (mesh.attribute(Mesh::ATTRIBUTE_POSITION), mesh.attribute(Mesh::ATTRIBUTE_NORMAL), mesh.attribute(Mesh::ATTRIBUTE_UV_0))
+        let (
+            Some(VertexAttributeValues::Float32x3(positions)),
+            Some(VertexAttributeValues::Float32x3(normals)),
+            Some(VertexAttributeValues::Float32x2(uvs)),
+        ) = (
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0),
+        )
         else {
             panic!("mesh lacks positions, normals or uvs");
         };
@@ -3011,7 +3629,12 @@ mod tests {
         for ((p, n), uv) in positions.iter().zip(normals).zip(uvs) {
             if n[1] == 0.0 {
                 sides += 1;
-                assert!((p[1] + uv[1] - 5.5).abs() < 1e-4, "normal {n:?}: v {} at y {}", uv[1], p[1]);
+                assert!(
+                    (p[1] + uv[1] - 5.5).abs() < 1e-4,
+                    "normal {n:?}: v {} at y {}",
+                    uv[1],
+                    p[1]
+                );
             }
         }
         assert!(sides > 0);
@@ -3051,32 +3674,66 @@ mod tests {
         use bevy::math::I64Vec2;
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let mut heights = regions.sampler();
-        let trees = trees_near(regions.noise(), &mut heights, I64Vec2::splat(-300), I64Vec2::splat(300));
-        let near = |a: &crate::chunks::generate::trees::Tree, b: &crate::chunks::generate::trees::Tree| {
+        let trees = trees_near(
+            regions.noise(),
+            &mut heights,
+            I64Vec2::splat(-300),
+            I64Vec2::splat(300),
+        );
+        let near = |a: &crate::chunks::generate::trees::Tree,
+                    b: &crate::chunks::generate::trees::Tree| {
             (a.base.x - b.base.x).abs() < 40 && (a.base.z - b.base.z).abs() < 40
         };
-        let tree = trees.iter().find(|t| trees.iter().filter(|o| near(t, o)).count() == 1).expect("no lone tree");
+        let tree = trees
+            .iter()
+            .find(|t| trees.iter().filter(|o| near(t, o)).count() == 1)
+            .expect("no lone tree");
         let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
         for level in [1u8, 2, 3, 4, 5] {
-            let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), level);
+            let key =
+                LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), level);
             let blocks = LodBlocks::sample(&regions, key);
             let cell = key.cell_size();
-            let leaf_cells = blocks.cells.iter().filter(|&&c| c == BlockType::Leaves).count();
-            let crown_boxes = blocks.boxes.iter().filter(|b| b.block == BlockType::Leaves).count();
+            let leaf_cells = blocks
+                .cells
+                .iter()
+                .filter(|&&c| c == BlockType::Leaves)
+                .count();
+            let crown_boxes = blocks
+                .boxes
+                .iter()
+                .filter(|b| b.block == BlockType::Leaves)
+                .count();
             if cell < super::BOX_CROWN_CELL {
-                assert!(leaf_cells > 0, "no leaf cells at level {level}, cells {cell} blocks wide");
+                assert!(
+                    leaf_cells > 0,
+                    "no leaf cells at level {level}, cells {cell} blocks wide"
+                );
             } else {
                 // a crown is boxes of its real size, never a cell's worth of cube, and fewer the farther out
                 assert_eq!(0, leaf_cells);
                 let wanted = tree.crown_boxes(super::crown_layers(cell));
-                assert!(!wanted.is_empty() && crown_boxes >= wanted.len(), "{crown_boxes} crown boxes of {} at level {level}", wanted.len());
+                assert!(
+                    !wanted.is_empty() && crown_boxes >= wanted.len(),
+                    "{crown_boxes} crown boxes of {} at level {level}",
+                    wanted.len()
+                );
                 for (min, max) in &wanted {
                     let size = (*max - *min).as_vec3();
-                    let found = blocks.boxes.iter().filter(|b| b.block == BlockType::Leaves).any(|b| ((b.max - b.min) * cell as f32 - size).abs().max_element() < 1e-3);
+                    let found = blocks
+                        .boxes
+                        .iter()
+                        .filter(|b| b.block == BlockType::Leaves)
+                        .any(|b| ((b.max - b.min) * cell as f32 - size).abs().max_element() < 1e-3);
                     assert!(found, "no crown box of {size:?} at level {level}");
                 }
-                let wanted = wanted.iter().fold(Vec3::ZERO, |w, (min, max)| w.max((*max - *min).as_vec3()));
-                assert!(wanted.x < 20.0, "crown {wanted:?} wider than a crown should be");
+                let wanted = wanted
+                    .iter()
+                    .fold(Vec3::ZERO, |w, (min, max)| w.max((*max - *min).as_vec3()));
+                assert!(
+                    wanted.x < 20.0,
+                    "crown {wanted:?} wider than a crown should be"
+                );
             }
         }
     }
@@ -3087,34 +3744,77 @@ mod tests {
         use bevy::math::I64Vec2;
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let mut heights = regions.sampler();
-        let trees = trees_near(regions.noise(), &mut heights, I64Vec2::splat(-300), I64Vec2::splat(300));
-        let near = |a: &crate::chunks::generate::trees::Tree, b: &crate::chunks::generate::trees::Tree| {
+        let trees = trees_near(
+            regions.noise(),
+            &mut heights,
+            I64Vec2::splat(-300),
+            I64Vec2::splat(300),
+        );
+        let near = |a: &crate::chunks::generate::trees::Tree,
+                    b: &crate::chunks::generate::trees::Tree| {
             (a.base.x - b.base.x).abs() < 40 && (a.base.z - b.base.z).abs() < 40
         };
-        let tree = trees.iter().find(|t| trees.iter().filter(|o| near(t, o)).count() == 1).expect("no lone tree");
+        let tree = trees
+            .iter()
+            .find(|t| trees.iter().filter(|o| near(t, o)).count() == 1)
+            .expect("no lone tree");
         for level in [2u8, 3, 4] {
-            let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), level);
+            let key = LodKey::containing(
+                ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))),
+                level,
+            );
             let blocks = LodBlocks::sample(&regions, key);
             let cell = key.cell_size() as f32;
             let at = |block: i64, min: i64| (block - min) as f32 / cell - 0.5;
             let (min_x, min_z) = (key.min_block().x, key.min_block().z);
-            let trunk = blocks.boxes.iter().filter(|b| b.block == BlockType::Log).find(|t| {
-                (t.min.x - at(tree.base.x, min_x)).abs() < 1e-4
-                    && (t.min.z - at(tree.base.z, min_z)).abs() < 1e-4
-                    && (t.max.x - t.min.x - tree.width() as f32 / cell).abs() < 1e-4
-            });
-            assert!(trunk.is_some(), "no trunk box at level {level}: {:?}", blocks.boxes);
+            let trunk = blocks
+                .boxes
+                .iter()
+                .filter(|b| b.block == BlockType::Log)
+                .find(|t| {
+                    (t.min.x - at(tree.base.x, min_x)).abs() < 1e-4
+                        && (t.min.z - at(tree.base.z, min_z)).abs() < 1e-4
+                        && (t.max.x - t.min.x - tree.width() as f32 / cell).abs() < 1e-4
+                });
+            assert!(
+                trunk.is_some(),
+                "no trunk box at level {level}: {:?}",
+                blocks.boxes
+            );
             let trunk = trunk.unwrap();
             assert!(((trunk.max.y - trunk.min.y) * cell - tree.trunk as f32).abs() < 1e-3);
             // and no log cells, which would be a pillar several times too thick
-            assert_eq!(0, blocks.cells.iter().filter(|&&c| c == BlockType::Log).count());
+            assert_eq!(
+                0,
+                blocks
+                    .cells
+                    .iter()
+                    .filter(|&&c| c == BlockType::Log)
+                    .count()
+            );
             // meshed, the box is a few quads standing out of the ground's
-            let lone = LodBlocks { boxes: vec![*trunk], ..LodBlocks::new(16, vec![BlockType::Air; 18 * 18 * 18], vec![0; 18 * 18], 0, key.cell_size()) };
+            let lone = LodBlocks {
+                boxes: vec![*trunk],
+                ..LodBlocks::new(
+                    16,
+                    vec![BlockType::Air; 18 * 18 * 18],
+                    vec![0; 18 * 18],
+                    0,
+                    key.cell_size(),
+                )
+            };
             let tint = super::GrassTint::new(regions.noise(), Vec3::ZERO, 1.0);
             let light = std::cell::LazyCell::new(|| {
-                crate::chunks::generate::light::SkyLight::new(IVec3::splat(-1), IVec3::splat(18), crate::chunks::generate::light::MAX_LIGHT, vec![0; 18 * 18 * 18])
+                crate::chunks::generate::light::SkyLight::new(
+                    IVec3::splat(-1),
+                    IVec3::splat(18),
+                    crate::chunks::generate::light::MAX_LIGHT,
+                    vec![0; 18 * 18 * 18],
+                )
             });
-            let mesh = super::mesh_blocks(&lone, key.cell_size(), false, false, true, &tint, &light).opaque;
+            let mesh =
+                super::mesh_blocks(&lone, key.cell_size(), false, false, true, &tint, &light)
+                    .opaque;
             // its foot is in the ground and its top in the crown, so only its sides show
             assert_eq!(4 * 4, mesh.count_vertices());
         }
@@ -3125,44 +3825,82 @@ mod tests {
         use crate::chunks::generate::trees::trees_near;
         use bevy::math::I64Vec2;
         // the search is slow, and every caller's world is seed 5's
-        static FOREST: std::sync::OnceLock<(I64Vec3, Vec<crate::chunks::generate::trees::Tree>)> = std::sync::OnceLock::new();
+        static FOREST: std::sync::OnceLock<(I64Vec3, Vec<crate::chunks::generate::trees::Tree>)> =
+            std::sync::OnceLock::new();
         assert_eq!(5, regions.noise().seed());
-        FOREST.get_or_init(|| {
-        let mut heights = regions.sampler();
-        let corner = (-4..4)
-            .flat_map(|x| (-4..4).map(move |z| I64Vec2::new(x, z) * 1024))
-            .max_by_key(|&c| trees_near(regions.noise(), &mut heights, c, c + 255).len())
-            .unwrap();
-        let trees = trees_near(regions.noise(), &mut heights, corner, corner + 255);
-        let ground = heights.height(corner.x + 128, corner.y + 128) as i64;
-        (I64Vec3::new(corner.x + 128, ground, corner.y + 128), trees)
-        }).clone()
+        FOREST
+            .get_or_init(|| {
+                let mut heights = regions.sampler();
+                let corner = (-4..4)
+                    .flat_map(|x| (-4..4).map(move |z| I64Vec2::new(x, z) * 1024))
+                    .max_by_key(|&c| trees_near(regions.noise(), &mut heights, c, c + 255).len())
+                    .unwrap();
+                let trees = trees_near(regions.noise(), &mut heights, corner, corner + 255);
+                let ground = heights.height(corner.x + 128, corner.y + 128) as i64;
+                (I64Vec3::new(corner.x + 128, ground, corner.y + 128), trees)
+            })
+            .clone()
     }
 
     #[test]
     fn test_far_forests_are_a_few_canopy_boxes_not_a_box_a_tree() {
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let (middle, trees) = forest(&regions);
-        assert!(trees.len() > 300, "only {} trees in the densest forest", trees.len());
+        assert!(
+            trees.len() > 300,
+            "only {} trees in the densest forest",
+            trees.len()
+        );
         for level in [4u8, 5] {
-            let key = LodKey::containing(ChunkCoordinate(middle.div_euclid(I64Vec3::splat(16))), level);
+            let key = LodKey::containing(
+                ChunkCoordinate(middle.div_euclid(I64Vec3::splat(16))),
+                level,
+            );
             let blocks = LodBlocks::sample(&regions, key);
             let cell = key.cell_size();
             let span = 16 * cell;
             let min = key.min_block();
-            let inside = trees.iter().filter(|t| (min.x..min.x + span).contains(&t.base.x) && (min.z..min.z + span).contains(&t.base.z)).count();
-            let leaf_boxes: Vec<_> = blocks.boxes.iter().filter(|b| b.block == BlockType::Leaves).collect();
+            let inside = trees
+                .iter()
+                .filter(|t| {
+                    (min.x..min.x + span).contains(&t.base.x)
+                        && (min.z..min.z + span).contains(&t.base.z)
+                })
+                .count();
+            let leaf_boxes: Vec<_> = blocks
+                .boxes
+                .iter()
+                .filter(|b| b.block == BlockType::Leaves)
+                .collect();
             assert!(!leaf_boxes.is_empty(), "no canopy at level {level}");
             // each about as costly as one of the boxes a lone tree's crown is, where every tree was
             // three, and lone trees at the forest's edge keep theirs
-            assert!(leaf_boxes.len() * 2 < inside, "{} leaf boxes for {inside} trees at level {level}", leaf_boxes.len());
+            assert!(
+                leaf_boxes.len() * 2 < inside,
+                "{} leaf boxes for {inside} trees at level {level}",
+                leaf_boxes.len()
+            );
             // the forest's tree tops are under the canopy's, within a step of its rounding
             let step = (cell / super::CANOPY_STEPS) as f32;
-            let highest = leaf_boxes.iter().map(|b| min.y as f32 + (b.max.y + 0.5) * cell as f32).fold(f32::MIN, f32::max);
+            let highest = leaf_boxes
+                .iter()
+                .map(|b| min.y as f32 + (b.max.y + 0.5) * cell as f32)
+                .fold(f32::MIN, f32::max);
             let corner = bevy::math::I64Vec2::new(min.x, min.z);
-            let node_trees = crate::chunks::generate::trees::trees_near(regions.noise(), &mut regions.sampler(), corner, corner + span);
-            let tallest = node_trees.iter().map(|t| t.crown_top() as f32).fold(f32::MIN, f32::max);
-            assert!(highest <= tallest + step, "canopy at {highest}, trees up to {tallest} at level {level}");
+            let node_trees = crate::chunks::generate::trees::trees_near(
+                regions.noise(),
+                &mut regions.sampler(),
+                corner,
+                corner + span,
+            );
+            let tallest = node_trees
+                .iter()
+                .map(|t| t.crown_top() as f32)
+                .fold(f32::MIN, f32::max);
+            assert!(
+                highest <= tallest + step,
+                "canopy at {highest}, trees up to {tallest} at level {level}"
+            );
             // the ground under it is darkened by how much of it is under crowns
             assert!(blocks.forest.iter().any(|&f| f > 0.9));
         }
@@ -3173,9 +3911,16 @@ mod tests {
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let (middle, _) = forest(&regions);
         for level in [4u8, 5] {
-            let key = LodKey::containing(ChunkCoordinate(middle.div_euclid(I64Vec3::splat(16))), level);
+            let key = LodKey::containing(
+                ChunkCoordinate(middle.div_euclid(I64Vec3::splat(16))),
+                level,
+            );
             let blocks = LodBlocks::sample(&regions, key);
-            let canopy: Vec<_> = blocks.boxes.iter().filter(|b| b.faces == super::BoxFaces::NoBottom).collect();
+            let canopy: Vec<_> = blocks
+                .boxes
+                .iter()
+                .filter(|b| b.faces == super::BoxFaces::NoBottom)
+                .collect();
             let area = |b: &&super::TreeBox| (b.max.x - b.min.x) * (b.max.z - b.min.z);
             let drawn: f32 = canopy.iter().map(area).sum();
             // what's under crowns over the ground this node draws
@@ -3191,7 +3936,10 @@ mod tests {
             }
             // its edges are drawn in to the crowns, so what's extra is the gaps between them inside
             // it, more of them the wider the columns
-            assert!(drawn <= under * 1.4, "canopy {drawn} over {under} under crowns at level {level}");
+            assert!(
+                drawn <= under * 1.4,
+                "canopy {drawn} over {under} under crowns at level {level}"
+            );
         }
     }
 
@@ -3202,16 +3950,29 @@ mod tests {
         let (_, trees) = forest(&regions);
         let tints: Vec<Vec3> = trees.iter().map(|t| t.tint()).collect();
         let brightness = |t: &Vec3| t.x + t.y + t.z;
-        let (dim, bright) = tints.iter().fold((f32::MAX, f32::MIN), |(lo, hi), t| (lo.min(brightness(t)), hi.max(brightness(t))));
+        let (dim, bright) = tints.iter().fold((f32::MAX, f32::MIN), |(lo, hi), t| {
+            (lo.min(brightness(t)), hi.max(brightness(t)))
+        });
         assert!(bright - dim > 0.4, "tints only span {dim}..{bright}");
-        assert!(tints.iter().all(|t| t.min_element() > 0.6 && t.max_element() < 1.5), "a tint strays too far");
+        assert!(
+            tints
+                .iter()
+                .all(|t| t.min_element() > 0.6 && t.max_element() < 1.5),
+            "a tint strays too far"
+        );
         // leaves take their own tree's tint, at full detail and in coarser cells
         let tree = &trees[0];
         let trunk_top = tree.base + I64Vec3::Y * tree.trunk;
         for cell in [1, 2] {
             let origin = trunk_top.div_euclid(I64Vec3::splat(16 * cell)) * 16 * cell;
-            let at = (trunk_top - origin).div_euclid(I64Vec3::splat(cell)).as_ivec3();
-            assert_eq!(tree.tint(), TreeTints::new(&trees, origin, cell).at(at), "at cells {cell} wide");
+            let at = (trunk_top - origin)
+                .div_euclid(I64Vec3::splat(cell))
+                .as_ivec3();
+            assert_eq!(
+                tree.tint(),
+                TreeTints::new(&trees, origin, cell).at(at),
+                "at cells {cell} wide"
+            );
         }
     }
 
@@ -3228,9 +3989,16 @@ mod tests {
         assert_ne!(pair[0].tint(), pair[1].tint());
         chunk.trees = crate::chunks::generate::trees::TreeTints::new(&pair, I64Vec3::ZERO, 1);
         let mesh = mesh_chunk(chunk).opaque;
-        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!() };
+        let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!()
+        };
         let leaf = Tile::Leaves.atlas_cell();
-        let mut shades: Vec<[u32; 3]> = colors.iter().filter(|c| c[3] == leaf).map(|c| [c[0], c[1], c[2]].map(|v| (v * 1000.0) as u32)).collect();
+        let mut shades: Vec<[u32; 3]> = colors
+            .iter()
+            .filter(|c| c[3] == leaf)
+            .map(|c| [c[0], c[1], c[2]].map(|v| (v * 1000.0) as u32))
+            .collect();
         shades.sort();
         shades.dedup();
         assert!(shades.len() >= 2, "leaves all one shade: {shades:?}");
@@ -3257,25 +4025,45 @@ mod tests {
         use bevy::math::I64Vec2;
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let mut heights = regions.sampler();
-        let trees = trees_near(regions.noise(), &mut heights, I64Vec2::splat(-300), I64Vec2::splat(300));
+        let trees = trees_near(
+            regions.noise(),
+            &mut heights,
+            I64Vec2::splat(-300),
+            I64Vec2::splat(300),
+        );
         let tree = trees.first().expect("no trees");
         let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), 6);
         assert!(key.cell_size() > super::TREE_MAX_CELL);
         let blocks = LodBlocks::sample(&regions, key);
-        assert_eq!(0, blocks.cells.iter().filter(|&&c| c == BlockType::Leaves || c == BlockType::Log).count());
+        assert_eq!(
+            0,
+            blocks
+                .cells
+                .iter()
+                .filter(|&&c| c == BlockType::Leaves || c == BlockType::Log)
+                .count()
+        );
         assert!(blocks.boxes.is_empty());
-        assert!(blocks.forest.iter().any(|&f| f > 0.0) && blocks.forest.iter().all(|&f| (0.0..=1.0).contains(&f)));
+        assert!(
+            blocks.forest.iter().any(|&f| f > 0.0)
+                && blocks.forest.iter().all(|&f| (0.0..=1.0).contains(&f))
+        );
     }
 
     // Where trees grow within a node's own area, as full detail decides, and as the node's grid does.
     fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Vec<(i64, i64)>, Vec<(i64, i64)>) {
         use crate::chunks::generate::trees::trees_near;
         use bevy::math::I64Vec2;
-        let (cell, base, size) = (key.cell_size(), key.min_block(), crate::chunks::chunk::CHUNK_SIZE as i32);
+        let (cell, base, size) = (
+            key.cell_size(),
+            key.min_block(),
+            crate::chunks::chunk::CHUNK_SIZE as i32,
+        );
         let span = (size + 1) as i64 * cell;
         let min = I64Vec2::new(base.x, base.z) - cell;
         let own = |t: &crate::chunks::generate::trees::Tree| {
-            (base.x..base.x + size as i64 * cell).contains(&t.base.x) && (base.z..base.z + size as i64 * cell).contains(&t.base.z)
+            (base.x..base.x + size as i64 * cell).contains(&t.base.x)
+                && (base.z..base.z + size as i64 * cell).contains(&t.base.z)
         };
         let mut heights = regions.sampler();
         let mut exact: Vec<_> = trees_near(regions.noise(), &mut heights, min, min + span + cell)
@@ -3284,7 +4072,13 @@ mod tests {
             .map(|t| (t.base.x, t.base.z))
             .collect();
         let grid = regions.column_grid(key);
-        let mut ground = super::GridGround { grid: &grid, noise: regions.noise(), base: I64Vec2::new(base.x, base.z), cell, size };
+        let mut ground = super::GridGround {
+            grid: &grid,
+            noise: regions.noise(),
+            base: I64Vec2::new(base.x, base.z),
+            cell,
+            size,
+        };
         let mut coarse: Vec<_> = trees_near(regions.noise(), &mut ground, min, min + span + cell)
             .iter()
             .filter(|t| own(t))
@@ -3302,10 +4096,18 @@ mod tests {
         for level in [2u8, 3, 4, 5] {
             // nodes over a forested stretch, found from the full-detail trees
             let mut heights = regions.sampler();
-            let trees = crate::chunks::generate::trees::trees_near(regions.noise(), &mut heights, I64Vec2::splat(-500), I64Vec2::splat(500));
+            let trees = crate::chunks::generate::trees::trees_near(
+                regions.noise(),
+                &mut heights,
+                I64Vec2::splat(-500),
+                I64Vec2::splat(500),
+            );
             let mut checked = 0;
             for tree in trees.iter().step_by(trees.len() / 8 + 1) {
-                let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), level);
+                let key = LodKey::containing(
+                    ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))),
+                    level,
+                );
                 let (exact, coarse) = tree_spots(&regions, key);
                 assert_eq!(exact, coarse, "level {level} node {key:?}");
                 checked += exact.len();
@@ -3321,7 +4123,12 @@ mod tests {
         };
         let cell = key.cell_size() as f32;
         let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell - 0.5);
-        let positions = meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap();
+        let positions = meshes
+            .opaque
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
         let Some(Indices::U32(indices)) = meshes.opaque.indices() else {
             return Vec::new();
         };
@@ -3353,14 +4160,28 @@ mod tests {
         let mut triangles = Vec::new();
         for dy in -1..=1 {
             for key in [fine, coarse] {
-                triangles.extend(world_triangles(regions, LodKey { coord: key.coord + I64Vec3::new(0, dy, 0), ..key }));
+                triangles.extend(world_triangles(
+                    regions,
+                    LodKey {
+                        coord: key.coord + I64Vec3::new(0, dy, 0),
+                        ..key
+                    },
+                ));
             }
         }
         let seam_x = coarse.min_block().x as f32;
-        let (z0, z1) = (fine.min_block().z as f32, (fine.min_block().z + fine.width() * 16) as f32);
+        let (z0, z1) = (
+            fine.min_block().z as f32,
+            (fine.min_block().z + fine.width() * 16) as f32,
+        );
         let mut sampler = regions.sampler();
         let (mut rays, mut leaks) = (0, 0);
-        for direction in [Vec3::new(0.35, -1.0, 0.1), Vec3::new(-0.35, -1.0, 0.1), Vec3::new(0.0, -1.0, 0.45), Vec3::new(0.2, -1.0, -0.3)] {
+        for direction in [
+            Vec3::new(0.35, -1.0, 0.1),
+            Vec3::new(-0.35, -1.0, 0.1),
+            Vec3::new(0.0, -1.0, 0.45),
+            Vec3::new(0.2, -1.0, -0.3),
+        ] {
             let direction = direction.normalize();
             // clear of the node's z edges, past which the next node isn't loaded here
             let mut z = z0 + 8.713;
@@ -3386,19 +4207,36 @@ mod tests {
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
         let mut sampler = regions.sampler();
         // stretches of land a few thousand blocks apart, with a fine node beside a coarser one
-        let spots: Vec<(i64, i64)> = (0..8).map(|i| (-3000 + (i % 4) * 1900 + (i * 137) % 400, -3000 + (i / 4) * 1900 + (i * 211) % 400)).collect();
+        let spots: Vec<(i64, i64)> = (0..8)
+            .map(|i| {
+                (
+                    -3000 + (i % 4) * 1900 + (i * 137) % 400,
+                    -3000 + (i / 4) * 1900 + (i * 211) % 400,
+                )
+            })
+            .collect();
         for fine_level in 1..=4u8 {
             let (mut leaks, mut rays) = (0, 0);
             for &(bx, bz) in &spots {
                 let h = sampler.height(bx, bz) as i64;
-                let coarse = LodKey::containing(ChunkCoordinate(I64Vec3::new(bx, h, bz).div_euclid(I64Vec3::splat(16))), fine_level + 1);
-                let fine_chunk = I64Vec3::new(coarse.min_block().x - 8, h, coarse.min_block().z + 8).div_euclid(I64Vec3::splat(16));
+                let coarse = LodKey::containing(
+                    ChunkCoordinate(I64Vec3::new(bx, h, bz).div_euclid(I64Vec3::splat(16))),
+                    fine_level + 1,
+                );
+                let fine_chunk =
+                    I64Vec3::new(coarse.min_block().x - 8, h, coarse.min_block().z + 8)
+                        .div_euclid(I64Vec3::splat(16));
                 let fine = LodKey::containing(ChunkCoordinate(fine_chunk), fine_level);
                 let (l, r) = seam_leaks(&regions, fine, coarse);
                 leaks += l;
                 rays += r;
             }
-            assert_eq!(0, leaks, "{leaks} of {rays} rays slipped through seams between levels {fine_level} and {}", fine_level + 1);
+            assert_eq!(
+                0,
+                leaks,
+                "{leaks} of {rays} rays slipped through seams between levels {fine_level} and {}",
+                fine_level + 1
+            );
         }
     }
 
@@ -3414,17 +4252,27 @@ mod tests {
     fn test_ground_a_block_lower_than_a_surface_cell_above_is_still_lidded() {
         // here full detail has the ground a block under the level 1 cell the node above draws it in
         let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(2775841323))));
-        let key = LodKey { level: 1, coord: I64Vec3::new(6, 13, 4) };
+        let key = LodKey {
+            level: 1,
+            coord: I64Vec3::new(6, 13, 4),
+        };
         let meshes = super::generate_lod_mesh(regions, key).unwrap();
         let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * 2.0 - 0.5);
-        let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)) = meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!() };
-        let Some(Indices::U32(idx)) = meshes.opaque.indices() else { panic!() };
+        let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)) =
+            meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!()
+        };
+        let Some(Indices::U32(idx)) = meshes.opaque.indices() else {
+            panic!()
+        };
         let (px, pz) = (198.7f32, 127.7f32);
         let lidded = idx.chunks(3).any(|t| {
             let q = [0, 1, 2].map(|j| origin + Vec3::from(pos[t[j] as usize]) * 2.0);
             let e = |a: Vec3, b: Vec3| (px - b.x) * (a.z - b.z) - (a.x - b.x) * (pz - b.z);
             let d = [e(q[0], q[1]), e(q[1], q[2]), e(q[2], q[0])];
-            q.iter().all(|v| v.y == 447.5) && !(d.iter().any(|&x| x < 0.0) && d.iter().any(|&x| x > 0.0))
+            q.iter().all(|v| v.y == 447.5)
+                && !(d.iter().any(|&x| x < 0.0) && d.iter().any(|&x| x > 0.0))
         });
         assert!(lidded);
     }
@@ -3452,7 +4300,10 @@ mod tests {
         let noise = Arc::new(NoiseGenerator::new(42));
 
         // Meshed chunks are the inner ones, so every one has real neighbours on all sides.
-        let offset: i64 = std::env::var("BENCH_OFFSET").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let offset: i64 = std::env::var("BENCH_OFFSET")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let mut coords = Vec::new();
         let mut meshed = Vec::new();
         for x in 0..24 {
@@ -3481,8 +4332,13 @@ mod tests {
             let start = std::time::Instant::now();
             vertices = 0;
             for &c in &meshed {
-                let neighbours = c.neighbors_26().iter().map(|n| data.get(n).cloned()).collect();
-                let meshes = generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise(), false);
+                let neighbours = c
+                    .neighbors_26()
+                    .iter()
+                    .map(|n| data.get(n).cloned())
+                    .collect();
+                let meshes =
+                    generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise(), false);
                 vertices += meshes.opaque.count_vertices();
             }
             best = best.min(start.elapsed());
@@ -3497,4 +4353,3 @@ mod tests {
         );
     }
 }
-

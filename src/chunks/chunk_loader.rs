@@ -3,19 +3,19 @@ use std::time::{Duration, Instant};
 use bevy::prelude::Resource;
 use bevy::{
     asset::Handle,
+    camera::Camera,
+    ecs::hierarchy::ChildOf,
     ecs::{
         component::Component,
         entity::Entity,
         query::{With, Without},
         system::{Commands, Query, Res, ResMut},
     },
-    ecs::hierarchy::ChildOf,
     math::{Dir3, I64Vec3, Vec3},
-    camera::Camera,
+    platform::collections::{HashMap, HashSet},
+    tasks::futures,
     tasks::{AsyncComputeTaskPool, Task},
     transform::components::GlobalTransform,
-    tasks::futures,
-    platform::collections::{HashMap, HashSet},
 };
 
 use super::{
@@ -124,10 +124,7 @@ impl ChunkLoader {
                 .with_layers(World::layers(world_height)),
             material,
             water_material,
-            max_in_flight_generating: scale_budget(
-                BASELINE_IN_FLIGHT_GENERATING,
-                render_distance,
-            ),
+            max_in_flight_generating: scale_budget(BASELINE_IN_FLIGHT_GENERATING, render_distance),
             solid_leaves,
             groups: HashMap::new(),
             held: HashMap::new(),
@@ -341,7 +338,13 @@ pub fn load_chunks(
                         let (coord, regions) = (chunk.coord, world.region_store.clone());
                         let solid_leaves = chunk_loader.solid_leaves;
                         gen_chunk_mesh.task = Some(task_pool.spawn(async move {
-                            generate_chunk_mesh(data, adjacent, coord, regions.noise(), solid_leaves)
+                            generate_chunk_mesh(
+                                data,
+                                adjacent,
+                                coord,
+                                regions.noise(),
+                                solid_leaves,
+                            )
                         }));
                     }
                 }
@@ -381,7 +384,10 @@ pub fn unload_chunks(
 
     // a group goes once all its chunks have, since one reloaded in the meantime is still in its mesh
     for key in unloaded {
-        if key.chunks().all(|chunk| !chunk_loader.chunk_to_entity.contains_key(&chunk)) {
+        if key
+            .chunks()
+            .all(|chunk| !chunk_loader.chunk_to_entity.contains_key(&chunk))
+        {
             chunk_loader.waiting.remove(&key);
             if let Some(group) = chunk_loader.groups.remove(&key) {
                 commands.entity(group).despawn();

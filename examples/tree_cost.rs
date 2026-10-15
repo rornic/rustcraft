@@ -8,7 +8,9 @@ use bevy::math::{I64Vec2, I64Vec3};
 use bevy::mesh::{Mesh, VertexAttributeValues};
 use rustcraft::block::Tile;
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
-use rustcraft::chunks::generate::generator::{generate_chunk, generate_chunk_mesh, generate_lod_mesh};
+use rustcraft::chunks::generate::generator::{
+    generate_chunk, generate_chunk_mesh, generate_lod_mesh,
+};
 use rustcraft::chunks::generate::noise::NoiseGenerator;
 use rustcraft::chunks::generate::region_store::RegionStore;
 use rustcraft::chunks::generate::trees::trees_near;
@@ -20,7 +22,8 @@ const PATCH: i64 = 1024;
 
 // The vertices in `mesh` that draw leaves or logs.
 fn tree_vertices(mesh: &Mesh) -> usize {
-    let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else {
+    let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+    else {
         return 0;
     };
     let tree = [Tile::Leaves, Tile::LogBark, Tile::LogEnd].map(|t| t.atlas_cell());
@@ -28,7 +31,10 @@ fn tree_vertices(mesh: &Mesh) -> usize {
 }
 
 fn main() {
-    let seed = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let seed = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
     let noise = Arc::new(NoiseGenerator::new(seed));
     // the densest forest on a coarse grid, by trees counted in a window round each point
     let regions = Arc::new(RegionStore::new(noise.clone()));
@@ -46,12 +52,20 @@ fn main() {
         }
     }
     let (count, mut cx, mut cz) = best;
-    let args: Vec<i64> = std::env::args().skip(2).filter_map(|a| a.parse().ok()).collect();
+    let args: Vec<i64> = std::env::args()
+        .skip(2)
+        .filter_map(|a| a.parse().ok())
+        .collect();
     if let [x, z] = args[..] {
         (cx, cz) = (x, z);
     }
-    println!("measuring round {cx}, {cz} (the densest forest is {count} trees in 200 x 200 blocks)");
-    let layout = Settings::read("assets/settings.toml").unwrap().renderer.lod_layout();
+    println!(
+        "measuring round {cx}, {cz} (the densest forest is {count} trees in 200 x 200 blocks)"
+    );
+    let layout = Settings::read("assets/settings.toml")
+        .unwrap()
+        .renderer
+        .lod_layout();
     let size = CHUNK_SIZE as i64;
     let min = I64Vec3::new(cx - PATCH / 2, 0, cz - PATCH / 2);
     let height_range = || {
@@ -79,9 +93,17 @@ fn main() {
             for x in 0..span {
                 for z in 0..span {
                     for y in low.div_euclid(size)..=high.div_euclid(size) {
-                        let coord = ChunkCoordinate(I64Vec3::new(min.x / size + x, y, min.z / size + z));
+                        let coord =
+                            ChunkCoordinate(I64Vec3::new(min.x / size + x, y, min.z / size + z));
                         let data = generate_chunk(regions.clone(), coord);
-                        let mesh = generate_chunk_mesh(Arc::new(data), vec![None; 26], coord, &noise, false).opaque;
+                        let mesh = generate_chunk_mesh(
+                            Arc::new(data),
+                            vec![None; 26],
+                            coord,
+                            &noise,
+                            false,
+                        )
+                        .opaque;
                         vertices += tree_vertices(&mesh);
                         all += mesh.count_vertices();
                     }
@@ -93,8 +115,12 @@ fn main() {
             for x in 0..span {
                 for z in 0..span {
                     for y in low.div_euclid(width)..=high.div_euclid(width) {
-                        let chunk = ChunkCoordinate(I64Vec3::new(min.x + x * width, y * width, min.z + z * width) / size);
-                        if let Some(meshes) = generate_lod_mesh(regions.clone(), LodKey::containing(chunk, level)) {
+                        let chunk = ChunkCoordinate(
+                            I64Vec3::new(min.x + x * width, y * width, min.z + z * width) / size,
+                        );
+                        if let Some(meshes) =
+                            generate_lod_mesh(regions.clone(), LodKey::containing(chunk, level))
+                        {
                             vertices += tree_vertices(&meshes.opaque);
                             all += meshes.opaque.count_vertices();
                         }
@@ -119,5 +145,9 @@ fn main() {
             all_in_view / 1e6
         );
     }
-    println!("all levels: {:.2}M tree vertices, {:.2}M in all, in a view all like this", total / 1e6, total_all / 1e6);
+    println!(
+        "all levels: {:.2}M tree vertices, {:.2}M in all, in a view all like this",
+        total / 1e6,
+        total_all / 1e6
+    );
 }

@@ -8,8 +8,8 @@ pub mod material;
 
 use bevy::{
     app::{App, Plugin, Update},
-    asset::{Assets, Handle},
     app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
+    asset::{Assets, Handle},
     ecs::{schedule::IntoScheduleConfigs, system::Commands},
 };
 
@@ -32,7 +32,14 @@ impl Plugin for TerrainPlugin {
         app.add_systems(
             Update,
             (
-                (gather_chunks, generate_chunks, mark_chunks, load_chunks, build_groups, load_groups)
+                (
+                    gather_chunks,
+                    generate_chunks,
+                    mark_chunks,
+                    load_chunks,
+                    build_groups,
+                    load_groups,
+                )
                     .before(unload_chunks),
                 (
                     update_lod_selection,

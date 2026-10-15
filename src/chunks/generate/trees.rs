@@ -124,7 +124,8 @@ impl Tree {
         };
         let lobes = std::array::from_fn(|i| {
             let h = hash(seed, i as i64, 17);
-            let angle = (i as f64 + (h % 1000) as f64 / 1000.0 * 0.6) * std::f64::consts::TAU / LOBES as f64;
+            let angle = (i as f64 + (h % 1000) as f64 / 1000.0 * 0.6) * std::f64::consts::TAU
+                / LOBES as f64;
             let out = spread * 0.75;
             let drop = spread * (0.25 + ((h >> 10) % 100) as f64 / 400.0);
             Blob {
@@ -133,7 +134,15 @@ impl Tree {
                 squash: 0.75,
             }
         });
-        Self { kind, base, trunk, spread, seed, crown, lobes }
+        Self {
+            kind,
+            base,
+            trunk,
+            spread,
+            seed,
+            crown,
+            lobes,
+        }
     }
 
     /// The tree's own tint over the grass's, the same at every level of detail.
@@ -147,12 +156,20 @@ impl Tree {
     /// Whether the crown is over the point `x`, `z` across the world, in blocks, seen from above.
     pub fn shades(&self, x: f64, z: f64) -> bool {
         // from the trunk's base, as `in_leaves` takes it, where a block's index is its middle
-        let offset = DVec3::new(x - 0.5 - self.base.x as f64, 0.0, z - 0.5 - self.base.z as f64);
-        let under = |blob: &Blob| (offset - blob.centre.with_y(0.0)).length_squared() <= blob.radius * blob.radius;
+        let offset = DVec3::new(
+            x - 0.5 - self.base.x as f64,
+            0.0,
+            z - 0.5 - self.base.z as f64,
+        );
+        let under = |blob: &Blob| {
+            (offset - blob.centre.with_y(0.0)).length_squared() <= blob.radius * blob.radius
+        };
         match self.kind {
             TreeKind::Broadleaf => under(&self.crown) || self.lobes.iter().any(under),
             // the lowest tier is the widest
-            TreeKind::Pine => (offset - self.axis()).length_squared() <= (0.6 + self.spread).powi(2),
+            TreeKind::Pine => {
+                (offset - self.axis()).length_squared() <= (0.6 + self.spread).powi(2)
+            }
         }
     }
 
@@ -166,7 +183,11 @@ impl Tree {
     }
 
     pub fn width(&self) -> i64 {
-        if self.trunk >= THICK_TRUNK { 2 } else { 1 }
+        if self.trunk >= THICK_TRUNK {
+            2
+        } else {
+            1
+        }
     }
 
     // the middle of the trunk, as an offset from `base`
@@ -179,7 +200,10 @@ impl Tree {
     pub fn bounds(&self) -> (I64Vec3, I64Vec3) {
         let reach = I64Vec3::new(TREE_REACH, 0, TREE_REACH);
         let top = I64Vec3::Y * TREE_HEIGHT;
-        (self.base - reach, self.base + reach + top + I64Vec3::new(1, 0, 1))
+        (
+            self.base - reach,
+            self.base + reach + top + I64Vec3::new(1, 0, 1),
+        )
     }
 
     // The tree's block in the cell `size` blocks across with `min` its lowest block, if any:
@@ -242,7 +266,10 @@ impl Tree {
                 }
             }
         }
-        let (Some(low), Some(high)) = (leaves.iter().map(|l| l.y).min(), leaves.iter().map(|l| l.y).max()) else {
+        let (Some(low), Some(high)) = (
+            leaves.iter().map(|l| l.y).min(),
+            leaves.iter().map(|l| l.y).max(),
+        ) else {
             return Vec::new();
         };
         let height = high - low + 1;
@@ -256,7 +283,12 @@ impl Tree {
         bounds
             .into_iter()
             .flatten()
-            .map(|(min, max)| ((self.base + min).as_dvec3(), (self.base + max + I64Vec3::ONE).as_dvec3()))
+            .map(|(min, max)| {
+                (
+                    (self.base + min).as_dvec3(),
+                    (self.base + max + I64Vec3::ONE).as_dvec3(),
+                )
+            })
             .collect()
     }
 
@@ -265,11 +297,16 @@ impl Tree {
         // nibbled at the edges, so crowns aren't perfect balls
         let nibble = || {
             let rounded = offset.round().as_i64vec3();
-            if hash(self.seed, rounded.x * 7919 + rounded.y, rounded.z) % 3 == 0 { NIBBLE } else { 0.0 }
+            if hash(self.seed, rounded.x * 7919 + rounded.y, rounded.z) % 3 == 0 {
+                NIBBLE
+            } else {
+                0.0
+            }
         };
         match self.kind {
             TreeKind::Broadleaf => {
-                self.crown.contains(offset, nibble) || self.lobes.iter().any(|lobe| lobe.contains(offset, nibble))
+                self.crown.contains(offset, nibble)
+                    || self.lobes.iter().any(|lobe| lobe.contains(offset, nibble))
             }
             TreeKind::Pine => {
                 let (bottom, top) = ((self.trunk / 4) as f64, (self.trunk + 1) as f64);
@@ -317,7 +354,8 @@ impl Tree {
             for z in low.z..=high.z {
                 for y in low.y..=high.y {
                     let cell = IVec3::new(x, y, z);
-                    if let Some(block) = self.block_in_cell(origin + cell.as_i64vec3() * size, size) {
+                    if let Some(block) = self.block_in_cell(origin + cell.as_i64vec3() * size, size)
+                    {
                         place(cell, block);
                     }
                 }
@@ -341,7 +379,11 @@ impl TreeTints {
                 .into_iter()
                 .map(|t| {
                     let axis = (t.base - origin).as_dvec3() + t.axis();
-                    (Vec2::new(axis.x as f32, axis.z as f32) / cell as f32 - (cell - 1) as f32 / (2.0 * cell as f32), t.tint())
+                    (
+                        Vec2::new(axis.x as f32, axis.z as f32) / cell as f32
+                            - (cell - 1) as f32 / (2.0 * cell as f32),
+                        t.tint(),
+                    )
                 })
                 .collect(),
         )
@@ -367,7 +409,12 @@ pub fn grows_into(existing: BlockType, block: BlockType) -> bool {
 }
 
 // Every tree that could reach into the columns `min..=max` (x, z).
-pub fn trees_near(noise: &NoiseGenerator, heights: &mut impl TreeGround, min: I64Vec2, max: I64Vec2) -> Vec<Tree> {
+pub fn trees_near(
+    noise: &NoiseGenerator,
+    heights: &mut impl TreeGround,
+    min: I64Vec2,
+    max: I64Vec2,
+) -> Vec<Tree> {
     let first = (min - TREE_REACH).div_euclid(I64Vec2::splat(CELL));
     let last = (max + TREE_REACH).div_euclid(I64Vec2::splat(CELL));
     let mut trees = Vec::new();
@@ -381,7 +428,12 @@ pub fn trees_near(noise: &NoiseGenerator, heights: &mut impl TreeGround, min: I6
     trees
 }
 
-fn tree_in_cell(noise: &NoiseGenerator, heights: &mut impl TreeGround, cx: i64, cz: i64) -> Option<Tree> {
+fn tree_in_cell(
+    noise: &NoiseGenerator,
+    heights: &mut impl TreeGround,
+    cx: i64,
+    cz: i64,
+) -> Option<Tree> {
     let seed = hash(noise.seed() as u64, cx, cz);
     let x = cx * CELL + ((seed >> 16) % CELL as u64) as i64;
     let z = cz * CELL + ((seed >> 24) % CELL as u64) as i64;
@@ -396,24 +448,48 @@ fn tree_in_cell(noise: &NoiseGenerator, heights: &mut impl TreeGround, cx: i64, 
     if gradient > MAX_GRADIENT {
         return None;
     }
-    let ground = column_block(noise.biomes(), heights.biome(x, z), height - 1, height, gradient, noise.temperature(x as f64, z as f64));
+    let ground = column_block(
+        noise.biomes(),
+        heights.biome(x, z),
+        height - 1,
+        height,
+        gradient,
+        noise.temperature(x as f64, z as f64),
+    );
     if ground != BlockType::Grass {
         return None;
     }
 
     // 0..1, how big this one grew
     let growth = ((seed >> 32) % 1000) as f64 / 1000.0;
-    let (kind, trunk, spread) = if noise.climate(x as f64, z as f64).temperature < PINE_TEMPERATURE {
-        (TreeKind::Pine, 16 + (growth * 9.0) as i64, 4.5 + growth * 1.5)
+    let (kind, trunk, spread) = if noise.climate(x as f64, z as f64).temperature < PINE_TEMPERATURE
+    {
+        (
+            TreeKind::Pine,
+            16 + (growth * 9.0) as i64,
+            4.5 + growth * 1.5,
+        )
     } else {
-        (TreeKind::Broadleaf, 10 + (growth * 6.0) as i64, 5.0 + growth * 2.0)
+        (
+            TreeKind::Broadleaf,
+            10 + (growth * 6.0) as i64,
+            5.0 + growth * 2.0,
+        )
     };
-    Some(Tree::new(kind, I64Vec3::new(x, heights.base_height(x, z), z), trunk, spread, seed))
+    Some(Tree::new(
+        kind,
+        I64Vec3::new(x, heights.base_height(x, z), z),
+        trunk,
+        spread,
+        seed,
+    ))
 }
 
 // splitmix64 over a seed and two coordinates
 pub(super) fn hash(seed: u64, a: i64, b: i64) -> u64 {
-    let mut h = seed ^ (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (b as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    let mut h = seed
+        ^ (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (b as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
     h = (h ^ (h >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     h = (h ^ (h >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     h ^ (h >> 31)
@@ -443,9 +519,14 @@ mod tests {
     fn blocks(tree: &Tree) -> Vec<(I64Vec3, BlockType)> {
         let (low, high) = tree.bounds();
         let mut blocks = Vec::new();
-        tree.plant(low, 1, (IVec3::ZERO, (high - low).as_ivec3()), |cell, block| {
-            blocks.push((low + cell.as_i64vec3(), block));
-        });
+        tree.plant(
+            low,
+            1,
+            (IVec3::ZERO, (high - low).as_ivec3()),
+            |cell, block| {
+                blocks.push((low + cell.as_i64vec3(), block));
+            },
+        );
         blocks
     }
 
@@ -453,18 +534,48 @@ mod tests {
     fn test_trees_are_a_trunk_under_big_crowns() {
         for t in extremes() {
             let blocks = blocks(&t);
-            let in_trunk = |p: I64Vec3| (0..t.width()).contains(&(p.x - t.base.x)) && (0..t.width()).contains(&(p.z - t.base.z));
-            let trunk_logs = blocks.iter().filter(|(p, b)| *b == BlockType::Log && in_trunk(*p)).count();
+            let in_trunk = |p: I64Vec3| {
+                (0..t.width()).contains(&(p.x - t.base.x))
+                    && (0..t.width()).contains(&(p.z - t.base.z))
+            };
+            let trunk_logs = blocks
+                .iter()
+                .filter(|(p, b)| *b == BlockType::Log && in_trunk(*p))
+                .count();
             assert_eq!((t.trunk * t.width() * t.width()) as usize, trunk_logs);
-            let branches = blocks.iter().filter(|(p, b)| *b == BlockType::Log && !in_trunk(*p)).count();
-            assert_eq!(t.kind == TreeKind::Broadleaf, branches > 0, "{:?} has {branches} branch logs", t.kind);
-            let leaves = blocks.iter().filter(|(_, b)| *b == BlockType::Leaves).count();
+            let branches = blocks
+                .iter()
+                .filter(|(p, b)| *b == BlockType::Log && !in_trunk(*p))
+                .count();
+            assert_eq!(
+                t.kind == TreeKind::Broadleaf,
+                branches > 0,
+                "{:?} has {branches} branch logs",
+                t.kind
+            );
+            let leaves = blocks
+                .iter()
+                .filter(|(_, b)| *b == BlockType::Leaves)
+                .count();
             assert!(leaves > 200, "{:?} has only {leaves} leaves", t.kind);
             // the trunk's top is hidden in the leaves, all the way round
             let top = t.base + I64Vec3::Y * (t.trunk - 1);
-            assert_eq!(Some(BlockType::Leaves), t.block_in_cell(top + I64Vec3::Y, 1));
-            for side in [I64Vec3::NEG_X, I64Vec3::NEG_Z, I64Vec3::X * t.width(), I64Vec3::Z * t.width()] {
-                assert_eq!(Some(BlockType::Leaves), t.block_in_cell(top + side, 1), "{:?} trunk bare at {side}", t.kind);
+            assert_eq!(
+                Some(BlockType::Leaves),
+                t.block_in_cell(top + I64Vec3::Y, 1)
+            );
+            for side in [
+                I64Vec3::NEG_X,
+                I64Vec3::NEG_Z,
+                I64Vec3::X * t.width(),
+                I64Vec3::Z * t.width(),
+            ] {
+                assert_eq!(
+                    Some(BlockType::Leaves),
+                    t.block_in_cell(top + side, 1),
+                    "{:?} trunk bare at {side}",
+                    t.kind
+                );
             }
         }
     }
@@ -472,14 +583,21 @@ mod tests {
     #[test]
     fn test_trees_stay_within_their_reach() {
         for t in extremes() {
-            let (low, high) = (t.base - I64Vec3::new(TREE_REACH, 0, TREE_REACH), t.base + I64Vec3::new(TREE_REACH, TREE_HEIGHT, TREE_REACH));
+            let (low, high) = (
+                t.base - I64Vec3::new(TREE_REACH, 0, TREE_REACH),
+                t.base + I64Vec3::new(TREE_REACH, TREE_HEIGHT, TREE_REACH),
+            );
             // look well past the bounds, so anything poking out is caught
             for x in low.x - 4..=high.x + 4 {
                 for z in low.z - 4..=high.z + 4 {
                     for y in low.y - 4..=high.y + 4 {
                         let p = I64Vec3::new(x, y, z);
                         if t.block_in_cell(p, 1).is_some() {
-                            assert!(p.cmpge(low).all() && p.cmple(high).all(), "{:?} reaches {p}", t.kind);
+                            assert!(
+                                p.cmpge(low).all() && p.cmple(high).all(),
+                                "{:?} reaches {p}",
+                                t.kind
+                            );
                         }
                     }
                 }
@@ -493,12 +611,22 @@ mod tests {
         // 2-block cells aligned so the trunk's column isn't at a cell's centre
         let origin = I64Vec3::new(96, 496, -44);
         let mut seen = Vec::new();
-        t.plant(origin, 2, (IVec3::splat(-8), IVec3::splat(20)), |_, block| seen.push(block));
+        t.plant(
+            origin,
+            2,
+            (IVec3::splat(-8), IVec3::splat(20)),
+            |_, block| seen.push(block),
+        );
         assert!(seen.contains(&BlockType::Log));
         assert!(seen.contains(&BlockType::Leaves));
         // from `THIN_TRUNK_CELL` the trunk is drawn as a box of its own, so the cells are crown alone
         let mut wide = Vec::new();
-        t.plant(origin, THIN_TRUNK_CELL, (IVec3::splat(-4), IVec3::splat(10)), |_, block| wide.push(block));
+        t.plant(
+            origin,
+            THIN_TRUNK_CELL,
+            (IVec3::splat(-4), IVec3::splat(10)),
+            |_, block| wide.push(block),
+        );
         assert!(wide.contains(&BlockType::Leaves) && !wide.contains(&BlockType::Log));
     }
 
@@ -524,19 +652,35 @@ mod tests {
             assert_eq!(ground, t.base.y);
         }
         // a smaller window finds the same trees where they overlap
-        let some = trees_near(&noise, &mut heights, I64Vec2::new(0, 0), I64Vec2::new(40, 40));
+        let some = trees_near(
+            &noise,
+            &mut heights,
+            I64Vec2::new(0, 0),
+            I64Vec2::new(40, 40),
+        );
         for t in &some {
-            assert!(trees.iter().any(|o| o.base == t.base && o.trunk == t.trunk && o.kind == t.kind));
+            assert!(trees
+                .iter()
+                .any(|o| o.base == t.base && o.trunk == t.trunk && o.kind == t.kind));
         }
     }
     // Every cell `size` blocks across the tree fills, from its bounds.
     fn cells(tree: &Tree, size: i64) -> Vec<(I64Vec3, BlockType)> {
         let (low, high) = tree.bounds();
-        let origin = I64Vec3::new(low.x.div_euclid(size), low.y.div_euclid(size), low.z.div_euclid(size)) * size;
+        let origin = I64Vec3::new(
+            low.x.div_euclid(size),
+            low.y.div_euclid(size),
+            low.z.div_euclid(size),
+        ) * size;
         let mut cells = Vec::new();
-        tree.plant(origin, size, (IVec3::ZERO, ((high - origin) / size).as_ivec3()), |cell, block| {
-            cells.push((origin + cell.as_i64vec3() * size, block));
-        });
+        tree.plant(
+            origin,
+            size,
+            (IVec3::ZERO, ((high - origin) / size).as_ivec3()),
+            |cell, block| {
+                cells.push((origin + cell.as_i64vec3() * size, block));
+            },
+        );
         cells
     }
 
@@ -545,8 +689,16 @@ mod tests {
         for t in extremes() {
             // the thinnest pines are a spire a cell or two across at eight
             for (size, least) in [(4, 2), (8, 1)] {
-                let leaves = cells(&t, size).into_iter().filter(|(_, b)| *b == BlockType::Leaves).count();
-                assert!(leaves >= least, "{:?} {} trunk at {size}: {leaves} leaf cells", t.kind, t.trunk);
+                let leaves = cells(&t, size)
+                    .into_iter()
+                    .filter(|(_, b)| *b == BlockType::Leaves)
+                    .count();
+                assert!(
+                    leaves >= least,
+                    "{:?} {} trunk at {size}: {leaves} leaf cells",
+                    t.kind,
+                    t.trunk
+                );
             }
         }
     }
@@ -554,7 +706,12 @@ mod tests {
     #[test]
     fn test_trunks_stand_in_cells_up_to_two_wide_and_not_beyond() {
         let t = tree(TreeKind::Pine, 24, 6.0);
-        let logs = |size| cells(&t, size).into_iter().filter(|(_, b)| *b == BlockType::Log).count();
+        let logs = |size| {
+            cells(&t, size)
+                .into_iter()
+                .filter(|(_, b)| *b == BlockType::Log)
+                .count()
+        };
         assert!(logs(1) > 0 && logs(2) > 0);
         assert_eq!(0, logs(THIN_TRUNK_CELL));
         assert_eq!(0, logs(8));
@@ -567,13 +724,18 @@ mod tests {
             let reach = cells(&t, size)
                 .into_iter()
                 .filter(|(_, b)| *b == BlockType::Leaves)
-                .map(|(p, _)| (p.x + size / 2 - t.base.x).abs().max((p.z + size / 2 - t.base.z).abs()))
+                .map(|(p, _)| {
+                    (p.x + size / 2 - t.base.x)
+                        .abs()
+                        .max((p.z + size / 2 - t.base.z).abs())
+                })
                 .max()
                 .unwrap();
             // a crown's lobes hang out to about 1.35 times its spread, and a cell edge can add up to a cell
-            assert!(reach as f64 <= t.spread * 1.35 + size as f64, "reach {reach} at {size}");
+            assert!(
+                reach as f64 <= t.spread * 1.35 + size as f64,
+                "reach {reach} at {size}"
+            );
         }
     }
-
 }
-

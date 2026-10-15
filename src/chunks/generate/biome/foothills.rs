@@ -26,7 +26,13 @@ impl Foothills {
     pub fn new(seed: u32) -> Self {
         Self {
             // octaves as `noise::Fbm` steps them by default
-            bumps: Fractal::new(seed.wrapping_add(SEED_OFFSET), BUMP_WAVELENGTH, 3, std::f64::consts::PI * 2.0 / 3.0, 0.5),
+            bumps: Fractal::new(
+                seed.wrapping_add(SEED_OFFSET),
+                BUMP_WAVELENGTH,
+                3,
+                std::f64::consts::PI * 2.0 / 3.0,
+                0.5,
+            ),
         }
     }
 }
@@ -78,9 +84,20 @@ mod tests {
     fn test_foothills_are_bumpy() {
         let foothills = Foothills::new(1);
         let heights: Vec<f64> = (0..100)
-            .map(|x| foothills.height(&BaseColumn { x: x as f64 * 3.0, ..column(0.3, 0.0) }))
+            .map(|x| {
+                foothills.height(&BaseColumn {
+                    x: x as f64 * 3.0,
+                    ..column(0.3, 0.0)
+                })
+            })
             .collect();
-        let (lo, hi) = heights.iter().fold((f64::MAX, f64::MIN), |(l, h), &v| (l.min(v), h.max(v)));
-        assert!(hi - lo > BUMP_HEIGHT * 0.5, "only {} blocks of bumps", hi - lo);
+        let (lo, hi) = heights
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), &v| (l.min(v), h.max(v)));
+        assert!(
+            hi - lo > BUMP_HEIGHT * 0.5,
+            "only {} blocks of bumps",
+            hi - lo
+        );
     }
 }

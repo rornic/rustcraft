@@ -34,7 +34,10 @@ mod tests {
             height: 500.0,
             continentalness: 0.3,
             ruggedness: -1.0,
-            climate: Climate { temperature: 0.4, humidity },
+            climate: Climate {
+                temperature: 0.4,
+                humidity,
+            },
         }
     }
 
