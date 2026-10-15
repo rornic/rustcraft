@@ -2495,12 +2495,6 @@ mod tests {
     }
 
     #[test]
-    fn test_grass_top_cell_matches_world_shader() {
-        let shader = std::fs::read_to_string("assets/shaders/world.wesl").unwrap();
-        assert!(shader.contains(&format!("const GRASS_TOP_CELL: f32 = {:.1};", Tile::GrassTop.atlas_cell())));
-    }
-
-    #[test]
     fn test_grass_sides_carry_their_untinted_shade() {
         let mut chunk = ChunkData::default();
         chunk.set_block_at(U16Vec3::new(10, 4, 10), BlockType::Grass);

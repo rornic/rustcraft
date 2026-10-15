@@ -6,7 +6,7 @@ import bevy_pbr::render::{
     shadows::fetch_directional_shadow,
     view_transformations::{position_world_to_clip, position_world_to_view},
 };
-import super::block_texture::{block_mean, block_texel, material_fade};
+import super::block_texture::{block_footprint, block_mean, block_sample, material_fade};
 import super::foliage::{is_leaf, swayed};
 import super::fog::fogged;
 import super::lighting::{direct_sun, open_sky};
@@ -61,8 +61,6 @@ const FLATTEN_START: f32 = 1024.0;
 const FLATTEN_END: f32 = 4096.0;
 const FLATTEN_MAX: f32 = 0.85;
 
-// `Tile::GrassTop`'s atlas cell
-const GRASS_TOP_CELL: f32 = 1.0;
 // Blocks per pixel at which grass sides start turning to the grass on top, and are wholly it:
 // four pixels tall, as the tile's green fringe is about a quarter of it, to under two.
 const GRASS_SIDE_FADE_START: f32 = 0.25;
@@ -120,7 +118,8 @@ fn fragment(
     let world_position = in.world_position.xyz;
     let normal = normalize(in.world_normal);
 
-    var color = block_texel(in.uv, in.color.a);
+    let footprint = block_footprint(in.uv);
+    var color = block_sample(in.uv, in.color.a, footprint);
     // blocks per pixel up the face, worked out here as derivatives need uniform control flow
     let block_rate = length(vec2<f32>(dpdx(in.uv.y), dpdy(in.uv.y)));
     // coarse LOD cells, where a stretched texture would read as one giant block, and wide
@@ -145,12 +144,16 @@ fn fragment(
     // ambient occlusion and grass/leaf tint
     var tinted = color.rgb * in.color.rgb;
 @if(VERTEX_UVS_B) {
-    // grass sides carry the grass's tint for their top, and their shade alone for their tile,
-    // see `MeshBuffers::tint_grass_sides`: once blocks are a few pixels tall their tile averages
-    // out to mostly dirt, while the grass on top of them would fill the pixel, so they turn to it
+    // grass sides are a greyscale grass fringe, transparent below, layered over dirt: the grass
+    // carries the grass's tint and the dirt its shade alone, see `MeshBuffers::tint_grass_sides`.
+    // Once blocks are a few pixels tall the tile averages out to mostly dirt, while the grass
+    // on top of them would fill the pixel, so they turn to it
     if in.uv_b.y < 0.0 {
-        let grass_top = block_mean(GRASS_TOP_CELL).rgb * in.color.rgb;
-        tinted = mix(color.rgb * -in.uv_b.y, grass_top, smoothstep(GRASS_SIDE_FADE_START, GRASS_SIDE_FADE_END, block_rate));
+        let dirt = block_sample(in.uv, f32(constants::DIRT_CELL), footprint).rgb * -in.uv_b.y;
+        let grass_top = block_mean(f32(constants::GRASS_TOP_CELL)).rgb * in.color.rgb;
+        let near = mix(dirt, tinted, color.a);
+        tinted = mix(near, grass_top, smoothstep(GRASS_SIDE_FADE_START, GRASS_SIDE_FADE_END, block_rate));
+        color.a = 1.0;
     }
 }
     color = vec4<f32>(tinted, color.a);
