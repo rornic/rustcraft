@@ -172,7 +172,10 @@ impl Material for ChunkMaterial {
         descriptor.primitive.cull_mode = Some(Face::Front);
         // the main and shadow passes both sway leaves, see `foliage.wesl`
         let leaf_cell = ShaderDefVal::UInt("LEAF_CELL".into(), Tile::Leaves.atlas_cell() as u32);
-        let mut defs = vec![leaf_cell, water_level()];
+        // grass sides draw over dirt, and turn to grass tops from afar, see `world.wesl`
+        let grass_top_cell = ShaderDefVal::UInt("GRASS_TOP_CELL".into(), Tile::GrassTop.atlas_cell() as u32);
+        let dirt_cell = ShaderDefVal::UInt("DIRT_CELL".into(), Tile::Dirt.atlas_cell() as u32);
+        let mut defs = vec![leaf_cell, grass_top_cell, dirt_cell, water_level()];
         // compiled in or out, so the switches leave no trace of the code they turn off
         if key.bind_group_data.still_leaves {
             defs.push("STILL_LEAVES".into());

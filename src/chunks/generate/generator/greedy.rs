@@ -1,6 +1,6 @@
 use super::buffers::{FanQuad, GrassTint, MeshBuffers, MeshStyle};
 use super::lod::SKIRT_CELLS;
-use super::shading::{face_light, vertex_ao, vertex_light, FACE_NORMAL_OFFSET, FACE_TANGENTS};
+use super::shading::{face_light, vertex_ao, vertex_light, AO_GAMMA, FACE_NORMAL_OFFSET, FACE_TANGENTS};
 use super::source::{BlockSource, GridView};
 use super::terrain::is_solid;
 use crate::block::BlockType;
@@ -307,7 +307,7 @@ pub(super) fn mesh_opaque_greedy(
                             BlockType::Grass => source.forest_shade(position),
                             _ => 1.0,
                         };
-                        (tint * ao * shade).extend(atlas_cell).to_array()
+                        (tint * ao.powf(AO_GAMMA) * shade).extend(atlas_cell).to_array()
                     };
                     if w == 1 && h == 1 {
                         let positions: [Vec3; 4] = std::array::from_fn(|j| {
