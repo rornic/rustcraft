@@ -5,9 +5,9 @@ use bevy::math::I64Vec2;
 
 use super::biome::BiomeId;
 use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
-use crate::chunks::lod::LodKey;
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
+use crate::chunks::lod::LodKey;
 
 // 64 resident regions x ~256KB/region (256x256 f32 heights) =~ 16MB
 // worst case - generous headroom over the chunk-load front's working set at render
@@ -37,7 +37,11 @@ struct RegionLru {
 
 impl RegionLru {
     fn new(cap: usize) -> Self {
-        Self { cap, tick: 0, entries: HashMap::new() }
+        Self {
+            cap,
+            tick: 0,
+            entries: HashMap::new(),
+        }
     }
 
     fn get_or_insert(&mut self, coord: RegionCoord) -> RegionSlot {
@@ -126,7 +130,10 @@ impl RegionStore {
     /// to whole tiles, or None if a region it touches hasn't been computed yet. Never blocks.
     pub fn loaded_height_range(&self, min: I64Vec2, max: I64Vec2) -> Option<(f32, f32)> {
         let lru = self.lru.read().unwrap();
-        let (first, last) = (RegionCoord::from_world(min.x, min.y), RegionCoord::from_world(max.x, max.y));
+        let (first, last) = (
+            RegionCoord::from_world(min.x, min.y),
+            RegionCoord::from_world(max.x, max.y),
+        );
         let (mut lowest, mut highest) = (f32::MAX, f32::MIN);
         for rz in first.0.y..=last.0.y {
             for rx in first.0.x..=last.0.x {
@@ -176,13 +183,15 @@ impl HeightSampler<'_> {
     pub fn biome(&mut self, world_x: i64, world_z: i64) -> BiomeId {
         let coord = RegionCoord::from_world(world_x, world_z);
         let origin = coord.origin();
-        self.region(coord).biome_at(world_x - origin.x, world_z - origin.y)
+        self.region(coord)
+            .biome_at(world_x - origin.x, world_z - origin.y)
     }
 
     pub fn trees(&mut self, world_x: i64, world_z: i64) -> f64 {
         let coord = RegionCoord::from_world(world_x, world_z);
         let origin = coord.origin();
-        self.region(coord).trees_at(world_x - origin.x, world_z - origin.y)
+        self.region(coord)
+            .trees_at(world_x - origin.x, world_z - origin.y)
     }
 
     // Central-difference gradient over the heightmap, as the height change across two
@@ -191,8 +200,10 @@ impl HeightSampler<'_> {
     pub fn gradient(&mut self, world_x: i64, world_z: i64) -> (f64, f64) {
         let span = SLOPE_SPAN;
         let scale = 1.0 / span as f64;
-        let gradient_x = self.height(world_x + span, world_z) - self.height(world_x - span, world_z);
-        let gradient_z = self.height(world_x, world_z + span) - self.height(world_x, world_z - span);
+        let gradient_x =
+            self.height(world_x + span, world_z) - self.height(world_x - span, world_z);
+        let gradient_z =
+            self.height(world_x, world_z + span) - self.height(world_x, world_z - span);
         (gradient_x * scale, gradient_z * scale)
     }
 
@@ -295,7 +306,10 @@ mod tests {
 
         let regions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
         for region in &regions[1..] {
-            assert!(Arc::ptr_eq(&regions[0], region), "all callers should observe the same computed Region");
+            assert!(
+                Arc::ptr_eq(&regions[0], region),
+                "all callers should observe the same computed Region"
+            );
         }
     }
 }

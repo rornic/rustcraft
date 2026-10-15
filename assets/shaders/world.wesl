@@ -9,7 +9,8 @@ import bevy_pbr::render::{
 import super::block_texture::{block_footprint, block_mean, block_sample, material_fade};
 import super::foliage::{is_leaf, swayed};
 import super::fog::fogged;
-import super::lighting::{direct_sun, open_sky};
+import super::lighting::{direct_moon, direct_sun, open_sky};
+import super::sky::SUN_LIGHT;
 import super::cloud_shadow::cloud_shadow;
 import super::lod_patch::patch_tint;
 import super::dither::dither_threshold;
@@ -32,25 +33,28 @@ fn sky_ambient(sky: f32, normal: vec3<f32>) -> vec3<f32> {
 }
 
 fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32>) -> f32 {
-    let sun = &view_bindings::lights.directional_lights[0];
+    let sun = &view_bindings::lights.directional_lights[SUN_LIGHT];
     if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
         return 1.0;
     }
     let view_z = position_world_to_view(world_position.xyz).z;
-    let shadow = fetch_directional_shadow(0u, world_position, normal, view_z, frag_coord);
+    let shadow = fetch_directional_shadow(SUN_LIGHT, world_position, normal, view_z, frag_coord);
     let reach = (*sun).cascades[(*sun).num_cascades - 1u].far_bound;
     return mix(shadow, 1.0, smoothstep(reach * SHADOW_FADE_START, reach, -view_z));
 }
 
-// Sunlight reaching a face, shadowed by the land and the clouds.
+// Sunlight reaching a face, shadowed by the land and the clouds, and moonlight, kept out of caves
+// by sky light but not shadowed.
 fn sunlight(world_position: vec4<f32>, normal: vec3<f32>, shaded: vec3<f32>, sky: f32, frag_coord: vec2<f32>) -> vec3<f32> {
-    let light = direct_sun(shaded, uncurved(world_position.xyz)) * smoothstep(0.0, SUN_SKY_GATE, sky);
+    let gate = smoothstep(0.0, SUN_SKY_GATE, sky);
+    let moon = direct_moon(shaded) * gate;
+    let light = direct_sun(shaded, uncurved(world_position.xyz)) * gate;
     // faces it can't reach need no shadow lookups
     if all(light == vec3<f32>(0.0)) {
-        return light;
+        return moon;
     }
     // the clouds are flat, so their shadows fall where the land really is
-    return light * sun_shadow(world_position, normal, frag_coord) * cloud_shadow(uncurved(world_position.xyz));
+    return light * sun_shadow(world_position, normal, frag_coord) * cloud_shadow(uncurved(world_position.xyz)) + moon;
 }
 
 // Faces turn toward up between these distances in blocks, to this much of the way: past

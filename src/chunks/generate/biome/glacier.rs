@@ -33,7 +33,8 @@ impl Biome for Glacier {
         if above_sea <= 0.0 {
             return column.height;
         }
-        let relief = LOWLAND_RELIEF + (1.0 - LOWLAND_RELIEF) * smoothstep(FLATTENED_UNDER.0, FLATTENED_UNDER.1, above_sea);
+        let relief = LOWLAND_RELIEF
+            + (1.0 - LOWLAND_RELIEF) * smoothstep(FLATTENED_UNDER.0, FLATTENED_UNDER.1, above_sea);
         WATER_LEVEL as f64 + above_sea * relief
     }
 
@@ -64,7 +65,10 @@ mod tests {
             height: WATER_LEVEL as f64 + above_sea,
             continentalness,
             ruggedness: -1.0,
-            climate: Climate { temperature, humidity: 0.5 },
+            climate: Climate {
+                temperature,
+                humidity: 0.5,
+            },
         }
     }
 
@@ -88,7 +92,13 @@ mod tests {
     fn test_glacier_flattens_lowlands_but_not_peaks() {
         let flat = Glacier.height(&column(0.0, 40.0, 0.3)) - WATER_LEVEL as f64;
         assert!(flat < 40.0 * 0.6, "lowland was {flat}");
-        assert_eq!(WATER_LEVEL as f64 + 300.0, Glacier.height(&column(0.0, 300.0, 0.3)));
-        assert_eq!(WATER_LEVEL as f64 - 20.0, Glacier.height(&column(0.0, -20.0, -0.3)));
+        assert_eq!(
+            WATER_LEVEL as f64 + 300.0,
+            Glacier.height(&column(0.0, 300.0, 0.3))
+        );
+        assert_eq!(
+            WATER_LEVEL as f64 - 20.0,
+            Glacier.height(&column(0.0, -20.0, -0.3))
+        );
     }
 }

@@ -1,24 +1,25 @@
 use bevy::{
     asset::{Asset, RenderAssetUsages},
-    image::{CompressedImageFormats, ImageFilterMode, ImageSampler, ImageSamplerDescriptor, ImageType},
+    image::{
+        CompressedImageFormats, ImageFilterMode, ImageSampler, ImageSamplerDescriptor, ImageType,
+    },
     pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     reflect::TypePath,
-    shader::{ShaderDefVal, ShaderRef},
     render::{
         mesh::MeshVertexBufferLayoutRef,
-        storage::ShaderBuffer,
         render_resource::{
-            AsBindGroup, Face, RenderPipelineDescriptor,
-            SpecializedMeshPipelineError,
+            AsBindGroup, Face, RenderPipelineDescriptor, SpecializedMeshPipelineError,
         },
+        storage::ShaderBuffer,
     },
+    shader::{ShaderDefVal, ShaderRef},
 };
 
 use crate::block::Tile;
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::lod::{LodLayout, SOLID_WATER_LEVEL};
 use crate::chunks::generate::WATER_LEVEL;
+use crate::chunks::lod::{LodLayout, SOLID_WATER_LEVEL};
 use crate::settings::DebugSettings;
 
 // Sea level, where `fog.wesl` turns from fog across the land to murk all round.
@@ -82,8 +83,18 @@ fn mip_tiles(image: &mut Image, levels: u32) {
                     alpha += a;
                 }
                 let weight = alpha.max(f32::EPSILON);
-                let colour = Srgba::from(LinearRgba::rgb(rgb[0] / weight, rgb[1] / weight, rgb[2] / weight)).to_u8_array();
-                next.extend_from_slice(&[colour[0], colour[1], colour[2], (alpha / 4.0 * 255.0).round() as u8]);
+                let colour = Srgba::from(LinearRgba::rgb(
+                    rgb[0] / weight,
+                    rgb[1] / weight,
+                    rgb[2] / weight,
+                ))
+                .to_u8_array();
+                next.extend_from_slice(&[
+                    colour[0],
+                    colour[1],
+                    colour[2],
+                    (alpha / 4.0 * 255.0).round() as u8,
+                ]);
             }
         }
         data.extend_from_slice(&next);
@@ -177,6 +188,14 @@ impl Material for ChunkMaterial {
     }
 }
 
+/// The materials terrain draws with, before any fading.
+#[derive(Clone)]
+pub struct TerrainMaterials {
+    pub chunk: Handle<ChunkMaterial>,
+    pub water: Handle<WaterMaterial>,
+    pub solid_water: Handle<WaterMaterial>,
+}
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(WaterKey)]
 pub struct WaterMaterial {
@@ -224,7 +243,9 @@ pub struct WaterKey {
 
 impl From<&WaterMaterial> for WaterKey {
     fn from(material: &WaterMaterial) -> Self {
-        Self { solid: material.solid }
+        Self {
+            solid: material.solid,
+        }
     }
 }
 
@@ -285,7 +306,10 @@ mod tests {
         let reach = super::see_through_reach(layout);
         // the nearest a node drawing opaque water can be, in blocks
         let opaque = layout.reach(SOLID_WATER_LEVEL - 1) * 16.0;
-        assert!(reach.x < reach.y && reach.y < opaque, "{reach} for opaque from {opaque}");
+        assert!(
+            reach.x < reach.y && reach.y < opaque,
+            "{reach} for opaque from {opaque}"
+        );
         // with no level that coarse, water stays see-through however far out
         assert!(super::see_through_reach(LodLayout::new(16, 16, 2)).x > 1e30);
     }
@@ -296,10 +320,15 @@ mod tests {
         let tile = atlas.height() as usize;
         let levels = tile.ilog2() as usize + 1;
         assert_eq!(levels as u32, atlas.texture_descriptor.mip_level_count);
-        let texels: usize = (0..levels).map(|l| (atlas.width() as usize >> l) * (tile >> l)).sum();
+        let texels: usize = (0..levels)
+            .map(|l| (atlas.width() as usize >> l) * (tile >> l))
+            .sum();
         assert_eq!(texels * 4, atlas.data.as_ref().unwrap().len());
         // the last level has one texel for each of the atlas's tiles
-        assert_eq!(atlas.width() as usize / tile, atlas.width() as usize >> (levels - 1));
+        assert_eq!(
+            atlas.width() as usize / tile,
+            atlas.width() as usize >> (levels - 1)
+        );
     }
 
     // `block_mean`'s colours in block_texture.wesl, in atlas order
@@ -317,7 +346,9 @@ mod tests {
 
     // The mean linear colour of the texels each atlas cell draws, those the shaders don't cut out.
     fn atlas_means() -> Vec<[f32; 3]> {
-        let atlas = image::open("assets/textures/blocks.png").unwrap().to_rgba8();
+        let atlas = image::open("assets/textures/blocks.png")
+            .unwrap()
+            .to_rgba8();
         let tile = atlas.height();
         (0..atlas.width() / tile)
             .map(|cell| {
@@ -341,7 +372,10 @@ mod tests {
         assert_eq!(atlas.len(), shader.len(), "one mean per atlas cell");
         for (cell, (s, a)) in shader.iter().zip(&atlas).enumerate() {
             for i in 0..3 {
-                assert!((s[i] - a[i]).abs() < 0.001, "atlas cell {cell}: shader has {s:?}, blocks.png averages {a:?}");
+                assert!(
+                    (s[i] - a[i]).abs() < 0.001,
+                    "atlas cell {cell}: shader has {s:?}, blocks.png averages {a:?}"
+                );
             }
         }
     }
