@@ -6,7 +6,7 @@ use bevy::{
         query::With,
         resource::Resource,
         schedule::IntoScheduleConfigs,
-        system::{Query, Res, ResMut},
+        system::{Query, ResMut},
         world::{FromWorld, World},
     },
     math::{FloatExt, Vec3},
@@ -16,7 +16,7 @@ use bevy::{
 
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::{WATER_LEVEL, WORLD_HEIGHT};
-use crate::chunks::lod::LodLoader;
+use crate::horizon::MAX_RENDER_DISTANCE;
 
 // The tallest land can rise above the sea.
 const TALLEST: f32 = (WORLD_HEIGHT as i64 - WATER_LEVEL) as f32;
@@ -25,7 +25,11 @@ const TALLEST: f32 = (WORLD_HEIGHT as i64 - WATER_LEVEL) as f32;
 const FADE_START: f32 = 100.0;
 const FADE_END: f32 = 450.0;
 
-/// The round world the land is drawn bent around.
+/// The round world the land is drawn bent around: always the same size, so a shorter render
+/// distance shows less of its curve.
+pub const WORLD_CURVE: Curve = Curve::seen_from_the_top_to(MAX_RENDER_DISTANCE);
+
+/// A round world to bend the land around.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Curve {
     /// In blocks.
@@ -33,13 +37,12 @@ pub struct Curve {
 }
 
 impl Curve {
-    /// The world whose horizon from sea level is the render distance set, in chunks: the
-    /// setting is how far the world is seen from the ground, and climbing to the top of the
-    /// world sees twice as far, see `horizon_distance`.
-    pub fn for_render_distance(chunks: f32) -> Self {
+    /// The world whose horizon from the top of the world is `chunks` away. From sea level
+    /// its horizon is half as far, see `horizon_distance`.
+    pub const fn seen_from_the_top_to(chunks: f32) -> Self {
         let blocks = chunks * CHUNK_SIZE as f32;
-        // solves `horizon_distance` at sea level for the radius
-        Self { radius: blocks * blocks / (2.0 * TALLEST) }
+        // solves `horizon_distance` at the top of the world for the radius
+        Self { radius: blocks * blocks / (8.0 * TALLEST) }
     }
 
     /// How far out land can be seen from `height` blocks up: out to the sea's horizon, and
@@ -93,14 +96,12 @@ fn frame(eye: Vec3, curve: Curve) -> [f32; 4] {
 fn update_curvature(
     mut curvature: ResMut<Curvature>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
-    lods: Res<LodLoader>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
 ) {
     let Ok(transform) = camera.single() else {
         return;
     };
-    let curve = Curve::for_render_distance(lods.set_render_distance_chunks());
-    let now = frame(transform.translation(), curve);
+    let now = frame(transform.translation(), WORLD_CURVE);
     if let Some(mut buffer) = buffers.get_mut(&curvature.buffer) {
         buffer.clear();
         buffer.extend_from_slice(&now);
@@ -174,10 +175,9 @@ mod tests {
     }
 
     #[test]
-    fn test_the_render_distance_is_the_horizon_from_the_ground_and_half_from_the_top() {
-        let curve = Curve::for_render_distance(1024.0);
-        let blocks = 1024.0 * CHUNK_SIZE as f32;
-        assert!((curve.horizon_distance(SEA) - blocks).abs() < 0.5);
-        assert!((curve.horizon_distance(WORLD_HEIGHT as f32) - 2.0 * blocks).abs() < 1.0);
+    fn test_the_top_of_the_world_sees_to_the_cap() {
+        let blocks = MAX_RENDER_DISTANCE * CHUNK_SIZE as f32;
+        assert!((WORLD_CURVE.horizon_distance(WORLD_HEIGHT as f32) - blocks).abs() < 1.0);
+        assert!((WORLD_CURVE.horizon_distance(SEA) - blocks / 2.0).abs() < 0.5);
     }
 }

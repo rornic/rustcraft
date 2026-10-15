@@ -2,6 +2,7 @@
 // land curves away below it from high up, as the air does round the real Earth seen from
 // a mountain or a plane, see `curvature.rs`.
 
+import bevy_pbr::render::mesh_view_bindings as view_bindings;
 import super::curvature::curvature;
 import super::sky::{clear_sky_colour, sky_colour};
 
@@ -21,17 +22,29 @@ const SKY_SAMPLES: i32 = 8;
 // far below level the edge is.
 const SKY_BEND_TOP: f32 = 2.0;
 
-// How far below level the camera sees the sea's horizon, as a slope: where a line from the
-// eye grazes the bent sea. 0 where the land isn't bent. `WATER_LEVEL` comes from the
-// material's `specialize`.
-fn horizon_dip() -> f32 {
-    let height = max(curvature.now.eye.y - f32(constants::WATER_LEVEL), 0.0);
-    return 2.0 * sqrt(curvature.now.per_square_block * height);
+// How far above the sea the camera is. `WATER_LEVEL` comes from the material's `specialize`.
+fn height_above_sea() -> f32 {
+    return max(curvature.now.eye.y - f32(constants::WATER_LEVEL), 0.0);
 }
 
-// How strongly the glow shows, 0..1: none while the land's flat, coming in as it bends.
+// How far below level the camera sees the land's edge, as a slope: the sea's horizon, where
+// a line from the eye grazes the bent sea, or nearer, where the fog ends, if the land's drawn
+// short of the horizon. A shorter render distance sees less of the curve.
+fn horizon_dip() -> f32 {
+    let height = height_above_sea();
+    let bend = curvature.now.per_square_block;
+    var edge = max(view_bindings::fog.be.y, 1.0);
+    if bend > 0.0 {
+        edge = min(edge, sqrt(height / bend));
+    }
+    return height / edge + bend * edge;
+}
+
+// How strongly the glow shows, 0..1: none while the land's flat, coming in as it bends, by
+// how far its curve alone takes the sea's horizon below level.
 fn glow_strength() -> f32 {
-    return smoothstep(0.0, GLOW_FULL_DIP, horizon_dip());
+    let curve_dip = 2.0 * sqrt(curvature.now.per_square_block * height_above_sea());
+    return smoothstep(0.0, GLOW_FULL_DIP, curve_dip);
 }
 
 // Toward `across`, a direction along the ground, at `slope` above level.
@@ -68,10 +81,11 @@ fn sky_over_curve(across: vec2<f32>, slope: f32) -> vec3<f32> {
 // The glow seen toward `across` at `slope` above level: brightest along the land's edge and
 // fading away either side of it.
 fn horizon_glow(across: vec2<f32>, slope: f32) -> vec3<f32> {
-    let dip = horizon_dip();
-    if dip <= 0.0 {
+    let strength = glow_strength();
+    if strength <= 0.0 {
         return vec3<f32>(0.0);
     }
+    let dip = max(horizon_dip(), 1e-4);
     let from_edge = abs(slope + dip) / (dip * GLOW_WIDTH);
-    return horizon_haze(across) * GLOW_GAIN * glow_strength() * exp(-from_edge);
+    return horizon_haze(across) * GLOW_GAIN * strength * exp(-from_edge);
 }
