@@ -58,7 +58,7 @@ const THICK_TRUNK: i64 = 12;
 const COVERAGE_CELL: i64 = 4;
 const COVERAGE_POINTS: usize = 7;
 /// Cells this wide or wider leave out the trunk, which would stand a pillar far thicker than it
-/// is. Meshing draws it as a thin box instead, see `generator::Trunk`.
+/// is. Meshing draws it as a thin box instead, see `generator::TreeBox`.
 pub const THIN_TRUNK_CELL: i64 = 4;
 // How far in leaves are nibbled from the edge of a crown.
 const NIBBLE: f64 = 0.9;
