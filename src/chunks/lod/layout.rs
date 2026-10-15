@@ -1,4 +1,6 @@
-use super::*;
+use super::key::LodKey;
+use crate::chunks::chunk::ChunkCoordinate;
+use crate::chunks::generate::columns::COARSE_CELL;
 
 /// How the world is split into detail levels, set from the renderer settings.
 #[derive(Debug, Copy, Clone)]

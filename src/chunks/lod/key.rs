@@ -1,4 +1,7 @@
-use super::*;
+use crate::chunks::chunk::ChunkCoordinate;
+use crate::chunks::chunk::CHUNK_SIZE;
+use bevy::math::I64Vec3;
+use bevy::math::Vec3;
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub struct LodKey {

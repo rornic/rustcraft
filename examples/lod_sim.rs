@@ -21,7 +21,7 @@ use rustcraft::chunks::generate::noise::NoiseGenerator;
 use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk};
 use rustcraft::chunks::lod::{LodKey, LodLayout, LodLoader, LodNode};
-use rustcraft::chunks::material::{ChunkMaterial, WaterMaterial};
+use rustcraft::chunks::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
 use rustcraft::horizon::render_distance_at;
 use rustcraft::settings::{DebugSettings, RendererSettings, Settings};
@@ -88,13 +88,17 @@ fn setup(
         renderer,
         &DebugSettings::default(),
         height,
-        chunk,
-        water,
-        solid_water,
+        TerrainMaterials {
+            chunk,
+            water,
+            solid_water,
+        },
         &mut chunk_materials,
         &mut water_materials,
     );
 }
+
+type LodTriangle = ([Vec3; 3], LodKey);
 
 struct Report {
     holes: [usize; 4],
@@ -341,7 +345,7 @@ fn probe_holes(app: &mut App, centre: Vec3, radius: f32, samples: usize) {
         world.resource::<rustcraft::world::World>().seed()
     );
     let mut bins: HashMap<(i32, i32), Vec<[Vec2; 3]>> = HashMap::new();
-    let mut bins3: HashMap<(i32, i32), Vec<([Vec3; 3], LodKey)>> = HashMap::new();
+    let mut bins3: HashMap<(i32, i32), Vec<LodTriangle>> = HashMap::new();
     let mut add = |mesh: &Mesh, key: LodKey| {
         let cell = key.cell_size() as f32;
         let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell - 0.5);

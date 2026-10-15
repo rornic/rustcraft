@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
     insert_terrain_resources,
-    material::{block_atlas, see_through_reach, ChunkMaterial, WaterMaterial},
+    material::{block_atlas, see_through_reach, ChunkMaterial, TerrainMaterials, WaterMaterial},
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
@@ -24,6 +24,7 @@ use rustcraft::sky::{
 use rustcraft::sun_glare::SunGlarePlugin;
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
+#[allow(clippy::too_many_arguments)]
 fn setup_scene(
     mut commands: Commands,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
@@ -140,9 +141,11 @@ fn setup_scene(
         &renderer,
         &settings.debug,
         world_height,
-        chunk_material_handle,
-        water_material_handle,
-        solid_water_material_handle,
+        TerrainMaterials {
+            chunk: chunk_material_handle,
+            water: water_material_handle,
+            solid_water: solid_water_material_handle,
+        },
         &mut chunk_materials,
         &mut water_materials,
     );

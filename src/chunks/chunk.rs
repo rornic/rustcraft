@@ -124,7 +124,7 @@ impl ChunkData {
     }
 
     fn is_block_in_chunk(&self, block_coord: U16Vec3) -> bool {
-        return block_coord.x < self.size && block_coord.y < self.size && block_coord.z < self.size;
+        block_coord.x < self.size && block_coord.y < self.size && block_coord.z < self.size
     }
 
     // x outer, z middle, y inner - matches generate_chunk's nested loop order, so terrain

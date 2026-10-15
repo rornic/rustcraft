@@ -1,4 +1,11 @@
-use super::*;
+use super::lod::LodBlocks;
+use super::source::{BoxFaces, TreeBox};
+use crate::block::BlockType;
+use crate::chunks::generate::trees::Tree;
+use crate::chunks::generate::trees::TREE_REACH;
+use bevy::math::I64Vec3;
+use bevy::math::UVec2;
+use bevy::math::Vec3;
 
 // How many stacked boxes a crown is drawn as in cells `cell` blocks wide, too wide to hold it:
 // fewer the farther out, where there are more of them and each is smaller.

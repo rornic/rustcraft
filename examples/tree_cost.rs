@@ -86,8 +86,8 @@ fn main() {
     for level in 0..=layout.max_level {
         let width = size << level;
         let (mut vertices, mut all) = (0, 0);
-        let measured;
-        if level == 0 {
+
+        let measured = if level == 0 {
             // a quarter of the patch, as full detail is slow to make
             let span = PATCH / 4 / size;
             for x in 0..span {
@@ -109,7 +109,7 @@ fn main() {
                     }
                 }
             }
-            measured = (span * size).pow(2);
+            (span * size).pow(2)
         } else {
             let span = (PATCH / width).max(1);
             for x in 0..span {
@@ -127,8 +127,8 @@ fn main() {
                     }
                 }
             }
-            measured = (span * width).pow(2);
-        }
+            (span * width).pow(2)
+        };
         let per_km2 = vertices as f64 / measured as f64 * 1e6;
         let all_per_km2 = all as f64 / measured as f64 * 1e6;
         let reach = layout.reach(level).min(layout.render_distance()) as f64 * size as f64;

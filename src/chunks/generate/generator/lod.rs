@@ -1,4 +1,35 @@
-use super::*;
+use super::buffers::{ChunkMeshes, GrassTint, MeshStyle, TEXTURE_MAX_CELL_SIZE};
+use super::canopy::{
+    crown_layers, Canopy, BOX_CROWN_CELL, CANOPY_CELL, CANOPY_SHADE, CANOPY_SHADE_SPAN,
+    FOREST_COVER, FOREST_DARKEN, TREE_MAX_CELL, TRUNK_MAX_CELL,
+};
+use super::chunk::{sky_above, trees_may_reach};
+use super::mesh::mesh_blocks;
+use super::source::{water_depth, BlockSource, BoxFaces, TreeBox};
+use super::terrain::{column_block, freeze_cell, ground_top, is_solid, under_grass, underwater};
+use crate::block::BlockType;
+use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::generate::biome::BiomeId;
+use crate::chunks::generate::columns::ColumnGrid;
+use crate::chunks::generate::columns::COARSE_CELL;
+use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::noise::NoiseGenerator;
+use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::region_store::SLOPE_SPAN;
+use crate::chunks::generate::trees::grows_into;
+use crate::chunks::generate::trees::trees_near;
+use crate::chunks::generate::trees::Tree;
+use crate::chunks::generate::trees::TreeGround;
+use crate::chunks::generate::trees::TreeTints;
+use crate::chunks::generate::trees::THIN_TRUNK_CELL;
+use crate::chunks::generate::WATER_LEVEL;
+use crate::chunks::lod::LodKey;
+use bevy::math::I64Vec2;
+use bevy::math::I64Vec3;
+use bevy::math::IVec3;
+use bevy::math::Vec3;
+use std::cell::LazyCell;
+use std::sync::Arc;
 
 pub(super) const SKIRT_CELLS: i32 = 2;
 
@@ -604,7 +635,17 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
     });
     let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
     // untextured leaves are drawn solid, so hide the leaves behind them
-    let meshes = mesh_blocks(&blocks, cell_size, true, textured, !textured, &tint, &light);
+    let meshes = mesh_blocks(
+        &blocks,
+        cell_size,
+        MeshStyle {
+            ambient_occlusion: true,
+            textured,
+            solid_leaves: !textured,
+        },
+        &tint,
+        &light,
+    );
     if meshes.opaque.count_vertices() == 0 && meshes.water.is_none() {
         return None;
     }

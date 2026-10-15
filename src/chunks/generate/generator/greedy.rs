@@ -1,4 +1,17 @@
-use super::*;
+use super::buffers::{FanQuad, GrassTint, MeshBuffers, MeshStyle};
+use super::lod::SKIRT_CELLS;
+use super::shading::{face_light, vertex_ao, vertex_light, FACE_NORMAL_OFFSET, FACE_TANGENTS};
+use super::source::{BlockSource, GridView};
+use super::terrain::is_solid;
+use crate::block::BlockType;
+use crate::block::Face;
+use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::MAX_LIGHT;
+use crate::util::primitives::Vertex;
+use bevy::math::IVec3;
+use bevy::math::Vec3;
+use std::ops::Deref;
 
 pub(super) fn axis_of(v: IVec3) -> usize {
     if v.x != 0 {
@@ -122,15 +135,17 @@ pub(super) fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
     face_vertices: &[&[Vertex]; 6],
     buffers: &mut MeshBuffers,
-    ambient_occlusion: bool,
-    solid_leaves: bool,
-    // whether faces draw their own tile, not the one their block's colour is read from
-    textured: bool,
+    style: MeshStyle,
     // how many times the texture repeats across a cell
     uv_tiles: f32,
     grass_tint: &GrassTint,
     light: &impl Deref<Target = SkyLight>,
 ) {
+    let MeshStyle {
+        ambient_occlusion,
+        textured,
+        solid_leaves,
+    } = style;
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
     let mut mask: Vec<Option<FaceCell>> = vec![None; n * n];

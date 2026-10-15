@@ -153,6 +153,7 @@ impl ChunkLoader {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn gather_chunks(
     mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
@@ -247,6 +248,7 @@ pub fn generate_chunks(
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn mark_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
@@ -357,6 +359,7 @@ pub fn load_chunks(
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn unload_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,

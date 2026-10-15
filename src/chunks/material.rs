@@ -185,6 +185,14 @@ impl Material for ChunkMaterial {
     }
 }
 
+/// The materials terrain draws with, before any fading.
+#[derive(Clone)]
+pub struct TerrainMaterials {
+    pub chunk: Handle<ChunkMaterial>,
+    pub water: Handle<WaterMaterial>,
+    pub solid_water: Handle<WaterMaterial>,
+}
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 #[bind_group_data(WaterKey)]
 pub struct WaterMaterial {

@@ -1,4 +1,9 @@
-use super::*;
+use super::terrain::resolve_block;
+use crate::block::BlockType;
+use crate::chunks::chunk::ChunkData;
+use bevy::math::IVec3;
+use bevy::math::Vec3;
+use std::sync::Arc;
 
 pub(super) trait BlockSource {
     fn block(&self, coord: IVec3) -> BlockType;

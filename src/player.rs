@@ -57,6 +57,7 @@ impl Default for PlayerMovement {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn player_move(
     time: Res<Time>,
     mut player_query: Query<(&PlayerMovement, &mut Transform)>,
@@ -111,6 +112,7 @@ impl Default for PlayerLook {
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub fn player_look(
     time: Res<Time>,
     mut player_query: Query<(&PlayerLook, &mut Transform)>,

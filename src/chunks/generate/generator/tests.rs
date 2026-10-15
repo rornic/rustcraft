@@ -7,15 +7,27 @@ use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
 
 use crate::block::{BlockType, Tile};
 
-use super::{
-    freeze_cell, generate_chunk, generate_chunk_mesh, resolve_block, terrain_block, under_grass,
-    vertex_ao, vertex_water_depth, water_depth, BlockSource, ChunkMeshes, ChunkNeighbourhood,
-    GrassTint, LodBlocks, AO_STRENGTH, FREEZE_TEMPERATURE, WATER_LEVEL,
-};
+use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
+use super::chunk::{generate_chunk, generate_chunk_mesh};
+use super::lod::LodBlocks;
+use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
+use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
+use super::terrain::{freeze_cell, resolve_block, terrain_block, under_grass, FREEZE_TEMPERATURE};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
+use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
+
+// solid leaves, as every LOD draws them
+fn style(ambient_occlusion: bool, textured: bool) -> MeshStyle {
+    MeshStyle {
+        ambient_occlusion,
+        textured,
+        solid_leaves: true,
+    }
+}
 
 fn no_neighbors() -> [Option<Arc<ChunkData>>; 26] {
     std::array::from_fn(|_| None)
@@ -386,14 +398,14 @@ fn sloped_lod() -> LodBlocks {
 fn mesh_lod(lod: &LodBlocks) -> Mesh {
     let top = lod.base_y + (lod.size as i64 + 1) * lod.cell;
     let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
-    let light = Box::new(super::SkyLight::new(
+    let light = Box::new(SkyLight::new(
         IVec3::splat(-1),
         IVec3::splat(lod.size + 2),
-        super::sky_above(top, lod.cell),
+        super::chunk::sky_above(top, lod.cell),
         opacity,
     ));
     let tint = GrassTint::new(&NoiseGenerator::new(3), Vec3::ZERO, lod.cell as f32);
-    super::mesh_blocks(lod, lod.cell, false, false, true, &tint, &light).opaque
+    super::mesh::mesh_blocks(lod, lod.cell, style(false, false), &tint, &light).opaque
 }
 
 // each face's normal and its vertices' positions
@@ -692,7 +704,7 @@ fn test_grass_sides_carry_their_untinted_shade() {
             // the shade is ambient occlusion here, so between dark and full
             assert!(mode[1] < 0.0 && mode[1] >= -1.0, "{mode:?}");
         } else {
-            assert_eq!(super::TEXTURED, mode[1]);
+            assert_eq!(super::buffers::TEXTURED, mode[1]);
         }
     }
     assert!(sides > 0);
@@ -825,7 +837,7 @@ fn test_lod_ground_under_open_sky_is_lit_to_its_edges() {
     ));
     let regions = Arc::new(RegionStore::new(noise));
     let key = crate::chunks::lod::LodKey::containing(chunk, 1);
-    let mesh = super::generate_lod_mesh(regions, key)
+    let mesh = super::lod::generate_lod_mesh(regions, key)
         .expect("no mesh")
         .opaque;
     let lights = top_lights(&mesh);
@@ -858,18 +870,23 @@ fn test_lods_wider_than_four_blocks_are_untextured() {
     let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
     let regions = Arc::new(RegionStore::new(noise));
     let key = crate::chunks::lod::LodKey::containing(chunk, 5);
-    assert!(key.cell_size() > super::BOX_TEXTURE_MAX_CELL);
+    assert!(key.cell_size() > super::buffers::BOX_TEXTURE_MAX_CELL);
     let flags = untextured_flags(
-        &super::generate_lod_mesh(regions, key)
+        &super::lod::generate_lod_mesh(regions, key)
             .expect("no mesh")
             .opaque,
     );
     // but for tree boxes, textured with their leaves' holes filled, which come last
     let ground = flags
         .iter()
-        .take_while(|&&f| f == super::UNTEXTURED)
+        .take_while(|&&f| f == super::buffers::UNTEXTURED)
         .count();
-    assert!(ground > 0 && flags[ground..].iter().all(|&f| f == super::TEXTURED_SOLID));
+    assert!(
+        ground > 0
+            && flags[ground..]
+                .iter()
+                .all(|&f| f == super::buffers::TEXTURED_SOLID)
+    );
 }
 
 #[test]
@@ -885,8 +902,8 @@ fn test_tree_boxes_stay_textured_up_to_eight_wide_cells_with_a_tile_a_block() {
     let tree = &trees[0];
     let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
     let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), 3);
-    assert!(key.cell_size() <= super::BOX_TEXTURE_MAX_CELL);
-    let opaque = super::generate_lod_mesh(regions, key)
+    assert!(key.cell_size() <= super::buffers::BOX_TEXTURE_MAX_CELL);
+    let opaque = super::lod::generate_lod_mesh(regions, key)
         .expect("no mesh")
         .opaque;
     let flags = untextured_flags(&opaque);
@@ -911,12 +928,12 @@ fn test_lods_up_to_four_blocks_are_textured_with_the_texture_repeating_over_each
     let regions = Arc::new(RegionStore::new(noise));
     let key = crate::chunks::lod::LodKey::containing(chunk, 2);
     assert_eq!(4, key.cell_size());
-    let mesh = super::generate_lod_mesh(regions, key)
+    let mesh = super::lod::generate_lod_mesh(regions, key)
         .expect("no mesh")
         .opaque;
     let flags = untextured_flags(&mesh);
     // grass sides mark their shade instead, see `MeshBuffers::tint_grass_sides`
-    assert!(!flags.is_empty() && flags.iter().all(|&f| f == 0.0 || f < 0.0));
+    assert!(!flags.is_empty() && flags.iter().all(|&f| f <= 0.0));
     // a face one cell wide spans four tiles, so none comes out a tile wide
     let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap();
     let bevy::render::mesh::VertexAttributeValues::Float32x2(uvs) = uvs else {
@@ -985,9 +1002,9 @@ fn shaded_vertices(mesh: &Mesh) -> Vec<(Vec3, Vec3, Vec3, f32)> {
 #[test]
 fn test_merging_shaded_faces_leaves_their_shading_as_it_was() {
     let unmerged = {
-        super::NO_MERGING.set(true);
+        super::greedy::NO_MERGING.set(true);
         let mesh = mesh_chunk(walled_chunk()).opaque;
-        super::NO_MERGING.set(false);
+        super::greedy::NO_MERGING.set(false);
         mesh
     };
     let merged = mesh_chunk(walled_chunk()).opaque;
@@ -1158,7 +1175,7 @@ fn test_skirt_walls_are_lit_like_the_open_ground_they_hang_from() {
     // flat ground under open sky, cells a block across, and the cells beyond it solid
     let lod = flat_lod(8);
     let noise = NoiseGenerator::new(1);
-    let tint = super::GrassTint::new(&noise, Vec3::ZERO, 1.0);
+    let tint = super::buffers::GrassTint::new(&noise, Vec3::ZERO, 1.0);
     let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
     let light = std::cell::LazyCell::new(|| {
         crate::chunks::generate::light::SkyLight::new(
@@ -1168,7 +1185,7 @@ fn test_skirt_walls_are_lit_like_the_open_ground_they_hang_from() {
             opacity,
         )
     });
-    let mesh = super::mesh_blocks(&lod, 1, true, false, true, &tint, &light).opaque;
+    let mesh = super::mesh::mesh_blocks(&lod, 1, style(true, false), &tint, &light).opaque;
     let Some(bevy::render::mesh::VertexAttributeValues::Float32x2(lights)) =
         mesh.attribute(Mesh::ATTRIBUTE_UV_1)
     else {
@@ -1234,7 +1251,7 @@ fn test_lod_water_surface_cells_over_shallow_ground_are_water() {
                         for cy in 0..lod.size {
                             let bottom = lod.base_y + cy as i64 * lod.cell;
                             if bottom < WATER_LEVEL && WATER_LEVEL <= bottom + lod.cell {
-                                assert!(!super::is_solid(lod.raw(IVec3::new(cx, cy, cz))));
+                                assert!(!super::terrain::is_solid(lod.raw(IVec3::new(cx, cy, cz))));
                                 checked += 1;
                             }
                         }
@@ -1342,7 +1359,7 @@ fn test_canopy_shade_darkens_toward_the_ground() {
     let at = |y: f32| lod.canopy_shade(Vec3::new(4.0, y, 4.0));
     // a leaf at the canopy's top is unshaded, and the foot of a canopy is the darkest
     assert_eq!(1.0, at(39.5));
-    assert!((at(19.5) - (1.0 - super::CANOPY_SHADE)).abs() < 1e-5);
+    assert!((at(19.5) - (1.0 - super::canopy::CANOPY_SHADE)).abs() < 1e-5);
     assert!(at(30.0) < at(35.0) && at(35.0) < at(39.5));
     // below the span it stops getting darker
     assert_eq!(at(19.5), at(9.5));
@@ -1391,7 +1408,7 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
             .iter()
             .filter(|b| b.block == BlockType::Leaves)
             .count();
-        if cell < super::BOX_CROWN_CELL {
+        if cell < super::canopy::BOX_CROWN_CELL {
             assert!(
                 leaf_cells > 0,
                 "no leaf cells at level {level}, cells {cell} blocks wide"
@@ -1399,7 +1416,7 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
         } else {
             // a crown is boxes of its real size, never a cell's worth of cube, and fewer the farther out
             assert_eq!(0, leaf_cells);
-            let wanted = tree.crown_boxes(super::crown_layers(cell));
+            let wanted = tree.crown_boxes(super::canopy::crown_layers(cell));
             assert!(
                 !wanted.is_empty() && crown_boxes >= wanted.len(),
                 "{crown_boxes} crown boxes of {} at level {level}",
@@ -1490,7 +1507,7 @@ fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
                 key.cell_size(),
             )
         };
-        let tint = super::GrassTint::new(regions.noise(), Vec3::ZERO, 1.0);
+        let tint = super::buffers::GrassTint::new(regions.noise(), Vec3::ZERO, 1.0);
         let light = std::cell::LazyCell::new(|| {
             crate::chunks::generate::light::SkyLight::new(
                 IVec3::splat(-1),
@@ -1500,7 +1517,8 @@ fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
             )
         });
         let mesh =
-            super::mesh_blocks(&lone, key.cell_size(), false, false, true, &tint, &light).opaque;
+            super::mesh::mesh_blocks(&lone, key.cell_size(), style(false, false), &tint, &light)
+                .opaque;
         // its foot is in the ground and its top in the crown, so only its sides show
         assert_eq!(4 * 4, mesh.count_vertices());
     }
@@ -1567,7 +1585,7 @@ fn test_far_forests_are_a_few_canopy_boxes_not_a_box_a_tree() {
             leaf_boxes.len()
         );
         // the forest's tree tops are under the canopy's, within a step of its rounding
-        let step = (cell / super::CANOPY_STEPS) as f32;
+        let step = (cell / super::canopy::CANOPY_STEPS) as f32;
         let highest = leaf_boxes
             .iter()
             .map(|b| min.y as f32 + (b.max.y + 0.5) * cell as f32)
@@ -1605,9 +1623,9 @@ fn test_canopy_is_no_bigger_than_the_crowns_under_it() {
         let canopy: Vec<_> = blocks
             .boxes
             .iter()
-            .filter(|b| b.faces == super::BoxFaces::NoBottom)
+            .filter(|b| b.faces == super::source::BoxFaces::NoBottom)
             .collect();
-        let area = |b: &&super::TreeBox| (b.max.x - b.min.x) * (b.max.z - b.min.z);
+        let area = |b: &&super::source::TreeBox| (b.max.x - b.min.x) * (b.max.z - b.min.z);
         let drawn: f32 = canopy.iter().map(area).sum();
         // what's under crowns over the ground this node draws
         let (min, span) = (key.min_block().y as f32, 16.0 * key.cell_size() as f32);
@@ -1700,7 +1718,7 @@ fn test_forest_tints_the_ground_darker_the_more_of_it_trees_cover() {
     let at = |x: f32, z: f32| lod.forest_shade(Vec3::new(x, 7.5, z));
     assert_eq!(1.0, at(1.0, 1.0));
     assert!(at(4.0, 4.0) < 1.0 && at(8.0, 8.0) < at(4.0, 4.0));
-    assert!((at(8.0, 8.0) - super::FOREST_DARKEN).abs() < 1e-5);
+    assert!((at(8.0, 8.0) - super::canopy::FOREST_DARKEN).abs() < 1e-5);
     // real trees and bare ground leave the ground as it was
     assert_eq!(1.0, flat_lod(8).forest_shade(Vec3::new(4.0, 7.5, 4.0)));
 }
@@ -1719,7 +1737,7 @@ fn test_cells_wider_than_real_trees_tint_forest_instead_of_drawing_leaves() {
     );
     let tree = trees.first().expect("no trees");
     let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), 6);
-    assert!(key.cell_size() > super::TREE_MAX_CELL);
+    assert!(key.cell_size() > super::canopy::TREE_MAX_CELL);
     let blocks = LodBlocks::sample(&regions, key);
     assert_eq!(
         0,
@@ -1736,8 +1754,10 @@ fn test_cells_wider_than_real_trees_tint_forest_instead_of_drawing_leaves() {
     );
 }
 
+type Spots = Vec<(i64, i64)>;
+
 // Where trees grow within a node's own area, as full detail decides, and as the node's grid does.
-fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Vec<(i64, i64)>, Vec<(i64, i64)>) {
+fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Spots, Spots) {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
     let (cell, base, size) = (
@@ -1758,7 +1778,7 @@ fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Vec<(i64, i64)>, Vec<
         .map(|t| (t.base.x, t.base.z))
         .collect();
     let grid = regions.column_grid(key);
-    let mut ground = super::GridGround {
+    let mut ground = super::lod::GridGround {
         grid: &grid,
         noise: regions.noise(),
         base: I64Vec2::new(base.x, base.z),
@@ -1804,7 +1824,7 @@ fn test_every_level_grows_the_trees_full_detail_does() {
 
 // Triangles of a node's opaque mesh in world space, placed as `lod_transform` does.
 fn world_triangles(regions: &Arc<RegionStore>, key: LodKey) -> Vec<[Vec3; 3]> {
-    let Some(meshes) = super::generate_lod_mesh(regions.clone(), key) else {
+    let Some(meshes) = super::lod::generate_lod_mesh(regions.clone(), key) else {
         return Vec::new();
     };
     let cell = key.cell_size() as f32;
@@ -1941,7 +1961,7 @@ fn test_ground_a_block_lower_than_a_surface_cell_above_is_still_lidded() {
         level: 1,
         coord: I64Vec3::new(6, 13, 4),
     };
-    let meshes = super::generate_lod_mesh(regions, key).unwrap();
+    let meshes = super::lod::generate_lod_mesh(regions, key).unwrap();
     let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * 2.0 - 0.5);
     let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)) =
         meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION)

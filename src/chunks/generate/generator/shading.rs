@@ -1,4 +1,7 @@
-use super::*;
+use super::source::BlockSource;
+use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::MAX_LIGHT;
+use bevy::math::IVec3;
 
 pub(in crate::chunks::generate) const FACE_NORMAL_OFFSET: [IVec3; 6] = [
     IVec3::new(0, 0, -1), // front

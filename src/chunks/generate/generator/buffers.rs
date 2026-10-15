@@ -1,4 +1,14 @@
-use super::*;
+use crate::block::Tile;
+use crate::block::TILE_COUNT;
+use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::generate::biome::grass_tint;
+use crate::chunks::generate::noise::NoiseGenerator;
+use crate::util::primitives::Vertex;
+use bevy::asset::RenderAssetUsages;
+use bevy::math::Vec3;
+use bevy::render::mesh::Indices;
+use bevy::render::mesh::Mesh;
+use bevy::render::mesh::VertexAttributeValues;
 
 // Accumulates one mesh's worth of vertex/index/color data - one instance for the
 // opaque blocks, a second for water, so they can become separate `Mesh`es with
@@ -214,6 +224,15 @@ pub(super) struct FanQuad<'a> {
     pub(super) light: [[f32; 2]; 2],
     pub(super) uv_at: &'a dyn Fn(usize, usize) -> [f32; 2],
     pub(super) reversed: bool,
+}
+
+// `solid_leaves` draws leaves without their holes, so they hide the leaves behind them; `textured`
+// is whether faces draw their own tile, not the one their block's colour is read from.
+#[derive(Clone, Copy)]
+pub(super) struct MeshStyle {
+    pub(super) ambient_occlusion: bool,
+    pub(super) textured: bool,
+    pub(super) solid_leaves: bool,
 }
 
 pub struct ChunkMeshes {

@@ -297,7 +297,7 @@ impl Tree {
         // nibbled at the edges, so crowns aren't perfect balls
         let nibble = || {
             let rounded = offset.round().as_i64vec3();
-            if hash(self.seed, rounded.x * 7919 + rounded.y, rounded.z) % 3 == 0 {
+            if hash(self.seed, rounded.x * 7919 + rounded.y, rounded.z).is_multiple_of(3) {
                 NIBBLE
             } else {
                 0.0

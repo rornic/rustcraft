@@ -183,10 +183,13 @@ impl ChunkColumns {
 
 type Slot<V> = Arc<OnceLock<Arc<V>>>;
 
+// Each slot with the tick it was last used at.
+type Slots<K, V> = HashMap<K, (Slot<V>, u64)>;
+
 // The most recently used values by key, each worked out once however many threads ask for it.
 struct Recent<K, V> {
     kept: usize,
-    slots: Mutex<(u64, HashMap<K, (Slot<V>, u64)>)>,
+    slots: Mutex<(u64, Slots<K, V>)>,
 }
 
 impl<K: Hash + Eq, V> Recent<K, V> {

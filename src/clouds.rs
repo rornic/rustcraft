@@ -638,7 +638,9 @@ mod tests {
         );
     }
 
-    fn columns(n: usize, cells: &[((usize, usize), (u8, u8))]) -> Columns {
+    type TestCell = ((usize, usize), (u8, u8));
+
+    fn columns(n: usize, cells: &[TestCell]) -> Columns {
         let mut columns = Columns {
             n,
             cell: CELL,

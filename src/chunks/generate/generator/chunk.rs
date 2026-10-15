@@ -1,4 +1,25 @@
-use super::*;
+use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
+use super::mesh::mesh_blocks;
+use super::source::ChunkNeighbourhood;
+use super::terrain::{column_block, ground_top, under_grass};
+use crate::block::BlockType;
+use crate::chunks::chunk::neighbor_26_index;
+use crate::chunks::chunk::ChunkCoordinate;
+use crate::chunks::chunk::ChunkData;
+use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::MAX_LIGHT;
+use crate::chunks::generate::noise::NoiseGenerator;
+use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::trees::grows_into;
+use crate::chunks::generate::trees::trees_near;
+use crate::chunks::generate::trees::TreeTints;
+use crate::chunks::generate::trees::TREE_HEIGHT;
+use crate::chunks::generate::WATER_LEVEL;
+use bevy::math::I64Vec2;
+use bevy::math::IVec3;
+use std::cell::LazyCell;
+use std::sync::Arc;
 
 pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> ChunkData {
     let mut heights = regions.sampler();
@@ -81,7 +102,17 @@ pub fn generate_chunk_mesh(
     // worked out only once there's a face to light: buried and empty chunks have none
     let light = LazyCell::new(|| neighbourhood_light(&chunk, &adjacent_chunks, coord));
     // leaves drawn solid hide the leaves behind them, see `DebugSettings::solid_leaves`
-    mesh_blocks(&source, 1, true, true, solid_leaves, &tint, &light)
+    mesh_blocks(
+        &source,
+        1,
+        MeshStyle {
+            ambient_occlusion: true,
+            textured: true,
+            solid_leaves,
+        },
+        &tint,
+        &light,
+    )
 }
 
 // Light falling into the top of a box whose highest block is at `top`, in boxes of `cell`

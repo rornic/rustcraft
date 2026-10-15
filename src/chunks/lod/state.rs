@@ -1,4 +1,22 @@
-use super::*;
+use super::key::LodKey;
+use super::layout::LodLayout;
+use super::loader::GenerateLodMesh;
+use super::select::LodBand;
+use crate::chunks::chunk::ChunkCoordinate;
+use crate::chunks::chunk_loader::ChunkLoader;
+use crate::chunks::chunk_loader::DirtyChunk;
+use crate::chunks::chunk_loader::GenerateChunkData;
+use crate::chunks::chunk_loader::GenerateChunkMesh;
+use crate::chunks::group::GroupedChunk;
+use crate::chunks::group::MeshedChunk;
+use bevy::ecs::entity::Entity;
+use bevy::ecs::query::Or;
+use bevy::ecs::query::With;
+use bevy::ecs::system::Query;
+use bevy::ecs::system::Res;
+use bevy::ecs::system::SystemParam;
+use bevy::platform::collections::HashMap;
+use bevy::platform::collections::HashSet;
 
 /// What the retirement and visibility rules need to know about the current state.
 pub struct LodState<'a> {
@@ -131,5 +149,5 @@ pub(super) fn node_ready(
 ) -> bool {
     nodes
         .get(&key)
-        .is_some_and(|slot| slot.map_or(true, |entity| !pending.contains(entity)))
+        .is_some_and(|slot| slot.is_none_or(|entity| !pending.contains(entity)))
 }

@@ -13,7 +13,7 @@ use bevy::{
     time::Time,
 };
 
-use super::material::{ChunkMaterial, WaterMaterial};
+use super::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 
 // One step per level of the shaders' 4x4 dither pattern.
 const FADE_STEPS: usize = 16;
@@ -50,12 +50,15 @@ pub struct FadeMaterials {
 impl FadeMaterials {
     pub fn new(
         seconds: f32,
-        chunk: Handle<ChunkMaterial>,
-        water: Handle<WaterMaterial>,
-        solid_water: Handle<WaterMaterial>,
+        materials: &TerrainMaterials,
         chunk_materials: &mut Assets<ChunkMaterial>,
         water_materials: &mut Assets<WaterMaterial>,
     ) -> Self {
+        let TerrainMaterials {
+            chunk,
+            water,
+            solid_water,
+        } = materials.clone();
         let base_chunk = chunk_materials.get(&chunk).unwrap().clone();
         let base_water = water_materials.get(&water).unwrap().clone();
         let base_solid = water_materials.get(&solid_water).unwrap().clone();

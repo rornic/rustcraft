@@ -1,16 +1,31 @@
-use super::*;
+use super::buffers::{
+    tiled_uvs, ChunkMeshes, GrassTint, MeshBuffers, MeshStyle, BOX_TEXTURE_MAX_CELL, TEXTURED,
+    TEXTURED_SOLID,
+};
+use super::greedy::mesh_opaque_greedy;
+use super::shading::{
+    vertex_shore_distance, vertex_shore_factor, vertex_water_depth, FACE_NORMAL_OFFSET, WATER_TOP,
+};
+use super::source::{grid_index, BlockSource, BoxFaces, GridView};
+use crate::block::BlockType;
+use crate::block::Face;
+use crate::block::Tile;
+use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::generate::light::SkyLight;
+use bevy::math::IVec3;
+use bevy::math::Vec3;
+use std::collections::HashMap;
+use std::ops::Deref;
 
-// `cell_size` is how many blocks wide each cell of `source` is. `solid_leaves` is whether
-// leaves are drawn without their holes, so hide the leaves behind them.
+// `cell_size` is how many blocks wide each cell of `source` is.
 pub(super) fn mesh_blocks(
     source: &impl BlockSource,
     cell_size: i64,
-    ambient_occlusion: bool,
-    textured: bool,
-    solid_leaves: bool,
+    style: MeshStyle,
     grass_tint: &GrassTint,
     light: &impl Deref<Target = SkyLight>,
 ) -> ChunkMeshes {
+    let MeshStyle { textured, .. } = style;
     let mut opaque = MeshBuffers {
         untextured: !textured,
         ..Default::default()
@@ -123,9 +138,7 @@ pub(super) fn mesh_blocks(
         },
         &face_vertices,
         &mut opaque,
-        ambient_occlusion,
-        solid_leaves,
-        textured,
+        style,
         if textured { cell_size as f32 } else { 1.0 },
         grass_tint,
         light,

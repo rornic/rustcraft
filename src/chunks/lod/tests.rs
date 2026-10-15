@@ -5,10 +5,11 @@ use bevy::{
     platform::collections::{HashMap, HashSet},
 };
 
-use super::{
-    select_lods, select_lods_and_stand_ins, ChunkState, LodBand, LodKey, LodLayout, LodLoader,
-    LodState,
-};
+use super::key::LodKey;
+use super::layout::LodLayout;
+use super::loader::LodLoader;
+use super::select::{select_lods, select_lods_and_stand_ins, LodBand};
+use super::state::{ChunkState, LodState};
 use crate::chunks::chunk::ChunkCoordinate;
 
 const BAND: LodBand = LodBand {
@@ -186,7 +187,7 @@ fn test_selection_covers_each_chunk_once() {
 fn test_stand_ins_cover_exactly_the_full_detail_chunks() {
     let anchor = chunk(3, 4, -2);
     let layout = LodLayout::new(8, 128, 4);
-    let (_, stand_ins) = super::select_lods_and_stand_ins(anchor, layout, BAND);
+    let (_, stand_ins) = super::select::select_lods_and_stand_ins(anchor, layout, BAND);
     for x in -12..12 {
         for z in -12..12 {
             for y in BAND.min_y..BAND.max_y {
@@ -362,7 +363,7 @@ fn spawn_order_of(anchor: ChunkCoordinate, covered: LodKey, gap: LodKey) -> Vec<
     with_state(anchor, &selected, &exists, &HashMap::new(), false, |s| {
         assert!(covered_while_loading(s, covered));
         assert!(!covered_while_loading(s, gap));
-        let mut queue = super::spawn_order(s, [covered, gap].into_iter());
+        let mut queue = super::selection::spawn_order(s, [covered, gap].into_iter());
         queue.reverse();
         queue
     })
@@ -380,7 +381,7 @@ fn test_near_detail_swaps_spawn_before_far_gaps() {
     let keys = by_distance(anchor);
     let near = *keys.iter().find(|k| k.distance(anchor) > 0.0).unwrap();
     let far = *keys.last().unwrap();
-    assert!(near.distance(anchor) < far.distance(anchor) * super::GAP_DISTANCE_WEIGHT);
+    assert!(near.distance(anchor) < far.distance(anchor) * super::selection::GAP_DISTANCE_WEIGHT);
     assert_eq!(vec![near, far], spawn_order_of(anchor, near, far));
 }
 
@@ -438,12 +439,14 @@ fn test_known_empty_nodes_have_nothing_to_mesh() {
         })
         .collect();
     // nothing is known until the regions under a node are computed
-    assert!(nodes.iter().all(|&key| !super::known_empty(key, &regions)));
+    assert!(nodes
+        .iter()
+        .all(|&key| !super::spawn::known_empty(key, &regions)));
 
     let mut empty = 0;
     for &key in &nodes {
         let meshed = generate_lod_mesh(regions.clone(), key).is_some();
-        if super::known_empty(key, &regions) {
+        if super::spawn::known_empty(key, &regions) {
             assert!(!meshed, "{key:?} was taken as empty but has a mesh");
             empty += 1;
         }
@@ -483,7 +486,7 @@ fn test_nodes_replacing_loaded_chunks_spawn_first() {
     let exists = |_| false;
     let ready = HashMap::new();
     with_state(anchor, &selected, &exists, &ready, true, |s| {
-        let mut queue = super::spawn_order(s, selected.iter().copied());
+        let mut queue = super::selection::spawn_order(s, selected.iter().copied());
         let first = queue.pop().unwrap();
         assert!(replaces_loaded_chunks(s, first));
     });
