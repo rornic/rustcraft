@@ -11,13 +11,12 @@ use bevy::{
 };
 
 use crate::chunks::chunk::CHUNK_SIZE;
-use crate::chunks::generate::noise::WORLD_SIZE;
 use crate::chunks::generate::WORLD_HEIGHT;
 use crate::chunks::lod::LodLoader;
-use crate::curvature::horizon_distance;
+use crate::curvature::Curve;
 
-/// Far enough to see the whole world from its middle.
-const MAX_RENDER_DISTANCE: f32 = (WORLD_SIZE / CHUNK_SIZE as i64) as f32;
+/// The farthest terrain is drawn, in chunks, however high up.
+const MAX_RENDER_DISTANCE: f32 = 2048.0;
 // Smaller changes than this, as a share of the render distance, are let be, so bobbing up
 // and down doesn't keep selecting LOD nodes afresh.
 const RESELECT_CHANGE: f32 = 0.1;
@@ -26,9 +25,10 @@ const RESELECT_CHANGE: f32 = 0.1;
 const FOG_FOLLOW_SECONDS: f32 = 2.0;
 
 /// How far terrain is drawn, in chunks, from `height` blocks up with `set_distance` set: out
-/// to the horizon, so climbing shows more of the world, but never less than the set distance.
+/// to the horizon of the world bent to it, so the set distance from the ground, and further
+/// the higher up, see `Curve::for_render_distance`.
 pub fn render_distance_at(set_distance: f32, height: f32) -> f32 {
-    let horizon = horizon_distance(height) / CHUNK_SIZE as f32;
+    let horizon = Curve::for_render_distance(set_distance).horizon_distance(height) / CHUNK_SIZE as f32;
     horizon.max(set_distance).min(MAX_RENDER_DISTANCE.max(set_distance))
 }
 
@@ -71,20 +71,22 @@ mod tests {
     use crate::chunks::generate::WATER_LEVEL;
 
     #[test]
-    fn test_never_draws_less_than_the_set_distance() {
+    fn test_the_ground_draws_the_set_distance() {
         let sea = WATER_LEVEL as f32;
-        let far = 4.0 * horizon_distance(sea + 1000.0) / CHUNK_SIZE as f32;
-        assert_eq!(far, render_distance_at(far, sea));
-        assert_eq!(far, render_distance_at(far, 0.0));
+        assert!((render_distance_at(1024.0, sea) - 1024.0).abs() < 0.1);
+        assert_eq!(1024.0, render_distance_at(1024.0, 0.0));
     }
 
     #[test]
-    fn test_climbing_draws_out_to_the_horizon_up_to_the_whole_world() {
+    fn test_climbing_draws_further_out_up_to_the_cap() {
         let sea = WATER_LEVEL as f32;
-        let hill = render_distance_at(16.0, sea + 100.0);
-        let mountain = render_distance_at(16.0, sea + 300.0);
-        assert!(16.0 < hill && hill < mountain);
-        assert_eq!(horizon_distance(sea + 300.0) / CHUNK_SIZE as f32, mountain);
-        assert_eq!(MAX_RENDER_DISTANCE, render_distance_at(16.0, sea + 1.0e9));
+        let hill = render_distance_at(1024.0, sea + 100.0);
+        let mountain = render_distance_at(1024.0, sea + 300.0);
+        assert!(1024.0 < hill && hill < mountain);
+        // the top of the world sees twice as far as the ground
+        assert!((render_distance_at(1024.0, WORLD_HEIGHT as f32) - 2048.0).abs() < 0.1);
+        assert_eq!(MAX_RENDER_DISTANCE, render_distance_at(1024.0, sea + 1.0e6));
+        // but never draws less than it's set to
+        assert_eq!(4096.0, render_distance_at(4096.0, sea + 1.0e6));
     }
 }

@@ -12,7 +12,7 @@ const GLOW_GAIN: f32 = 0.7;
 // How far the glow spreads from the land's edge, as a share of how far below level the edge is.
 const GLOW_WIDTH: f32 = 0.4;
 // The glow comes in fully once the land's edge is this far below level, as a slope.
-const GLOW_FULL_DIP: f32 = 0.08;
+const GLOW_FULL_DIP: f32 = 0.05;
 // The lowered sky is averaged over this much slope either way, in this many samples: the
 // environment map it's read from is coarse enough to show steps once stretched.
 const SKY_SMOOTHING: f32 = 0.06;
