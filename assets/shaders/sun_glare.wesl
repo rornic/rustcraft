@@ -9,6 +9,7 @@ import bevy_pbr::render::{
     view_transformations::{position_world_to_clip, ndc_to_uv},
 };
 import super::lighting::sun_radiance;
+import super::sky::SUN_LIGHT;
 
 // The halo, bright close in and fainter far out: how bright each part is, as a share of
 // sunlight on a face turned to it, and how far it reaches, in radians.
@@ -75,7 +76,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     let eye = view_bindings::view.world_position.xyz;
     let toward = normalize(in.world_position.xyz - eye);
-    let to_sun = view_bindings::lights.directional_lights[0].direction_to_light;
+    let to_sun = view_bindings::lights.directional_lights[SUN_LIGHT].direction_to_light;
     let off = acos(clamp(dot(toward, to_sun), -1.0, 1.0));
     if off > REACH {
         discard;

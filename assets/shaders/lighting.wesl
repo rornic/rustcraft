@@ -4,7 +4,7 @@ import bevy_pbr::render::mesh_view_bindings as view_bindings;
 import bevy_pbr::atmosphere::{
     bruneton_functions::transmittance_lut_r_mu_to_uv, functions::calculate_visible_sun_ratio,
 };
-import super::sky::sky_irradiance;
+import super::sky::{MOON_LIGHT, SUN_LIGHT, night_factor, sky_irradiance};
 
 // Matches `SKY_GAIN` in `sky.rs`.
 const SKY_GAIN: f32 = 4.0;
@@ -12,15 +12,51 @@ const SKY_GAIN: f32 = 4.0;
 // unlit colours were tuned for, see `daylight`.
 const TUNED_SUN_HEIGHT: f32 = 0.8;
 
+// Moonlight in the shaders is the moon's light boosted by this, see `MOON_BOOST` in `sky.rs`.
+const MOON_BOOST: f32 = 400.0;
+// Light from the stars on a night with no moon, and the share of moonlight that falls
+// everywhere, as the sky scatters it.
+const STARLIGHT: vec3<f32> = vec3<f32>(0.004, 0.007, 0.016);
+const MOONLIGHT_FILL: f32 = 0.25;
+
+// How much of the moon is lit, 0..1: full when it's opposite the sun.
+fn moon_phase() -> f32 {
+    if view_bindings::lights.n_directional_lights < 2u {
+        return 0.0;
+    }
+    return 0.5 - 0.5 * dot(view_bindings::lights.directional_lights[SUN_LIGHT].direction_to_light, view_bindings::lights.directional_lights[MOON_LIGHT].direction_to_light);
+}
+
+// The moon's light, by phase, fading as it nears the horizon. Nothing when there's no moon.
+fn moon_radiance() -> vec3<f32> {
+    if view_bindings::lights.n_directional_lights < 2u {
+        return vec3<f32>(0.0);
+    }
+    let moon = &view_bindings::lights.directional_lights[MOON_LIGHT];
+    let risen = smoothstep(-0.05, 0.2, (*moon).direction_to_light.y);
+    return (*moon).color.rgb * view_bindings::view.exposure / SKY_GAIN * MOON_BOOST * moon_phase() * risen;
+}
+
+// Unshadowed moonlight on a face turned to `normal`.
+fn direct_moon(normal: vec3<f32>) -> vec3<f32> {
+    if view_bindings::lights.n_directional_lights < 2u {
+        return vec3<f32>(0.0);
+    }
+    return moon_radiance() * max(dot(normal, view_bindings::lights.directional_lights[MOON_LIGHT].direction_to_light), 0.0);
+}
+
 // Light falling on a face from the open sky, cool against the warm sun: faces up get
-// the sky's blue, faces down only what the ground bounces back.
+// the sky's blue, faces down only what the ground bounces back, which goes with the sun.
 // How much of the sky's irradiance lights a face, for the look rather than physics.
 const SKY_AMBIENT_GAIN: f32 = 1.0;
 const GROUND_AMBIENT: vec3<f32> = vec3<f32>(0.2, 0.18, 0.15);
 
 // Light from the whole sky on a face turned to `normal`, out in the open.
 fn open_sky(normal: vec3<f32>) -> vec3<f32> {
-    return mix(GROUND_AMBIENT, sky_irradiance(normal) * SKY_AMBIENT_GAIN, normal.y * 0.5 + 0.5);
+    let night = night_factor();
+    let ground = GROUND_AMBIENT * (1.0 - night);
+    let dark = night * (STARLIGHT + moon_radiance() * MOONLIGHT_FILL);
+    return mix(ground, sky_irradiance(normal) * SKY_AMBIENT_GAIN, normal.y * 0.5 + 0.5) + dark;
 }
 
 // How much of the sun's light gets through the air to `world_position`, by colour, as a
@@ -31,7 +67,7 @@ fn open_sky(normal: vec3<f32>) -> vec3<f32> {
 fn sun_transmittance(world_position: vec3<f32>) -> vec3<f32> {
 @if(ATMOSPHERE) {
     let atmosphere = view_bindings::atmosphere;
-    let sun = &view_bindings::lights.directional_lights[0];
+    let sun = &view_bindings::lights.directional_lights[SUN_LIGHT];
     let r = atmosphere.inner_radius + max(world_position.y, 0.0);
     let mu = (*sun).direction_to_light.y;
     let through = transmittance(atmosphere, r, mu) * calculate_visible_sun_ratio(atmosphere, r, mu, (*sun).sun_disk_angular_size);
@@ -53,7 +89,7 @@ fn sun_radiance(world_position: vec3<f32>) -> vec3<f32> {
     if view_bindings::lights.n_directional_lights == 0u {
         return vec3<f32>(0.0);
     }
-    let sun = &view_bindings::lights.directional_lights[0];
+    let sun = &view_bindings::lights.directional_lights[SUN_LIGHT];
     return (*sun).color.rgb * view_bindings::view.exposure / SKY_GAIN * sun_transmittance(world_position);
 }
 
@@ -63,7 +99,7 @@ fn direct_sun(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
     if view_bindings::lights.n_directional_lights == 0u {
         return vec3<f32>(0.0);
     }
-    let to_sun = view_bindings::lights.directional_lights[0].direction_to_light;
+    let to_sun = view_bindings::lights.directional_lights[SUN_LIGHT].direction_to_light;
     return sun_radiance(world_position) * max(dot(normal, to_sun), 0.0);
 }
 
@@ -75,10 +111,10 @@ fn daylight(world_position: vec3<f32>) -> vec3<f32> {
     let sky = open_sky(up);
     var tuned = sky;
     if view_bindings::lights.n_directional_lights > 0u {
-        let sun = &view_bindings::lights.directional_lights[0];
+        let sun = &view_bindings::lights.directional_lights[SUN_LIGHT];
         tuned += (*sun).color.rgb * view_bindings::view.exposure / SKY_GAIN * TUNED_SUN_HEIGHT;
     }
-    return (direct_sun(up, world_position) + sky) / max(tuned, vec3<f32>(1e-4));
+    return (direct_sun(up, world_position) + direct_moon(up) + sky) / max(tuned, vec3<f32>(1e-4));
 }
 
 // Clouds scatter the light that falls on them about inside, so most of what lights them,
@@ -94,5 +130,6 @@ const CLOUD_SKY: f32 = 0.6;
 // reflections in the water.
 fn cloud_light(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
     let sun = direct_sun(normal, world_position) * CLOUD_SUN_DIRECT + sun_radiance(world_position) * CLOUD_SUN_THROUGH;
-    return sun + open_sky(normal) * CLOUD_SKY;
+    let moon = direct_moon(normal) * CLOUD_SUN_DIRECT + moon_radiance() * CLOUD_SUN_THROUGH;
+    return sun + moon + open_sky(normal) * CLOUD_SKY;
 }

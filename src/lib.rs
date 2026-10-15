@@ -4,6 +4,7 @@ pub mod clouds;
 pub mod curvature;
 pub mod debug;
 pub mod horizon;
+pub mod night_sky;
 pub mod player;
 pub mod settings;
 pub mod sky;
