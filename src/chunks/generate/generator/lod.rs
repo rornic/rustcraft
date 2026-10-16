@@ -13,7 +13,7 @@ use crate::chunks::generate::biome::{BiomeId, Biomes};
 use crate::chunks::generate::columns::ColumnGrid;
 use crate::chunks::generate::columns::COARSE_CELL;
 use crate::chunks::generate::light::SkyLight;
-use crate::chunks::generate::noise::NoiseGenerator;
+use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
@@ -61,9 +61,22 @@ pub(super) struct GridGround<'a> {
     pub(super) base: I64Vec2,
     pub(super) cell: i64,
     pub(super) size: i32,
+    // the last point sampled, which trees ask about several times over
+    pub(super) last: Option<(i64, i64, TerrainSample)>,
 }
 
 impl GridGround<'_> {
+    fn sample(&mut self, x: i64, z: i64) -> TerrainSample {
+        match self.last {
+            Some((lx, lz, sample)) if (lx, lz) == (x, z) => sample,
+            _ => {
+                let sample = self.noise.sample(x as f64, z as f64);
+                self.last = Some((x, z, sample));
+                sample
+            }
+        }
+    }
+
     pub(super) fn column(&self, x: i64, z: i64) -> (i32, i32) {
         let index = |world: i64, base: i64| {
             ((world - base).div_euclid(self.cell) as i32).clamp(-1, self.size)
@@ -78,16 +91,23 @@ impl GridGround<'_> {
 impl TreeGround for GridGround<'_> {
     fn trees(&mut self, x: i64, z: i64) -> f64 {
         // stored as a byte
-        (self.noise.sample(x as f64, z as f64).trees * 255.0).round() / 255.0
+        (self.sample(x, z).trees * 255.0).round() / 255.0
     }
 
     fn height(&mut self, x: i64, z: i64) -> f64 {
         // stored as a float
-        self.noise.sample(x as f64, z as f64).height as f32 as f64
+        self.sample(x, z).height as f32 as f64
     }
 
     fn biome(&mut self, x: i64, z: i64) -> BiomeId {
-        self.noise.sample(x as f64, z as f64).biome
+        self.sample(x, z).biome
+    }
+
+    // From the climate alone, far cheaper than the whole terrain `trees` takes. The density is
+    // stored as a byte, which can round it up by half a step.
+    fn rules_out(&mut self, x: i64, z: i64, chance: f64) -> bool {
+        let climate = self.noise.climate(x as f64, z as f64);
+        chance >= self.noise.biomes().tree_bound(climate) + 1.0 / 255.0
     }
 
     fn base_height(&mut self, x: i64, z: i64) -> i64 {
@@ -178,6 +198,7 @@ impl LodBlocks {
                     base: I64Vec2::new(base.x, base.z),
                     cell,
                     size,
+                    last: None,
                 };
                 let trees = trees_near(noise, &mut ground, min, min + span + cell);
                 let canopy = (cell >= CANOPY_CELL).then(|| Canopy::new(&trees, base, cell, size));

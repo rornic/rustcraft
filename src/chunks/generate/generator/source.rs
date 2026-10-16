@@ -1,6 +1,5 @@
-use super::terrain::resolve_block;
 use crate::block::BlockType;
-use crate::chunks::chunk::ChunkData;
+use crate::chunks::chunk::{neighbor_26_index, ChunkData, CELLS, CHUNK_SIZE};
 use bevy::math::IVec3;
 use bevy::math::Vec3;
 use std::sync::Arc;
@@ -80,14 +79,68 @@ pub(super) enum BoxFaces {
     Sides,
 }
 
+// Blocks across a chunk's 3x3x3 neighbourhood, each way.
+const SPAN: i32 = 3 * CHUNK_SIZE as i32;
+
+/// A chunk with its 26 neighbours decoded into one dense grid, so meshing reads any block near it
+/// without scanning a chunk's runs. Missing neighbours are air.
 pub(super) struct ChunkNeighbourhood<'a> {
     pub(super) chunk: &'a ChunkData,
-    pub(super) neighbors: &'a [Option<Arc<ChunkData>>],
+    blocks: Vec<BlockType>,
+}
+
+impl<'a> ChunkNeighbourhood<'a> {
+    /// `neighbours` in `neighbor_26_index` order.
+    pub(super) fn new(chunk: &'a ChunkData, neighbours: &[Option<Arc<ChunkData>>]) -> Self {
+        let size = CHUNK_SIZE as i32;
+        let mut blocks = vec![BlockType::Air; (SPAN * SPAN * SPAN) as usize];
+        let mut cells = [BlockType::Air; CELLS];
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let data = match (dx, dy, dz) {
+                        (0, 0, 0) => chunk,
+                        _ => match &neighbours[neighbor_26_index(dx, dy, dz)] {
+                            Some(data) if !data.empty() => data,
+                            _ => continue,
+                        },
+                    };
+                    data.decode_into(&mut cells);
+                    // both grids run y innermost, so each column copies across whole
+                    for x in 0..size {
+                        for z in 0..size {
+                            let from = ((x * size + z) * size) as usize;
+                            let to =
+                                Self::index(IVec3::new(dx * size + x, dy * size, dz * size + z));
+                            blocks[to..to + size as usize]
+                                .copy_from_slice(&cells[from..from + size as usize]);
+                        }
+                    }
+                }
+            }
+        }
+        Self { chunk, blocks }
+    }
+
+    // `coord` from the chunk's lowest block, -CHUNK_SIZE..2 * CHUNK_SIZE each way.
+    fn index(coord: IVec3) -> usize {
+        let c = coord + CHUNK_SIZE as i32;
+        ((c.x * SPAN + c.z) * SPAN + c.y) as usize
+    }
+
+    fn contains(coord: IVec3) -> bool {
+        let size = CHUNK_SIZE as i32;
+        coord.cmpge(IVec3::splat(-size)).all() && coord.cmplt(IVec3::splat(2 * size)).all()
+    }
 }
 
 impl BlockSource for ChunkNeighbourhood<'_> {
     fn block(&self, coord: IVec3) -> BlockType {
-        resolve_block(self.chunk, self.neighbors, coord)
+        if Self::contains(coord) {
+            self.blocks[Self::index(coord)]
+        } else {
+            BlockType::Air
+        }
     }
 
     fn leaf_tint(&self, coord: IVec3) -> Vec3 {

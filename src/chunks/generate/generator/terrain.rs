@@ -1,13 +1,7 @@
 use crate::block::BlockType;
-use crate::chunks::chunk::neighbor_26_index;
-use crate::chunks::chunk::ChunkData;
-use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::BiomeId;
 use crate::chunks::generate::biome::Biomes;
 use crate::chunks::generate::WATER_LEVEL;
-use bevy::math::IVec3;
-use bevy::math::U16Vec3;
-use std::sync::Arc;
 
 pub(super) const SOLID_FLOOR: i64 = 16;
 
@@ -161,50 +155,4 @@ pub(in crate::chunks::generate) fn column_block(
 ) -> BlockType {
     let base = terrain_block(world_y, column_height, combined_gradient, temperature);
     biomes.block(biome, base, world_y - WATER_LEVEL, combined_gradient)
-}
-
-// `neighbor_chunks` holds all 26 chunks in the 3x3x3 neighborhood (see `ChunkCoordinate::neighbors_26`),
-// since AO sampling near a chunk corner can need a diagonal-adjacent chunk, not just a face-adjacent one.
-pub(super) fn resolve_block(
-    chunk: &ChunkData,
-    neighbor_chunks: &[Option<Arc<ChunkData>>],
-    coord: IVec3,
-) -> BlockType {
-    let size = CHUNK_SIZE as i32;
-    let out = |c: i32| {
-        if c < 0 {
-            -1
-        } else if c >= size {
-            1
-        } else {
-            0
-        }
-    };
-    let wrap = |c: i32, out: i32| match out {
-        -1 => size - 1,
-        1 => 0,
-        _ => c,
-    };
-    let (out_x, out_y, out_z) = (out(coord.x), out(coord.y), out(coord.z));
-
-    if out_x == 0 && out_y == 0 && out_z == 0 {
-        return chunk.get_block_at(U16Vec3::new(coord.x as u16, coord.y as u16, coord.z as u16));
-    }
-
-    let wrapped = IVec3::new(
-        wrap(coord.x, out_x),
-        wrap(coord.y, out_y),
-        wrap(coord.z, out_z),
-    );
-    let idx = neighbor_26_index(out_x, out_y, out_z);
-    neighbor_chunks[idx]
-        .as_ref()
-        .map(|c| {
-            c.get_block_at(U16Vec3::new(
-                wrapped.x as u16,
-                wrapped.y as u16,
-                wrapped.z as u16,
-            ))
-        })
-        .unwrap_or_default()
 }

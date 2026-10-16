@@ -12,7 +12,7 @@ use super::chunk::{generate_chunk, generate_chunk_mesh};
 use super::lod::LodBlocks;
 use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
 use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
-use super::terrain::{freeze_cell, resolve_block, terrain_block, under_grass, FREEZE_TEMPERATURE};
+use super::terrain::{freeze_cell, terrain_block, under_grass, FREEZE_TEMPERATURE};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::noise::NoiseGenerator;
@@ -34,50 +34,51 @@ fn no_neighbors() -> [Option<Arc<ChunkData>>; 26] {
 }
 
 #[test]
-fn test_resolve_block_within_chunk() {
+fn test_neighbourhood_within_chunk() {
     let mut chunk = ChunkData::default();
     chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
 
-    let block = resolve_block(&chunk, &no_neighbors(), IVec3::new(4, 4, 4));
+    let block = ChunkNeighbourhood::new(&chunk, &no_neighbors()).block(IVec3::new(4, 4, 4));
     assert_eq!(BlockType::Stone, block);
 }
 
 #[test]
-fn test_resolve_block_crosses_single_axis_into_adjacent_chunk() {
+fn test_neighbourhood_crosses_single_axis_into_adjacent_chunk() {
     let chunk = ChunkData::default();
     let mut adjacent = ChunkData::default();
     adjacent.set_block_at(U16Vec3::new(0, 4, 4), BlockType::Stone);
 
     let mut neighbors = no_neighbors();
     neighbors[neighbor_26_index(1, 0, 0)] = Some(Arc::new(adjacent));
-    let block = resolve_block(&chunk, &neighbors, IVec3::new(CHUNK_SIZE as i32, 4, 4));
+    let block =
+        ChunkNeighbourhood::new(&chunk, &neighbors).block(IVec3::new(CHUNK_SIZE as i32, 4, 4));
     assert_eq!(BlockType::Stone, block);
 }
 
 #[test]
-fn test_resolve_block_crosses_two_axes_into_diagonal_chunk() {
+fn test_neighbourhood_crosses_two_axes_into_diagonal_chunk() {
     let chunk = ChunkData::default();
     let mut diagonal = ChunkData::default();
     diagonal.set_block_at(U16Vec3::new(0, 0, 4), BlockType::Stone);
 
     let mut neighbors = no_neighbors();
     neighbors[neighbor_26_index(1, 1, 0)] = Some(Arc::new(diagonal));
-    let block = resolve_block(
-        &chunk,
-        &neighbors,
-        IVec3::new(CHUNK_SIZE as i32, CHUNK_SIZE as i32, 4),
-    );
+    let block = ChunkNeighbourhood::new(&chunk, &neighbors).block(IVec3::new(
+        CHUNK_SIZE as i32,
+        CHUNK_SIZE as i32,
+        4,
+    ));
     assert_eq!(BlockType::Stone, block);
 }
 
 #[test]
-fn test_resolve_block_missing_diagonal_chunk_is_air() {
+fn test_neighbourhood_missing_diagonal_chunk_is_air() {
     let chunk = ChunkData::default();
-    let block = resolve_block(
-        &chunk,
-        &no_neighbors(),
-        IVec3::new(CHUNK_SIZE as i32, CHUNK_SIZE as i32, 4),
-    );
+    let block = ChunkNeighbourhood::new(&chunk, &no_neighbors()).block(IVec3::new(
+        CHUNK_SIZE as i32,
+        CHUNK_SIZE as i32,
+        4,
+    ));
     assert_eq!(BlockType::Air, block);
 }
 
@@ -85,10 +86,7 @@ fn test_resolve_block_missing_diagonal_chunk_is_air() {
 fn test_vertex_ao_no_occluders_is_unlit() {
     let chunk = ChunkData::default();
     let neighbors = no_neighbors();
-    let source = ChunkNeighbourhood {
-        chunk: &chunk,
-        neighbors: &neighbors,
-    };
+    let source = ChunkNeighbourhood::new(&chunk, &neighbors);
     let ao = vertex_ao(&source, IVec3::new(4, 4, 4), 4, [0.5, 0.5, -0.5]);
     assert_eq!(1.0, ao);
 }
@@ -102,10 +100,7 @@ fn test_vertex_ao_fully_occluded_corner() {
     chunk.set_block_at(U16Vec3::new(5, 5, 5), BlockType::Stone);
 
     let neighbors = no_neighbors();
-    let source = ChunkNeighbourhood {
-        chunk: &chunk,
-        neighbors: &neighbors,
-    };
+    let source = ChunkNeighbourhood::new(&chunk, &neighbors);
     let ao = vertex_ao(&source, IVec3::new(4, 4, 4), 4, [0.5, 0.5, 0.5]);
     assert_eq!(1.0 - AO_STRENGTH, ao);
 }
@@ -125,10 +120,7 @@ fn test_neighbouring_water_columns_agree_on_shared_corner_depth() {
         chunk.set_block_at(U16Vec3::new(5, y, 4), BlockType::Water);
     }
     let neighbors = no_neighbors();
-    let source = ChunkNeighbourhood {
-        chunk: &chunk,
-        neighbors: &neighbors,
-    };
+    let source = ChunkNeighbourhood::new(&chunk, &neighbors);
     let mut depth_of = |coord: IVec3| water_depth(&source, coord) as f32;
 
     // the corner between them, on the +z side: seen from each column's top face
@@ -1773,6 +1765,7 @@ fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Spots, Spots) {
         base: I64Vec2::new(base.x, base.z),
         cell,
         size,
+        last: None,
     };
     let mut coarse: Vec<_> = trees_near(regions.noise(), &mut ground, min, min + span + cell)
         .iter()
@@ -1971,70 +1964,4 @@ fn test_lod_non_air_only_covers_interior() {
     assert!(cells
         .iter()
         .all(|(c, _)| c.min_element() >= 0 && c.max_element() < 16));
-}
-
-// Not run as part of normal `cargo test` - this is a before/after timing comparison
-// for the ChunkData storage representation, not a correctness check. Run with:
-//   cargo test --release -- --ignored --nocapture bench_generate_and_mesh_chunks
-// Capture a baseline before changing ChunkData's storage, then re-run after with the
-// same seed/coordinates and compare - `get_block_at`/`set_block_at` are on the hot
-// path here (every block, every face, every AO sample), so this isolates exactly the
-// cost a storage change would add, rather than inferring it from `cargo test` passing.
-#[test]
-#[ignore]
-fn bench_generate_and_mesh_chunks() {
-    let noise = Arc::new(NoiseGenerator::new(42));
-
-    // Meshed chunks are the inner ones, so every one has real neighbours on all sides.
-    let offset: i64 = std::env::var("BENCH_OFFSET")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    let mut coords = Vec::new();
-    let mut meshed = Vec::new();
-    for x in 0..24 {
-        for y in -3..10 {
-            for z in 0..24 {
-                let coord = ChunkCoordinate(I64Vec3::new(x + offset, y, z + offset));
-                coords.push(coord);
-                if (2..22).contains(&x) && (-1..8).contains(&y) && (2..22).contains(&z) {
-                    meshed.push(coord);
-                }
-            }
-        }
-    }
-
-    let regions = Arc::new(RegionStore::new(noise));
-    let start = std::time::Instant::now();
-    let data: HashMap<ChunkCoordinate, Arc<ChunkData>> = coords
-        .iter()
-        .map(|&c| (c, Arc::new(generate_chunk(regions.clone(), c))))
-        .collect();
-    let generate_elapsed = start.elapsed();
-
-    let mut best = std::time::Duration::MAX;
-    let mut vertices = 0;
-    for _ in 0..3 {
-        let start = std::time::Instant::now();
-        vertices = 0;
-        for &c in &meshed {
-            let neighbours = c
-                .neighbors_26()
-                .iter()
-                .map(|n| data.get(n).cloned())
-                .collect();
-            let meshes =
-                generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise(), false);
-            vertices += meshes.opaque.count_vertices();
-        }
-        best = best.min(start.elapsed());
-    }
-
-    println!(
-        "bench_generate_and_mesh_chunks: {} chunks meshed, generate={:?}, mesh={:?} (best of 3), opaque vertices={}",
-        meshed.len(),
-        generate_elapsed,
-        best,
-        vertices
-    );
 }

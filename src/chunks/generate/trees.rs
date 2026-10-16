@@ -23,6 +23,11 @@ pub trait TreeGround {
         )
     }
 
+    /// Whether no tree with this `chance` can grow at `x`, `z`, known without `trees` there.
+    fn rules_out(&mut self, _x: i64, _z: i64, _chance: f64) -> bool {
+        false
+    }
+
     /// The height a tree's base stands at, which a coarse node sets to the ground it draws, so
     /// trees sit on it, while the rest above stay exact, so the same trees grow at every level.
     fn base_height(&mut self, x: i64, z: i64) -> i64 {
@@ -261,13 +266,16 @@ impl Tree {
     /// wide to hold it: each layer is as wide as the leaves reach there, so a crown keeps its dome
     /// or tiers instead of being one cuboid.
     pub fn crown_boxes(&self, layers: i64) -> Vec<(DVec3, DVec3)> {
+        let (low, high) = self.leaf_bounds();
+        // only each row's first and last leaf, found from its ends, bear on the layers' bounds
         let mut leaves = Vec::new();
-        for y in 0..=TREE_HEIGHT {
-            for x in -TREE_REACH..=TREE_REACH {
-                for z in -TREE_REACH..=TREE_REACH {
-                    if self.in_leaves(DVec3::new(x as f64, y as f64, z as f64)) {
-                        leaves.push(I64Vec3::new(x, y, z));
-                    }
+        let xs = low.x.max(-TREE_REACH)..=high.x.min(TREE_REACH);
+        for y in low.y.max(0)..=high.y.min(TREE_HEIGHT) {
+            for z in low.z.max(-TREE_REACH)..=high.z.min(TREE_REACH) {
+                let leaf = |x: i64| self.in_leaves(DVec3::new(x as f64, y as f64, z as f64));
+                if let Some(first) = xs.clone().find(|&x| leaf(x)) {
+                    let last = xs.clone().rev().find(|&x| leaf(x)).unwrap_or(first);
+                    leaves.extend([I64Vec3::new(first, y, z), I64Vec3::new(last, y, z)]);
                 }
             }
         }
@@ -295,6 +303,31 @@ impl Tree {
                 )
             })
             .collect()
+    }
+
+    // Whole-block offsets from the trunk's base that every point `in_leaves` lies within.
+    fn leaf_bounds(&self) -> (I64Vec3, I64Vec3) {
+        let (low, high) = match self.kind {
+            TreeKind::Broadleaf => std::iter::once(&self.crown)
+                .chain(&self.lobes)
+                .map(|blob| {
+                    let reach = DVec3::new(blob.radius, blob.radius * blob.squash, blob.radius);
+                    (blob.centre - reach, blob.centre + reach)
+                })
+                .fold((DVec3::MAX, DVec3::MIN), |(low, high), (min, max)| {
+                    (low.min(min), high.max(max))
+                }),
+            TreeKind::Pine => {
+                let wrap = self.width() as f64 / 2.0 + 1.0;
+                let reach = (0.6 + self.spread).max(wrap);
+                let axis = self.axis();
+                (
+                    DVec3::new(axis.x - reach, (self.trunk / 4) as f64, axis.z - reach),
+                    DVec3::new(axis.x + reach, (self.trunk + 1) as f64, axis.z + reach),
+                )
+            }
+        };
+        (low.floor().as_i64vec3(), high.ceil().as_i64vec3())
     }
 
     // Whether the point `offset` from the trunk's base is among the leaves.
@@ -352,7 +385,11 @@ impl Tree {
         (first, last): (IVec3, IVec3),
         mut place: impl FnMut(IVec3, BlockType),
     ) {
-        let (low, high) = self.bounds();
+        // the leaves, the trunk, and the branches running between them, within a block of each
+        let (leaves_low, leaves_high) = self.leaf_bounds();
+        let width = self.width();
+        let low = self.base + leaves_low.min(I64Vec3::ZERO) - 1;
+        let high = self.base + leaves_high.max(I64Vec3::new(width, self.trunk, width) - 1) + 1;
         let cell_of = |block: I64Vec3| (block - origin).div_euclid(I64Vec3::splat(size)).as_ivec3();
         let (low, high) = (cell_of(low).max(first), cell_of(high).min(last));
         for x in low.x..=high.x {
@@ -443,23 +480,26 @@ fn tree_in_cell(
     let x = cx * CELL + ((seed >> 16) % CELL as u64) as i64;
     let z = cz * CELL + ((seed >> 24) % CELL as u64) as i64;
     let chance = (seed & 0xffff) as f64 / 65536.0;
-    if chance >= heights.trees(x, z) {
+    if heights.rules_out(x, z, chance) || chance >= heights.trees(x, z) {
         return None;
     }
 
+    // the biome before the slope, which samples elsewhere, while the ground here is to hand
     let height = heights.height(x, z).round() as i64;
+    let biome = heights.biome(x, z);
     let (gradient_x, gradient_z) = heights.gradient(x, z);
     let gradient = gradient_x.abs() + gradient_z.abs();
     if gradient > MAX_GRADIENT {
         return None;
     }
+    let temperature = noise.temperature(x as f64, z as f64);
     let ground = column_block(
         noise.biomes(),
-        heights.biome(x, z),
+        biome,
         height - 1,
         height,
         gradient,
-        noise.temperature(x as f64, z as f64),
+        temperature,
     );
     if ground != BlockType::Grass {
         return None;
@@ -467,8 +507,7 @@ fn tree_in_cell(
 
     // 0..1, how big this one grew
     let growth = ((seed >> 32) % 1000) as f64 / 1000.0;
-    let (kind, trunk, spread) = if noise.climate(x as f64, z as f64).temperature < PINE_TEMPERATURE
-    {
+    let (kind, trunk, spread) = if temperature < PINE_TEMPERATURE {
         (
             TreeKind::Pine,
             16 + (growth * 9.0) as i64,
@@ -533,6 +572,23 @@ mod tests {
             },
         );
         blocks
+    }
+
+    #[test]
+    fn test_leaves_lie_within_their_bounds() {
+        for tree in extremes() {
+            let (low, high) = tree.leaf_bounds();
+            for y in -2..=TREE_HEIGHT + 2 {
+                for x in -TREE_REACH - 2..=TREE_REACH + 2 {
+                    for z in -TREE_REACH - 2..=TREE_REACH + 2 {
+                        let at = I64Vec3::new(x, y, z);
+                        if tree.in_leaves(at.as_dvec3()) {
+                            assert!(at.cmpge(low).all() && at.cmple(high).all(), "{at}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

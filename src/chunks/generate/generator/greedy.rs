@@ -186,21 +186,30 @@ pub(super) fn mesh_opaque_greedy(
         };
 
         for slice in 0..size {
+            // merging takes every face it finds out of the mask, so it's left empty for the next slice
+            let mut faces = 0;
             for b in 0..size {
                 for a in 0..size {
                     let coord = normal_unit * slice + ta * a + tb * b;
                     let block = source.block(coord);
+                    if matches!(block, BlockType::Air | BlockType::Water) {
+                        continue;
+                    }
                     // past the mesh's edge the terrain may be drawn at another detail, with no
                     // leaves just there, so leaves on the edge keep their faces
                     let inside = source.contains(coord + normal);
-                    let span = face_span(source, coord, normal, block, solid_leaves && inside);
+                    let Some(span) =
+                        face_span(source, coord, normal, block, solid_leaves && inside)
+                    else {
+                        continue;
+                    };
+                    faces += 1;
                     // unshaded leaves merge into big quads, which keeps the faces between them cheap,
                     // so they and coarse LODs take one light level a face instead of smooth light
                     let smooth = ambient_occlusion && block != BlockType::Leaves;
                     // a step above lowered ground faces into that ground's cell, which is dark: it's
                     // lit by the air over it, and is too thin to shade smoothly
-                    let step =
-                        span.is_some() && normal.y == 0 && source.block(coord + normal).is_opaque();
+                    let step = normal.y == 0 && source.block(coord + normal).is_opaque();
                     // A skirt wall hangs from the node's own ground over solid cells beyond, whose
                     // occlusion and light are none, so it is lit as that ground is, by the open air above.
                     let skirt = !inside && normal.y == 0 && source.has_skirts();
@@ -215,7 +224,7 @@ pub(super) fn mesh_opaque_greedy(
                             .find(|&dy| !is_solid(source.terrain(coord + IVec3::Y * dy)));
                         face_light(air.map_or(MAX_LIGHT, |dy| light.level(coord + IVec3::Y * dy)))
                     });
-                    mask[(b * size + a) as usize] = span.map(|span| FaceCell {
+                    mask[(b * size + a) as usize] = Some(FaceCell {
                         span,
                         block,
                         tint: if block == BlockType::Leaves {
@@ -239,6 +248,9 @@ pub(super) fn mesh_opaque_greedy(
                         },
                     });
                 }
+            }
+            if faces == 0 {
+                continue;
             }
 
             for b0 in 0..n {

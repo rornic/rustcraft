@@ -1,9 +1,8 @@
 use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
 use super::mesh::mesh_blocks;
-use super::source::ChunkNeighbourhood;
+use super::source::{BlockSource, ChunkNeighbourhood};
 use super::terrain::{column_block, ground_top, under_grass};
 use crate::block::BlockType;
-use crate::chunks::chunk::neighbor_26_index;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
 use crate::chunks::chunk::CHUNK_SIZE;
@@ -94,13 +93,10 @@ pub fn generate_chunk_mesh(
     noise: &NoiseGenerator,
     solid_leaves: bool,
 ) -> ChunkMeshes {
-    let source = ChunkNeighbourhood {
-        chunk: &chunk,
-        neighbors: &adjacent_chunks,
-    };
+    let source = ChunkNeighbourhood::new(&chunk, &adjacent_chunks);
     let tint = GrassTint::new(noise, (coord.0 * CHUNK_SIZE as i64).as_vec3(), 1.0);
     // worked out only once there's a face to light: buried and empty chunks have none
-    let light = LazyCell::new(|| neighbourhood_light(&chunk, &adjacent_chunks, coord));
+    let light = LazyCell::new(|| neighbourhood_light(&source, coord));
     // leaves drawn solid hide the leaves behind them, see `DebugSettings::solid_leaves`
     mesh_blocks(
         &source,
@@ -128,31 +124,16 @@ pub(super) const LIGHT_MARGIN: i32 = 8;
 
 // Sky light for the chunk and a block around it, from the chunk and its 26 neighbours, as
 // high as the top of the chunk above, with open sky above that.
-pub(super) fn neighbourhood_light(
-    chunk: &ChunkData,
-    neighbours: &[Option<Arc<ChunkData>>],
-    coord: ChunkCoordinate,
-) -> SkyLight {
+fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> SkyLight {
     let size = CHUNK_SIZE as i32;
     let min = IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN);
     let span = IVec3::new(size + LIGHT_MARGIN, 2 * size, size + LIGHT_MARGIN) - min;
-    let mut opacity = vec![0; (span.x * span.y * span.z) as usize];
-    for dx in -1..=1 {
-        for dy in -1..=1 {
-            for dz in -1..=1 {
-                let data = match (dx, dy, dz) {
-                    (0, 0, 0) => Some(chunk),
-                    _ => neighbours[neighbor_26_index(dx, dy, dz)].as_deref(),
-                };
-                let Some(data) = data else {
-                    continue;
-                };
-                for (local, block) in data.iter_non_air() {
-                    let cell = IVec3::new(dx, dy, dz) * size + local.as_ivec3() - min;
-                    if cell.cmpge(IVec3::ZERO).all() && cell.cmplt(span).all() {
-                        opacity[SkyLight::index(span, cell)] = block.light_opacity();
-                    }
-                }
+    let mut opacity = Vec::with_capacity((span.x * span.y * span.z) as usize);
+    // in `SkyLight::index` order
+    for x in 0..span.x {
+        for z in 0..span.z {
+            for y in 0..span.y {
+                opacity.push(source.block(min + IVec3::new(x, y, z)).light_opacity());
             }
         }
     }

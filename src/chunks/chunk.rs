@@ -76,7 +76,7 @@ pub struct ChunkData {
 }
 
 pub const CHUNK_SIZE: u16 = 16;
-const CELLS: usize = (CHUNK_SIZE as usize).pow(3);
+pub const CELLS: usize = (CHUNK_SIZE as usize).pow(3);
 
 // x outer, z middle, y inner - matches generate_chunk's loop order, so terrain bands form long runs.
 fn linear_index(coord: U16Vec3) -> usize {
@@ -167,6 +167,16 @@ impl ChunkData {
             };
             (first..end).map(move |i| (coord_from_index(i), run.block))
         })
+    }
+
+    /// Writes every cell's block to `out`, in `linear_index` order.
+    pub fn decode_into(&self, out: &mut [BlockType; CELLS]) {
+        let mut start = 0;
+        for run in &self.runs {
+            let end = start + run.length as usize;
+            out[start..end].fill(run.block);
+            start = end;
+        }
     }
 
     pub fn get_block_at(&self, coord: U16Vec3) -> BlockType {
