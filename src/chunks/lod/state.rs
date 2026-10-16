@@ -3,10 +3,7 @@ use super::layout::LodLayout;
 use super::loader::GenerateLodMesh;
 use super::select::LodBand;
 use crate::chunks::chunk::ChunkCoordinate;
-use crate::chunks::chunk_loader::ChunkLoader;
-use crate::chunks::chunk_loader::DirtyChunk;
-use crate::chunks::chunk_loader::GenerateChunkData;
-use crate::chunks::chunk_loader::GenerateChunkMesh;
+use crate::chunks::chunk_loader::{ChunkLoader, Unsettled};
 use crate::chunks::group::GroupedChunk;
 use crate::chunks::group::MeshedChunk;
 use bevy::ecs::entity::Entity;
@@ -17,6 +14,25 @@ use bevy::ecs::system::Res;
 use bevy::ecs::system::SystemParam;
 use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
+
+/// Binds `$state` to the `LodState` of `$lods`' nodes around `$anchor`, with `$selected` chosen.
+macro_rules! lod_state {
+    ($state:ident, $lods:expr, $anchor:expr, $selected:expr, $pending:expr, $chunk_state:expr) => {
+        let nodes = &$lods.nodes;
+        let node_exists = |key: LodKey| nodes.contains_key(&key);
+        let node_ready = |key: LodKey| super::state::node_ready(nodes, $pending, key);
+        let $state = LodState {
+            anchor: $anchor,
+            layout: $lods.layout,
+            band: $lods.band,
+            selected: $selected,
+            node_exists: &node_exists,
+            node_ready: &node_ready,
+            chunk_state: &$chunk_state,
+        };
+    };
+}
+pub(super) use lod_state;
 
 /// What the retirement and visibility rules need to know about the current state.
 pub struct LodState<'a> {
@@ -100,12 +116,7 @@ impl LodState<'_> {
     }
 }
 
-pub(super) type PendingChunk = Or<(
-    With<GenerateChunkData>,
-    With<DirtyChunk>,
-    With<GenerateChunkMesh>,
-    With<MeshedChunk>,
-)>;
+pub(super) type PendingChunk = Or<(Unsettled, With<MeshedChunk>)>;
 
 /// How far along a full-detail chunk is, as far as LODs are concerned.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

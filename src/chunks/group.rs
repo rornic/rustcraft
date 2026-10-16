@@ -4,7 +4,6 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{Or, With},
         system::{Commands, Query, Res, ResMut},
     },
     math::Vec3,
@@ -18,7 +17,7 @@ use bevy::{
 
 use super::{
     chunk::ChunkCoordinate,
-    chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh},
+    chunk_loader::{ChunkLoader, Unsettled},
     generate::generator::ChunkMeshes,
     lod::LodKey,
 };
@@ -49,12 +48,6 @@ pub struct MeshedChunk;
 /// A chunk drawn as part of its group.
 #[derive(Component)]
 pub struct GroupedChunk;
-
-type Unsettled = Or<(
-    With<GenerateChunkData>,
-    With<DirtyChunk>,
-    With<GenerateChunkMesh>,
-)>;
 
 fn group_aabb() -> Aabb {
     let width = (2 * CHUNK_SIZE) as f32;
@@ -130,11 +123,11 @@ pub fn load_groups(
             if merged.opaque.count_vertices() > 0 {
                 commands.entity(entity).insert((
                     Mesh3d(meshes.add(merged.opaque)),
-                    MeshMaterial3d(loader.material()),
+                    MeshMaterial3d(loader.material.clone()),
                 ));
             }
             if let Some(water) = merged.water {
-                let water_material = loader.water_material();
+                let water_material = loader.water_material.clone();
                 commands.entity(entity).with_children(|parent| {
                     parent.spawn((
                         Mesh3d(meshes.add(water)),

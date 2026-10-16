@@ -3,7 +3,6 @@ use crate::block::TILE_COUNT;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::grass_tint;
 use crate::chunks::generate::noise::NoiseGenerator;
-use crate::util::primitives::Vertex;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Vec3;
 use bevy::render::mesh::Indices;
@@ -55,14 +54,11 @@ impl MeshBuffers {
             });
             self.colors.push(*color);
         }
-        self.indices.extend(vec![
-            triangle_start,
-            triangle_start + 1,
-            triangle_start + 2,
-            triangle_start + 2,
-            triangle_start + 1,
-            triangle_start + 3,
-        ]);
+        self.push_quad_indices(triangle_start);
+    }
+
+    fn push_quad_indices(&mut self, start: u32) {
+        self.indices.extend([0, 1, 2, 2, 1, 3].map(|i| start + i));
     }
 
     // `uvs` count tiles across the quad, and the colour alpha carries the atlas cell, see `world.wesl`.
@@ -84,14 +80,7 @@ impl MeshBuffers {
             self.colors.push(colors[j]);
             self.lights.push(lights[j]);
         }
-        self.indices.extend([
-            triangle_start,
-            triangle_start + 1,
-            triangle_start + 2,
-            triangle_start + 2,
-            triangle_start + 1,
-            triangle_start + 3,
-        ]);
+        self.push_quad_indices(triangle_start);
     }
 
     // Vertices at every block step round the border, so neighbours share exact edge points and leave no cracks.
@@ -301,3 +290,65 @@ pub(super) fn tiled_uvs(
     let blocks = [length(0), length(1)];
     std::array::from_fn(|j| [uvs[j][0] * blocks[0], uvs[j][1] * blocks[1]])
 }
+
+#[derive(Default, Copy, Clone)]
+pub(super) struct Vertex {
+    pub(super) position: [f32; 3],
+    pub(super) normal: [f32; 3],
+    pub(super) uv: [f32; 2],
+}
+
+const fn v(position: [f32; 3], normal: [f32; 3], uv: [f32; 2]) -> Vertex {
+    Vertex {
+        position,
+        normal,
+        uv,
+    }
+}
+
+// A unit cube's faces, in `FACE_NORMAL_OFFSET` order. Side faces put v = 0 at their top, as the
+// atlas's tiles start from their top row.
+pub(super) const CUBE: [[Vertex; 4]; 6] = [
+    // front
+    [
+        v([-0.5, 0.5, -0.5], [0.0, 0.0, 1.0], [0.0, 0.0]),
+        v([-0.5, -0.5, -0.5], [0.0, 0.0, 1.0], [0.0, 1.0]),
+        v([0.5, 0.5, -0.5], [0.0, 0.0, 1.0], [1.0, 0.0]),
+        v([0.5, -0.5, -0.5], [0.0, 0.0, 1.0], [1.0, 1.0]),
+    ],
+    // right
+    [
+        v([0.5, 0.5, -0.5], [1.0, 0.0, 0.0], [0.0, 0.0]),
+        v([0.5, -0.5, -0.5], [1.0, 0.0, 0.0], [0.0, 1.0]),
+        v([0.5, 0.5, 0.5], [1.0, 0.0, 0.0], [1.0, 0.0]),
+        v([0.5, -0.5, 0.5], [1.0, 0.0, 0.0], [1.0, 1.0]),
+    ],
+    // left
+    [
+        v([-0.5, 0.5, 0.5], [-1.0, 0.0, 0.0], [1.0, 0.0]),
+        v([-0.5, -0.5, 0.5], [-1.0, 0.0, 0.0], [1.0, 1.0]),
+        v([-0.5, 0.5, -0.5], [-1.0, 0.0, 0.0], [0.0, 0.0]),
+        v([-0.5, -0.5, -0.5], [-1.0, 0.0, 0.0], [0.0, 1.0]),
+    ],
+    // back
+    [
+        v([0.5, 0.5, 0.5], [0.0, 0.0, -1.0], [1.0, 0.0]),
+        v([0.5, -0.5, 0.5], [0.0, 0.0, -1.0], [1.0, 1.0]),
+        v([-0.5, 0.5, 0.5], [0.0, 0.0, -1.0], [0.0, 0.0]),
+        v([-0.5, -0.5, 0.5], [0.0, 0.0, -1.0], [0.0, 1.0]),
+    ],
+    // top
+    [
+        v([-0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [0.0, 1.0]),
+        v([-0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [1.0, 1.0]),
+        v([0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [0.0, 0.0]),
+        v([0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [1.0, 0.0]),
+    ],
+    // bottom
+    [
+        v([-0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [0.0, 1.0]),
+        v([-0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [1.0, 1.0]),
+        v([0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [0.0, 0.0]),
+        v([0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [1.0, 0.0]),
+    ],
+];

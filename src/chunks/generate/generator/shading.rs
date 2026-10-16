@@ -1,4 +1,5 @@
 use super::source::BlockSource;
+use super::terrain::is_solid;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
 use bevy::math::IVec3;
@@ -29,25 +30,22 @@ pub(super) const AO_GAMMA: f32 = 2.2;
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
 pub(super) const WATER_TOP: f32 = 0.4;
 
-// The two tangent-direction offsets (toward whichever corner `vertex_local_pos` is
-// on) for a face - shared by `vertex_ao` (which samples one layer along the face
-// normal, for overhang darkening) and `vertex_shore_factor` (which samples at the
-// block's own height, since shoreline land sits flush with the water surface, not
-// above it).
+// The axis a unit offset runs along.
+pub(super) fn axis_of(v: IVec3) -> usize {
+    if v.x != 0 {
+        0
+    } else if v.y != 0 {
+        1
+    } else {
+        2
+    }
+}
+
+// A face's two tangents, each pointing toward the corner `vertex_local_pos` is on.
 pub(super) fn tangent_offsets(face_index: usize, vertex_local_pos: [f32; 3]) -> (IVec3, IVec3) {
     let (ta, tb) = FACE_TANGENTS[face_index];
-    let axis_index = |v: IVec3| {
-        if v.x != 0 {
-            0
-        } else if v.y != 0 {
-            1
-        } else {
-            2
-        }
-    };
-    let sign_a = vertex_local_pos[axis_index(ta)].signum() as i32;
-    let sign_b = vertex_local_pos[axis_index(tb)].signum() as i32;
-    (ta * sign_a, tb * sign_b)
+    let sign = |t: IVec3| vertex_local_pos[axis_of(t)].signum() as i32;
+    (ta * sign(ta), tb * sign(tb))
 }
 
 pub(super) fn vertex_ao(
@@ -105,9 +103,8 @@ pub(super) fn face_light(level: u8) -> f32 {
     stepped.min(MAX_LIGHT) as f32 / MAX_LIGHT as f32
 }
 
-// Fraction of a water top-face vertex's same-height tangent corners that are solid
-// land - used to bake a shoreline mask into the water mesh so the shader can lap
-// foam there.
+// The share of the cells round a water top-face corner, at its height, that are land, where the
+// shader laps foam.
 pub(super) fn vertex_shore_factor(
     source: &impl BlockSource,
     block_coord: IVec3,
@@ -122,19 +119,16 @@ pub(super) fn vertex_shore_factor(
 
     let land_count = [side_a, side_b, corner]
         .iter()
-        .filter(|b| b.occlusion_weight() == 1.0)
+        .filter(|&&b| is_solid(b))
         .count();
     land_count as f32 / 3.0
 }
 
 pub(super) const SHORE_DISTANCE_RADIUS: i32 = 3;
 
-// Distance (in blocks, normalized to 0..1 over `SHORE_DISTANCE_RADIUS`, 1.0 meaning
-// "no land within range") from this top-face vertex to the nearest land block -
-// anchored at the *shared grid corner* (block_coord + tangent offsets) rather than
-// the block itself, so up to four blocks touching that corner all compute the exact
-// same distance there. That's what keeps it safe to drive the foam's travelling
-// phase: unlike per-block data, it can't disagree at a shared edge.
+// Distance from this top-face corner to the nearest land, 0..1 over `SHORE_DISTANCE_RADIUS`, 1 for
+// none in range. Measured from the corner itself, so every block sharing it agrees, which keeps
+// the foam's travelling phase from tearing at shared edges.
 pub(super) fn vertex_shore_distance(
     source: &impl BlockSource,
     block_coord: IVec3,
@@ -152,7 +146,7 @@ pub(super) fn vertex_shore_distance(
                 continue;
             }
             let probe = anchor + IVec3::new(dx, 0, dz);
-            if source.block(probe).occlusion_weight() == 1.0 {
+            if is_solid(source.block(probe)) {
                 min_dist_sq = dist_sq;
             }
         }

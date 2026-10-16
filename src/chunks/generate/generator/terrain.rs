@@ -1,6 +1,7 @@
 use crate::block::BlockType;
 use crate::chunks::chunk::neighbor_26_index;
 use crate::chunks::chunk::ChunkData;
+use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::BiomeId;
 use crate::chunks::generate::biome::Biomes;
 use crate::chunks::generate::WATER_LEVEL;
@@ -169,7 +170,7 @@ pub(super) fn resolve_block(
     neighbor_chunks: &[Option<Arc<ChunkData>>],
     coord: IVec3,
 ) -> BlockType {
-    let size = chunk.size as i32;
+    let size = CHUNK_SIZE as i32;
     let out = |c: i32| {
         if c < 0 {
             -1

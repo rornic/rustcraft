@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use bevy::{
-    asset::{Assets, Handle},
+    asset::{Asset, Assets, Handle},
     camera::visibility::Visibility,
     ecs::hierarchy::Children,
     ecs::{
@@ -59,43 +59,32 @@ impl FadeMaterials {
             water,
             solid_water,
         } = materials.clone();
-        let base_chunk = chunk_materials.get(&chunk).unwrap().clone();
-        let base_water = water_materials.get(&water).unwrap().clone();
-        let base_solid = water_materials.get(&solid_water).unwrap().clone();
-        let chunk_steps = (0..FADE_STEPS)
-            .map(|step| {
-                chunk_materials.add(ChunkMaterial {
-                    fade: fade_window(step),
-                    ..base_chunk.clone()
-                })
-            })
-            .collect();
-        let water_steps = (0..FADE_STEPS)
-            .map(|step| {
-                water_materials.add(WaterMaterial {
-                    fade: fade_window(step),
-                    ..base_water.clone()
-                })
-            })
-            .collect();
-        let solid_water_steps = (0..FADE_STEPS)
-            .map(|step| {
-                water_materials.add(WaterMaterial {
-                    fade: fade_window(step),
-                    ..base_solid.clone()
-                })
-            })
-            .collect();
+        let water_fade = |m: WaterMaterial, fade: Vec4| WaterMaterial { fade, ..m };
         Self {
             seconds,
+            chunk_steps: fade_steps(chunk_materials, &chunk, |m, fade| ChunkMaterial {
+                fade,
+                ..m
+            }),
+            water_steps: fade_steps(water_materials, &water, water_fade),
+            solid_water_steps: fade_steps(water_materials, &solid_water, water_fade),
             chunk,
             water,
             solid_water,
-            chunk_steps,
-            water_steps,
-            solid_water_steps,
         }
     }
+}
+
+// A copy of the material at `base` for each step of a fade out.
+fn fade_steps<M: Asset + Clone>(
+    materials: &mut Assets<M>,
+    base: &Handle<M>,
+    with_fade: impl Fn(M, Vec4) -> M,
+) -> Vec<Handle<M>> {
+    let base = materials.get(base).unwrap().clone();
+    (0..FADE_STEPS)
+        .map(|step| materials.add(with_fade(base.clone(), fade_window(step))))
+        .collect()
 }
 
 /// On a water mesh drawn with the solid material.

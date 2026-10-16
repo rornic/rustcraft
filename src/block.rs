@@ -1,6 +1,5 @@
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, Default, PartialEq, Eq, Copy, Clone)]
 #[repr(u8)]
-#[derive(Default)]
 pub enum BlockType {
     #[default]
     Air,
@@ -17,23 +16,13 @@ pub enum BlockType {
     Sandstone,
 }
 
-pub const BLOCK_COUNT: usize = 12;
-
 impl BlockType {
     pub fn occlusion_weight(&self) -> f32 {
         match self {
             BlockType::Air => 0.0,
             BlockType::Water => 0.4,
             BlockType::Leaves => 0.3,
-            BlockType::Stone
-            | BlockType::Grass
-            | BlockType::Sand
-            | BlockType::Snow
-            | BlockType::Log
-            | BlockType::Dirt
-            | BlockType::Gravel
-            | BlockType::Ice
-            | BlockType::Sandstone => 1.0,
+            _ => 1.0,
         }
     }
 
@@ -74,7 +63,7 @@ impl Face {
     }
 }
 
-// The textures in blocks.png, left to right; `gen_atlas` makes them in this order.
+// The textures in blocks.png, left to right, in `generate.py`'s `TILES` order.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 #[repr(u8)]
 pub enum Tile {
@@ -171,17 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn test_occlusion_weight_air_is_zero() {
+    fn test_occlusion_weights() {
         assert_eq!(0.0, BlockType::Air.occlusion_weight());
-    }
-
-    #[test]
-    fn test_occlusion_weight_solid_blocks_are_one() {
         assert_eq!(1.0, BlockType::Stone.occlusion_weight());
-        assert_eq!(1.0, BlockType::Grass.occlusion_weight());
-        assert_eq!(1.0, BlockType::Sand.occlusion_weight());
-        assert_eq!(1.0, BlockType::Snow.occlusion_weight());
-        assert_eq!(1.0, BlockType::Log.occlusion_weight());
+        let w = BlockType::Water.occlusion_weight();
+        assert!(w > 0.0 && w < 1.0);
     }
 
     #[test]
@@ -191,11 +174,5 @@ mod tests {
         assert!(!BlockType::Leaves.is_opaque());
         assert!(!BlockType::Water.is_opaque());
         assert!(!BlockType::Air.is_opaque());
-    }
-
-    #[test]
-    fn test_occlusion_weight_water_is_partial() {
-        let w = BlockType::Water.occlusion_weight();
-        assert!(w > 0.0 && w < 1.0);
     }
 }

@@ -3,7 +3,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use super::fractal::{resolved, Fractal};
 
-use super::biome::{BaseColumn, BiomeId, Biomes, Climate};
+use super::biome::{smoothstep, BaseColumn, BiomeId, Biomes, Climate};
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
@@ -26,8 +26,6 @@ const WARP_STRENGTH: f64 = 3000.0;
 const CONTINENT_WAVELENGTH: f64 = 16000.0;
 // Steepens continentalness, which a long wavelength leaves shallow, so coasts stay as sharp.
 const CONTINENT_CONTRAST: f64 = 1.7;
-// Shifts continentalness down so most of the world is ocean.
-const OCEAN_BIAS: f64 = 0.0;
 
 // Ruggedness decides where inland is calm plains and where it's mountain ranges.
 const RUGGEDNESS_WAVELENGTH: f64 = 7000.0;
@@ -79,8 +77,6 @@ const CLIMATE_WAVELENGTH: f64 = 12000.0;
 const CLIMATE_CONTRAST: f64 = 1.6;
 // How much of the temperature is latitude (hot equator, cold poles) rather than noise.
 const LATITUDE_WEIGHT: f64 = 0.6;
-// The poles sit at this fraction of the half size, the north and south edges of the world.
-const POLE_LATITUDE: f64 = 1.0;
 // Over this stretch of latitude the climate's noise is squeezed towards freezing, by up to POLAR_CHILL.
 const POLAR_CHILL_LATITUDE: (f64, f64) = (0.7, 0.95);
 const POLAR_CHILL: f64 = 0.9;
@@ -210,7 +206,7 @@ impl NoiseGenerator {
 
         let edge = edge_falloff(wx, z + warp_z * POLE_COAST_WARP);
         let continentalness =
-            (self.continents.get(wx, wz, cell) * CONTINENT_CONTRAST - OCEAN_BIAS).clamp(-1.0, 1.0);
+            (self.continents.get(wx, wz, cell) * CONTINENT_CONTRAST).clamp(-1.0, 1.0);
         let continentalness = (continentalness
             + POLAR_UPLIFT
                 * smoothstep(
@@ -288,7 +284,7 @@ impl NoiseGenerator {
     // How hot the column at (x, z) is: noise, pulled cold towards the poles at the north and south edges of the land.
     pub fn temperature(&self, x: f64, z: f64) -> f32 {
         let noise = (self.temperature.get([x, z]) * CLIMATE_CONTRAST * 0.5 + 0.5).clamp(0.0, 1.0);
-        let latitude = (z.abs() / (WORLD_HALF_SIZE as f64 * POLE_LATITUDE)).min(1.0);
+        let latitude = (z.abs() / WORLD_HALF_SIZE as f64).min(1.0);
         let warmth = (latitude * std::f64::consts::FRAC_PI_2).cos();
         let chill =
             POLAR_CHILL * smoothstep(POLAR_CHILL_LATITUDE.0, POLAR_CHILL_LATITUDE.1, latitude);
@@ -361,11 +357,6 @@ fn edge_falloff(x: f64, z: f64) -> f64 {
         POLE_FALLOFF_END,
         z.abs() / half,
     ))
-}
-
-fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 // Piecewise linear through `points`, which must be sorted by x; clamps beyond the ends.

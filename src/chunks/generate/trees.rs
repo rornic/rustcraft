@@ -3,7 +3,7 @@ use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3, Vec2, Vec3};
 use super::biome::BiomeId;
 use super::generator::column_block;
 use super::noise::NoiseGenerator;
-use super::region_store::HeightSampler;
+use super::region_store::{HeightSampler, SLOPE_SPAN};
 use crate::block::BlockType;
 
 /// What trees need to know about the ground to take root, from the full-detail heightmap or
@@ -11,8 +11,17 @@ use crate::block::BlockType;
 pub trait TreeGround {
     fn trees(&mut self, x: i64, z: i64) -> f64;
     fn height(&mut self, x: i64, z: i64) -> f64;
-    fn gradient(&mut self, x: i64, z: i64) -> (f64, f64);
     fn biome(&mut self, x: i64, z: i64) -> BiomeId;
+
+    /// The slope there, as `HeightSampler::gradient` measures it.
+    fn gradient(&mut self, x: i64, z: i64) -> (f64, f64) {
+        let span = SLOPE_SPAN;
+        let across = |a: f64, b: f64| (a - b) * (1.0 / span as f64);
+        (
+            across(self.height(x + span, z), self.height(x - span, z)),
+            across(self.height(x, z + span), self.height(x, z - span)),
+        )
+    }
 
     /// The height a tree's base stands at, which a coarse node sets to the ground it draws, so
     /// trees sit on it, while the rest above stay exact, so the same trees grow at every level.
@@ -28,10 +37,6 @@ impl TreeGround for HeightSampler<'_> {
 
     fn height(&mut self, x: i64, z: i64) -> f64 {
         HeightSampler::height(self, x, z)
-    }
-
-    fn gradient(&mut self, x: i64, z: i64) -> (f64, f64) {
-        HeightSampler::gradient(self, x, z)
     }
 
     fn biome(&mut self, x: i64, z: i64) -> BiomeId {

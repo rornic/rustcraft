@@ -1,6 +1,9 @@
+use super::buffers::Vertex;
 use super::buffers::{FanQuad, GrassTint, MeshBuffers, MeshStyle};
 use super::lod::SKIRT_CELLS;
-use super::shading::{face_light, vertex_ao, vertex_light, AO_GAMMA, FACE_NORMAL_OFFSET, FACE_TANGENTS};
+use super::shading::{
+    axis_of, face_light, vertex_ao, vertex_light, AO_GAMMA, FACE_NORMAL_OFFSET, FACE_TANGENTS,
+};
 use super::source::{BlockSource, GridView};
 use super::terrain::is_solid;
 use crate::block::BlockType;
@@ -8,20 +11,9 @@ use crate::block::Face;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
-use crate::util::primitives::Vertex;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
 use std::ops::Deref;
-
-pub(super) fn axis_of(v: IVec3) -> usize {
-    if v.x != 0 {
-        0
-    } else if v.y != 0 {
-        1
-    } else {
-        2
-    }
-}
 
 // Which tangent (0 or 1) UV component `k` runs along on this face, so a merged quad can repeat it.
 pub(super) fn uv_tangent(face: &[Vertex], k: usize, a_axis: usize) -> usize {
@@ -133,7 +125,7 @@ thread_local! {
 // With `solid_leaves`, leaves hide the faces of the leaves behind them.
 pub(super) fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
-    face_vertices: &[&[Vertex]; 6],
+    faces: &[[Vertex; 4]; 6],
     buffers: &mut MeshBuffers,
     style: MeshStyle,
     // how many times the texture repeats across a cell
@@ -150,7 +142,7 @@ pub(super) fn mesh_opaque_greedy(
     let n = size as usize;
     let mut mask: Vec<Option<FaceCell>> = vec![None; n * n];
 
-    for (i, template) in face_vertices.iter().enumerate() {
+    for (i, template) in faces.iter().enumerate() {
         let normal = FACE_NORMAL_OFFSET[i];
         let (ta, tb) = FACE_TANGENTS[i];
         let (a_axis, b_axis) = (axis_of(ta), axis_of(tb));
@@ -307,7 +299,9 @@ pub(super) fn mesh_opaque_greedy(
                             BlockType::Grass => source.forest_shade(position),
                             _ => 1.0,
                         };
-                        (tint * ao.powf(AO_GAMMA) * shade).extend(atlas_cell).to_array()
+                        (tint * ao.powf(AO_GAMMA) * shade)
+                            .extend(atlas_cell)
+                            .to_array()
                     };
                     if w == 1 && h == 1 {
                         let positions: [Vec3; 4] = std::array::from_fn(|j| {

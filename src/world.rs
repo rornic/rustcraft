@@ -2,7 +2,7 @@ use std::{fmt::Debug, sync::Arc};
 
 use bevy::prelude::Resource;
 use bevy::{
-    math::{I64Vec3, U16Vec3, Vec3},
+    math::{I64Vec3, Vec3},
     platform::collections::HashMap,
 };
 
@@ -63,14 +63,10 @@ impl World {
         self.spawn
     }
 
-    pub fn insert_chunk(
-        &mut self,
-        chunk_coord: ChunkCoordinate,
-        chunk_data: ChunkData,
-    ) -> Arc<ChunkData> {
-        let chunk_data = Arc::new(chunk_data);
-        self.chunks.insert(chunk_coord, chunk_data.clone());
-        chunk_data
+    pub fn insert_chunk(&mut self, coord: ChunkCoordinate, data: ChunkData) -> Arc<ChunkData> {
+        let data = Arc::new(data);
+        self.chunks.insert(coord, data.clone());
+        data
     }
 
     /// The chunk layers the world is generated in, from the bottom up.
@@ -80,85 +76,50 @@ impl World {
 
     // Below the world is solid and above it open sky, standing in for chunks that are never
     // generated, so the chunks at its bottom and top still have neighbours to mesh against.
-    fn beyond_world(&self, chunk_coord: ChunkCoordinate) -> Option<&Arc<ChunkData>> {
+    fn chunk(&self, coord: ChunkCoordinate) -> Option<&Arc<ChunkData>> {
         let layers = Self::layers(self.height);
-        if chunk_coord.0.y < layers.start {
+        if coord.0.y < layers.start {
             Some(&self.below)
-        } else if chunk_coord.0.y >= layers.end {
+        } else if coord.0.y >= layers.end {
             Some(&self.above)
         } else {
-            None
+            self.chunks.get(&coord)
         }
     }
 
-    fn chunk(&self, chunk_coord: ChunkCoordinate) -> Option<&Arc<ChunkData>> {
-        self.beyond_world(chunk_coord)
-            .or_else(|| self.chunks.get(&chunk_coord))
+    pub fn get_chunk_data(&self, coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
+        self.chunk(coord).cloned()
     }
 
-    pub fn get_chunk_data(&mut self, chunk_coord: ChunkCoordinate) -> Option<Arc<ChunkData>> {
-        self.chunk(chunk_coord).cloned()
+    pub fn clear_chunk(&mut self, coord: ChunkCoordinate) {
+        self.chunks.remove(&coord);
     }
 
-    pub fn clear_chunk(&mut self, chunk_coord: ChunkCoordinate) {
-        self.chunks.remove(&chunk_coord);
-    }
-
-    pub fn adjacent_chunk_data(
-        &mut self,
-        chunk_coord: ChunkCoordinate,
-    ) -> Vec<Option<Arc<ChunkData>>> {
-        chunk_coord
+    pub fn adjacent_chunk_data(&self, coord: ChunkCoordinate) -> Vec<Option<Arc<ChunkData>>> {
+        coord
             .neighbors_26()
-            .iter()
-            .map(|coord| self.get_chunk_data(*coord))
+            .into_iter()
+            .map(|c| self.get_chunk_data(c))
             .collect()
     }
 
-    pub fn is_chunk_generated(&mut self, chunk_coord: ChunkCoordinate) -> bool {
-        self.chunk(chunk_coord).is_some()
-    }
-
-    pub fn is_chunk_empty(&mut self, chunk_coord: ChunkCoordinate) -> bool {
-        self.chunk(chunk_coord)
-            .is_some_and(|chunk_data| chunk_data.empty())
+    pub fn is_chunk_generated(&self, coord: ChunkCoordinate) -> bool {
+        self.chunk(coord).is_some()
     }
 
     /// Whether the chunk and the chunks against its faces are all opaque, so it has no faces to draw.
-    pub fn is_chunk_buried(&self, chunk_coord: ChunkCoordinate) -> bool {
-        let opaque = |coord| self.chunk(coord).is_some_and(|data| data.opaque());
-        opaque(chunk_coord) && chunk_coord.adjacent().into_iter().all(opaque)
+    pub fn is_chunk_buried(&self, coord: ChunkCoordinate) -> bool {
+        let opaque = |c| self.chunk(c).is_some_and(|data| data.opaque());
+        opaque(coord) && coord.adjacent().into_iter().all(opaque)
     }
 
-    pub fn chunk_to_world(&self, chunk_coord: ChunkCoordinate) -> Vec3 {
-        chunk_coord.centre()
-    }
-
-    pub fn block_to_chunk_coordinate(&self, block_coord: I64Vec3) -> ChunkCoordinate {
-        block_coord
-            .div_euclid(I64Vec3::splat(CHUNK_SIZE as i64))
-            .into()
-    }
-
-    pub fn get_block_at(&mut self, world_block_coord: I64Vec3) -> BlockType {
-        let chunk_size = CHUNK_SIZE as i64;
-        // div_euclid/rem_euclid, not `/` and `%` - those truncate toward zero, which puts
-        // negative coordinates in the wrong chunk and yields a negative (then
-        // wrapping-to-huge-u16) local coordinate.
-        let chunk_coord = ChunkCoordinate(I64Vec3::new(
-            world_block_coord.x.div_euclid(chunk_size),
-            world_block_coord.y.div_euclid(chunk_size),
-            world_block_coord.z.div_euclid(chunk_size),
-        ));
-        let Some(chunk_data) = self.get_chunk_data(chunk_coord) else {
-            return BlockType::Air; // ungenerated chunk under the camera isn't water
-        };
-        let local = U16Vec3::new(
-            world_block_coord.x.rem_euclid(chunk_size) as u16,
-            world_block_coord.y.rem_euclid(chunk_size) as u16,
-            world_block_coord.z.rem_euclid(chunk_size) as u16,
-        );
-        chunk_data.get_block_at(local)
+    /// The block at `block`, or air in a chunk not generated yet.
+    pub fn get_block_at(&self, block: I64Vec3) -> BlockType {
+        let size = CHUNK_SIZE as i64;
+        self.chunk(ChunkCoordinate::containing(block))
+            .map_or(BlockType::Air, |data| {
+                data.get_block_at(block.rem_euclid(I64Vec3::splat(size)).as_u16vec3())
+            })
     }
 }
 
@@ -174,27 +135,15 @@ mod tests {
 
     use super::World;
     use crate::block::BlockType;
-    use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
-
-    #[test]
-    fn test_block_to_chunk_coordinate() {
-        let world = World::new(16);
-        let chunk = |x, y, z| world.block_to_chunk_coordinate(I64Vec3::new(x, y, z));
-        assert_eq!(ChunkCoordinate(I64Vec3::new(0, 1, 2)), chunk(5, 16, 47));
-        // negative blocks belong to the chunk below, not chunk 0
-        assert_eq!(
-            ChunkCoordinate(I64Vec3::new(-1, -1, -2)),
-            chunk(-5, -16, -17)
-        );
-    }
+    use crate::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 
     #[test]
     fn test_chunk_is_buried_only_when_it_and_its_face_neighbours_are_opaque() {
         let filled = |block| {
             let mut data = ChunkData::default();
-            for x in 0..data.size {
-                for y in 0..data.size {
-                    for z in 0..data.size {
+            for x in 0..CHUNK_SIZE {
+                for y in 0..CHUNK_SIZE {
+                    for z in 0..CHUNK_SIZE {
                         data.set_block_at(bevy::math::U16Vec3::new(x, y, z), block);
                     }
                 }
@@ -222,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_beyond_the_world_is_solid_below_and_open_above() {
-        let mut world = World::new(16);
+        let world = World::new(16);
         let top = World::layers(world.height).end;
         let (below, inside, above) = (
             ChunkCoordinate(I64Vec3::new(3, -1, 2)),
@@ -232,19 +181,7 @@ mod tests {
         assert!(world.is_chunk_generated(below) && world.is_chunk_generated(above));
         assert!(!world.is_chunk_generated(inside));
         assert!(world.get_chunk_data(below).unwrap().opaque());
-        assert!(world.is_chunk_empty(above));
+        assert!(world.get_chunk_data(above).unwrap().empty());
         assert_eq!(BlockType::Stone, world.get_block_at(I64Vec3::new(0, -1, 0)));
     }
-
-    #[test]
-    fn test_is_chunk_generated() {}
-
-    #[test]
-    fn test_generate_chunk_updates_chunk_data() {}
-
-    #[test]
-    fn test_generate_chunk_mesh_none_for_ungenerated_chunk() {}
-
-    #[test]
-    fn test_generate_chunk_mesh_some_for_generated_chunk() {}
 }

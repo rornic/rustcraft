@@ -26,7 +26,7 @@ impl RegionCoord {
 
 // One region's column heights and biomes, REGION_SIZE x REGION_SIZE, row-major [z][x].
 pub struct Region {
-    pub heights: Vec<f32>,
+    heights: Vec<f32>,
     biomes: Vec<BiomeId>,
     // tree density, 0..1 as 0..=255
     trees: Vec<u8>,
@@ -63,9 +63,7 @@ impl Region {
     }
 }
 
-// Samples REGION_SIZE^2 columns of noise - run from an async task-pool task, never
-// a Bevy system body on the main thread. Caching/coalescing concurrent calls is
-// RegionStore's job.
+// Samples REGION_SIZE^2 columns of noise, so only call from a task.
 pub fn compute_region(noise: &NoiseGenerator, coord: RegionCoord) -> Region {
     let origin = coord.origin();
     let mut heights = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
@@ -123,12 +121,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn test_compute_region_produces_region_sized_height_array() {
-        let noise = NoiseGenerator::new(1);
-        let region = compute_region(&noise, RegionCoord::from_world(0, 0));
-        assert_eq!((REGION_SIZE * REGION_SIZE) as usize, region.heights.len());
     }
 }

@@ -74,7 +74,7 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
             angular_size: SUN_DISC_SIZE,
             intensity: SUN_DISC_INTENSITY,
         },
-        Transform::default().looking_to(-sun_direction(START_TIME), Vec3::Y),
+        shining_from(sun_direction(START_TIME)),
         CascadeShadowConfigBuilder {
             num_cascades: cascades.max(1),
             first_cascade_far_bound: FIRST_CASCADE_DISTANCE,
@@ -104,7 +104,7 @@ pub fn moon() -> impl Bundle {
             ..Default::default()
         },
         Moon,
-        Transform::default().looking_to(-moon_direction(START_TIME), Vec3::Y),
+        shining_from(moon_direction(START_TIME)),
     )
 }
 
@@ -152,13 +152,17 @@ pub fn move_sky(
 ) {
     let wound = keys.pressed(SCRUB_FORWARD_KEY) as i32 - keys.pressed(SCRUB_BACK_KEY) as i32;
     clock.0 += time.delta_secs() * (1.0 / DAY_SECONDS + wound as f32 * SCRUB_SPEED);
-    // the light shines along its forward, away from the luminary
     if let Ok(mut transform) = sun.single_mut() {
-        *transform = Transform::default().looking_to(-sun_direction(clock.0), Vec3::Y);
+        *transform = shining_from(sun_direction(clock.0));
     }
     if let Ok(mut transform) = moon.single_mut() {
-        *transform = Transform::default().looking_to(-moon_direction(clock.0), Vec3::Y);
+        *transform = shining_from(moon_direction(clock.0));
     }
+}
+
+// A light shines along its forward, away from where it is in the sky.
+fn shining_from(direction: Vec3) -> Transform {
+    Transform::default().looking_to(-direction, Vec3::Y)
 }
 
 pub fn camera_exposure() -> Exposure {

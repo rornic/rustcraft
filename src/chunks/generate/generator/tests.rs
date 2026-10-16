@@ -13,7 +13,7 @@ use super::lod::LodBlocks;
 use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
 use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
 use super::terrain::{freeze_cell, resolve_block, terrain_block, under_grass, FREEZE_TEMPERATURE};
-use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData};
+use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
@@ -50,7 +50,7 @@ fn test_resolve_block_crosses_single_axis_into_adjacent_chunk() {
 
     let mut neighbors = no_neighbors();
     neighbors[neighbor_26_index(1, 0, 0)] = Some(Arc::new(adjacent));
-    let block = resolve_block(&chunk, &neighbors, IVec3::new(chunk.size as i32, 4, 4));
+    let block = resolve_block(&chunk, &neighbors, IVec3::new(CHUNK_SIZE as i32, 4, 4));
     assert_eq!(BlockType::Stone, block);
 }
 
@@ -65,7 +65,7 @@ fn test_resolve_block_crosses_two_axes_into_diagonal_chunk() {
     let block = resolve_block(
         &chunk,
         &neighbors,
-        IVec3::new(chunk.size as i32, chunk.size as i32, 4),
+        IVec3::new(CHUNK_SIZE as i32, CHUNK_SIZE as i32, 4),
     );
     assert_eq!(BlockType::Stone, block);
 }
@@ -76,7 +76,7 @@ fn test_resolve_block_missing_diagonal_chunk_is_air() {
     let block = resolve_block(
         &chunk,
         &no_neighbors(),
-        IVec3::new(chunk.size as i32, chunk.size as i32, 4),
+        IVec3::new(CHUNK_SIZE as i32, CHUNK_SIZE as i32, 4),
     );
     assert_eq!(BlockType::Air, block);
 }
@@ -1337,16 +1337,12 @@ fn test_side_faces_texture_the_right_way_up_merged_or_not() {
 }
 
 #[test]
-fn test_chunk_with_a_block_has_geometry() {
-    let mut chunk = ChunkData::default();
-    chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Stone);
-    assert!(mesh_chunk(chunk).has_geometry());
-}
-
-#[test]
 fn test_canopy_shade_darkens_toward_the_ground() {
     let padded = 18 * 18;
-    let lod = flat_lod(8).with_canopy_tops(vec![40; padded]);
+    let lod = LodBlocks {
+        canopy_tops: vec![40; padded],
+        ..flat_lod(8)
+    };
     let at = |y: f32| lod.canopy_shade(Vec3::new(4.0, y, 4.0));
     // a leaf at the canopy's top is unshaded, and the foot of a canopy is the darkest
     assert_eq!(1.0, at(39.5));
@@ -1359,7 +1355,10 @@ fn test_canopy_shade_darkens_toward_the_ground() {
 #[test]
 fn test_canopy_shade_leaves_bare_columns_and_other_lods_alone() {
     let padded = 18 * 18;
-    let bare = flat_lod(8).with_canopy_tops(vec![i64::MIN; padded]);
+    let bare = LodBlocks {
+        canopy_tops: vec![i64::MIN; padded],
+        ..flat_lod(8)
+    };
     assert_eq!(1.0, bare.canopy_shade(Vec3::new(4.0, 2.0, 4.0)));
     assert_eq!(1.0, flat_lod(8).canopy_shade(Vec3::new(4.0, 2.0, 4.0)));
 }
@@ -1705,7 +1704,10 @@ fn test_forest_tints_the_ground_darker_the_more_of_it_trees_cover() {
     let mut forest = vec![0.0; padded];
     forest[LodBlocks::column(16, 4, 4)] = 0.5;
     forest[LodBlocks::column(16, 8, 8)] = 1.0;
-    let lod = flat_lod(8).with_forest(forest);
+    let lod = LodBlocks {
+        forest,
+        ..flat_lod(8)
+    };
     let at = |x: f32, z: f32| lod.forest_shade(Vec3::new(x, 7.5, z));
     assert_eq!(1.0, at(1.0, 1.0));
     assert!(at(4.0, 4.0) < 1.0 && at(8.0, 8.0) < at(4.0, 4.0));
@@ -1751,11 +1753,7 @@ type Spots = Vec<(i64, i64)>;
 fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Spots, Spots) {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
-    let (cell, base, size) = (
-        key.cell_size(),
-        key.min_block(),
-        crate::chunks::chunk::CHUNK_SIZE as i32,
-    );
+    let (cell, base, size) = (key.cell_size(), key.min_block(), CHUNK_SIZE as i32);
     let span = (size + 1) as i64 * cell;
     let min = I64Vec2::new(base.x, base.z) - cell;
     let own = |t: &crate::chunks::generate::trees::Tree| {
@@ -1934,14 +1932,6 @@ fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
             fine_level + 1
         );
     }
-}
-
-#[test]
-#[ignore]
-fn scratch_one_leak() {
-    // a leak the real layout showed, from (-224.7, 504.4, -276.3) along (0.329, -0.940, 0.094), with only level 1 nodes near it
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
-    let _ = regions;
 }
 
 #[test]

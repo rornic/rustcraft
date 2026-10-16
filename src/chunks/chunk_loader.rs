@@ -8,7 +8,7 @@ use bevy::{
     ecs::{
         component::Component,
         entity::Entity,
-        query::{With, Without},
+        query::{Or, With, Without},
         system::{Commands, Query, Res, ResMut},
     },
     math::{Dir3, I64Vec3, Vec3},
@@ -25,26 +25,34 @@ use super::{
     lod::{GenerateLodMesh, LodKey, LodLayout, LodLoader},
     material::{ChunkMaterial, WaterMaterial},
 };
-use crate::{player::PlayerLook, world::World};
+use crate::world::World;
 
 #[derive(Component)]
 pub struct Chunk {
     pub coord: ChunkCoordinate,
 }
 
+/// Generated with something in it, waiting for its neighbours before it's meshed.
 #[derive(Component)]
-pub struct DirtyChunk {}
+pub struct DirtyChunk;
 
 #[derive(Component)]
 pub struct GenerateChunkData {
     task: Task<ChunkData>,
 }
 
+/// Waiting to be meshed, then being meshed.
 #[derive(Component)]
 pub struct GenerateChunkMesh {
-    coord: ChunkCoordinate,
     task: Option<Task<ChunkMeshes>>,
 }
+
+/// A chunk still on its way to being meshed.
+pub type Unsettled = Or<(
+    With<GenerateChunkData>,
+    With<DirtyChunk>,
+    With<GenerateChunkMesh>,
+)>;
 
 #[derive(Resource)]
 pub struct ChunkLoader {
@@ -52,8 +60,8 @@ pub struct ChunkLoader {
     render_distance: u32,
     chunk_to_entity: HashMap<ChunkCoordinate, Entity>,
     spawn_queue: ChunkSpawnQueue,
-    material: Handle<ChunkMaterial>,
-    water_material: Handle<WaterMaterial>,
+    pub(super) material: Handle<ChunkMaterial>,
+    pub(super) water_material: Handle<WaterMaterial>,
     max_in_flight_generating: usize,
     // see `DebugSettings::solid_leaves`
     solid_leaves: bool,
@@ -65,42 +73,23 @@ pub struct ChunkLoader {
     pub(super) waiting: HashSet<LodKey>,
 }
 
-// A fixed per-frame item budget tuned at one render distance silently falls behind at a
-// much larger one: the leading-edge crescent that needs filling while moving scales with
-// the render sphere's surface area (O(r^2)), and the initial cold-load backlog scales
-// with its full volume (O(r^3)) - so any fixed item count is *some* distance's bottleneck.
-// Both gather_chunks (scanning offsets + spawning generation tasks) and load_chunks
-// (polling mesh tasks + uploading finished meshes to the GPU) instead spend up to a fixed
-// *time* budget per frame, doing as much real work as that buys - cheap chunks (or a fast
-// machine) get more done per frame automatically, expensive ones get less, and there is
-// nothing to re-tune if render distance changes.
+// Loading spends up to a time budget a frame rather than a fixed count of chunks, so it keeps up
+// at any render distance and on any machine.
 const GATHER_TIME_BUDGET: Duration = Duration::from_millis(3);
 const MESH_APPLY_TIME_BUDGET: Duration = Duration::from_millis(4);
-// Per-call chunk size fed to the pure, deterministically-testable `next_batch` - not a
-// per-frame cap (gather_chunks calls it repeatedly until GATHER_TIME_BUDGET runs out), just
-// how much work happens between time checks.
+// How much of the spawn queue `gather_chunks` takes between checks of the time.
 const SPAWN_BATCH_SIZE: usize = 64;
 const SCAN_BATCH_SIZE: usize = 50_000;
-// safety valve against unboundedly many concurrent generation tasks if generation ever
-// falls behind frame rate - scaled with render distance so it doesn't itself become the
-// bottleneck once the time-budgeted spawn rate is higher at a larger render distance
-const BASELINE_RENDER_DISTANCE: u32 = 32;
-const BASELINE_IN_FLIGHT_GENERATING: usize = 512;
-// Mesh generation samples the full 3x3x3 chunk neighborhood for vertex AO (including
-// corner-diagonal chunks), so the neighbour-data shell must reach far enough to cover a
-// (1,1,1) chunk-grid offset, i.e. Euclidean distance sqrt(3) =~ 1.73 - round up to 2.
+// Meshing reads every chunk in the 3x3x3 around a chunk, up to sqrt(3) away, so chunk data is
+// generated this much past the meshed chunks.
 const NEIGHBOR_DATA_PADDING: u32 = 2;
 
-// Ratio of this render distance's shell surface area to the baseline's, using the same
-// effective radius (render_distance + padding) the spawn queue itself scans.
-fn shell_area_scale(render_distance: u32) -> f64 {
-    let effective = (render_distance + NEIGHBOR_DATA_PADDING) as f64;
-    let baseline_effective = (BASELINE_RENDER_DISTANCE + NEIGHBOR_DATA_PADDING) as f64;
-    (effective / baseline_effective).powi(2)
-}
-
-fn scale_budget(baseline: usize, render_distance: u32) -> usize {
-    ((baseline as f64) * shell_area_scale(render_distance)).ceil() as usize
+// A cap on concurrent generation tasks, should generation fall behind: 512 at a render distance of
+// 32, scaled with the area of the shell of chunks loading in as the camera moves.
+fn max_in_flight(render_distance: u32) -> usize {
+    let scale =
+        (render_distance + NEIGHBOR_DATA_PADDING) as f64 / (32 + NEIGHBOR_DATA_PADDING) as f64;
+    (512.0 * scale * scale).ceil() as usize
 }
 
 impl ChunkLoader {
@@ -116,28 +105,16 @@ impl ChunkLoader {
             layout,
             render_distance,
             chunk_to_entity: HashMap::new(),
-            // generate a shell of chunk data beyond render_distance so the chunks
-            // actually meshed (up to render_distance) always have complete neighbour
-            // data - without this, the outermost shell would never have its full
-            // neighbourhood generated, since some of it is always further out
             spawn_queue: ChunkSpawnQueue::new(render_distance + NEIGHBOR_DATA_PADDING)
                 .with_layers(World::layers(world_height)),
             material,
             water_material,
-            max_in_flight_generating: scale_budget(BASELINE_IN_FLIGHT_GENERATING, render_distance),
+            max_in_flight_generating: max_in_flight(render_distance),
             solid_leaves,
             groups: HashMap::new(),
             held: HashMap::new(),
             waiting: HashSet::new(),
         }
-    }
-
-    pub fn material(&self) -> Handle<ChunkMaterial> {
-        self.material.clone()
-    }
-
-    pub fn water_material(&self) -> Handle<WaterMaterial> {
-        self.water_material.clone()
     }
 
     pub fn group_entity(&self, key: LodKey) -> Option<Entity> {
@@ -157,93 +134,52 @@ impl ChunkLoader {
 pub fn gather_chunks(
     mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
-    mut world: ResMut<World>,
-    camera_query: Query<(&ChildOf, &GlobalTransform), (With<Camera>, Without<PlayerLook>)>,
-    generating_chunks_query: Query<&Chunk, With<GenerateChunkData>>,
+    world: Res<World>,
+    camera_query: Query<&GlobalTransform, (With<Camera>, With<ChildOf>)>,
+    generating_chunks_query: Query<(), With<GenerateChunkData>>,
 ) {
+    let loader = &mut *chunk_loader;
     let mut in_flight = generating_chunks_query.iter().count();
-    if in_flight > chunk_loader.max_in_flight_generating {
-        return;
-    }
-
-    let (_, camera) = camera_query.single().expect("could not find camera");
-
-    let camera_pos = camera.translation();
-    let camera_chunk = world.block_to_chunk_coordinate(I64Vec3::new(
-        camera_pos.x as i64,
-        camera_pos.y as i64,
-        camera_pos.z as i64,
-    ));
-    let camera_forward = camera.forward();
+    let camera = camera_query.single().expect("could not find camera");
+    let camera_chunk = ChunkCoordinate::containing(camera.translation().floor().as_i64vec3());
     let task_pool = AsyncComputeTaskPool::get();
     let start = Instant::now();
 
-    loop {
-        if in_flight >= chunk_loader.max_in_flight_generating {
-            break;
-        }
-        let ChunkLoader {
-            spawn_queue,
-            chunk_to_entity,
-            ..
-        } = &mut *chunk_loader;
-        let mut next_chunks = spawn_queue.next_batch(
+    while in_flight < loader.max_in_flight_generating {
+        let mut next_chunks = loader.spawn_queue.next_batch(
             camera_chunk,
-            chunk_to_entity,
+            &loader.chunk_to_entity,
             SPAWN_BATCH_SIZE,
             SCAN_BATCH_SIZE,
         );
-        let exhausted = spawn_queue.is_exhausted();
-        sort_by_viewport_bias(&mut next_chunks, camera_chunk, camera_forward);
-
+        sort_by_viewport_bias(&mut next_chunks, camera_chunk, camera.forward());
         in_flight += next_chunks.len();
-        for chunk in next_chunks {
-            generate_single_chunk(
-                &mut commands,
-                &mut world,
-                chunk,
-                task_pool,
-                &mut chunk_loader,
-            );
+        for coord in next_chunks {
+            let regions = world.region_store.clone();
+            let task = task_pool.spawn(async move { generate_chunk(regions, coord) });
+            let entity = commands
+                .spawn((Chunk { coord }, GenerateChunkData { task }))
+                .id();
+            loader.chunk_to_entity.insert(coord, entity);
         }
-
-        if exhausted || start.elapsed() >= GATHER_TIME_BUDGET {
+        if loader.spawn_queue.is_exhausted() || start.elapsed() >= GATHER_TIME_BUDGET {
             break;
         }
     }
-}
-
-fn generate_single_chunk(
-    commands: &mut Commands,
-    world: &mut ResMut<World>,
-    coord: ChunkCoordinate,
-    task_pool: &AsyncComputeTaskPool,
-    chunk_loader: &mut ResMut<ChunkLoader>,
-) {
-    let region_store = world.region_store.clone();
-    let entity = commands
-        .spawn((
-            Chunk { coord },
-            GenerateChunkData {
-                task: task_pool.spawn(async move { generate_chunk(region_store, coord) }),
-            },
-        ))
-        .id();
-    chunk_loader.chunk_to_entity.insert(coord, entity);
 }
 
 pub fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
-    mut chunks_query: Query<(Entity, &mut Chunk, &mut GenerateChunkData)>,
+    mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkData)>,
 ) {
-    for (entity, chunk, mut gen_chunk) in chunks_query.iter_mut() {
-        if let Some(chunk_data) = futures::check_ready(&mut gen_chunk.task) {
-            let data = world.insert_chunk(chunk.coord, chunk_data);
-            if !data.empty() {
-                commands.entity(entity).insert(DirtyChunk {});
+    for (entity, chunk, mut generating) in &mut chunks_query {
+        if let Some(data) = futures::check_ready(&mut generating.task) {
+            let mut entity = commands.entity(entity);
+            entity.remove::<GenerateChunkData>();
+            if !world.insert_chunk(chunk.coord, data).empty() {
+                entity.insert(DirtyChunk);
             }
-            commands.entity(entity).remove::<GenerateChunkData>();
         }
     }
 }
@@ -251,95 +187,76 @@ pub fn generate_chunks(
 #[allow(clippy::type_complexity)]
 pub fn mark_chunks(
     mut commands: Commands,
-    mut world: ResMut<World>,
+    world: Res<World>,
     chunk_loader: Res<ChunkLoader>,
-    mut chunks_query: Query<
-        (Entity, &mut Chunk),
-        (
-            With<DirtyChunk>,
-            Without<GenerateChunkData>,
-            Without<GenerateChunkMesh>,
-        ),
-    >,
+    chunks_query: Query<(Entity, &Chunk), (With<DirtyChunk>, Without<GenerateChunkMesh>)>,
 ) {
-    chunks_query.iter_mut().for_each(|(entity, chunk)| {
+    for (entity, chunk) in &chunks_query {
+        // meshing reads the whole 3x3x3 neighbourhood, for ambient occlusion at the corners
         if !chunk_loader
             .layout
             .full_detail(chunk.coord, chunk_loader.spawn_queue.anchor)
+            || !chunk
+                .coord
+                .neighbors_26()
+                .into_iter()
+                .all(|adj| world.is_chunk_generated(adj))
         {
-            return;
+            continue;
         }
-
-        // Mesh generation samples diagonal-neighbor chunks for vertex AO, so wait for the
-        // full 3x3x3 neighborhood, not just the 6 face-adjacent chunks.
-        if chunk
-            .coord
-            .neighbors_26()
-            .into_iter()
-            .all(|adj| world.is_chunk_generated(adj))
-        {
-            commands.entity(entity).remove::<DirtyChunk>();
-            // most chunks underground: meshing them would only find every face covered
-            if !world.is_chunk_buried(chunk.coord) {
-                commands.entity(entity).insert(GenerateChunkMesh {
-                    coord: chunk.coord,
-                    task: None,
-                });
-            }
+        commands.entity(entity).remove::<DirtyChunk>();
+        // most chunks underground: meshing them would only find every face covered
+        if !world.is_chunk_buried(chunk.coord) {
+            commands
+                .entity(entity)
+                .insert(GenerateChunkMesh { task: None });
         }
-    });
+    }
 }
 
 pub fn load_chunks(
     mut commands: Commands,
-    mut world: ResMut<World>,
+    world: Res<World>,
     mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkMesh)>,
     mut chunk_loader: ResMut<ChunkLoader>,
 ) {
     let task_pool = AsyncComputeTaskPool::get();
     let start = Instant::now();
 
-    for (entity, chunk, mut gen_chunk_mesh) in chunks_query.iter_mut() {
-        match &mut gen_chunk_mesh.task {
+    for (entity, chunk, mut meshing) in &mut chunks_query {
+        match &mut meshing.task {
             Some(task) => {
-                // applied inline rather than collected into a list and applied after the
-                // loop: a time budget (instead of an item-count cap) means we can't know
-                // in advance how many will fit, and a completed task's mesh can't be
-                // polled a second time next frame if we deferred using it here.
-                if let Some(chunk_meshes) = futures::check_ready(task) {
+                if let Some(meshes) = futures::check_ready(task) {
                     let key = LodKey::containing(chunk.coord, 1);
                     let mut chunk_entity = commands.entity(entity);
                     chunk_entity.remove::<GenerateChunkMesh>();
                     // buried chunks mesh to nothing, and are left without a mesh or a draw
-                    if chunk_meshes.has_geometry() {
+                    if meshes.has_geometry() {
                         if chunk_loader.groups.contains_key(&key) {
                             // reloaded after its group was drawn, whose mesh already has it
                             chunk_entity.insert(GroupedChunk);
                         } else {
                             chunk_entity.insert(MeshedChunk);
-                            chunk_loader.held.insert(chunk.coord, chunk_meshes);
+                            chunk_loader.held.insert(chunk.coord, meshes);
                             chunk_loader.waiting.insert(key);
                         }
                     }
                 }
             }
             None => {
-                // re-check neighbour completeness here, not just in mark_chunks: a neighbour
-                // confirmed generated when GenerateChunkMesh was added can still be unloaded
-                // by the time this system runs in a later frame, if the player has moved far
-                // enough since. Without this check, adjacent_chunk_data below would silently
-                // return None for that side, baking a permanent border into the mesh.
-                let neighbours_ready = chunk
-                    .coord
+                // a neighbour found in `mark_chunks` may have been unloaded since, which would
+                // bake a border into the mesh
+                let coord = chunk.coord;
+                if coord
                     .adjacent()
                     .into_iter()
-                    .all(|adj| world.is_chunk_generated(adj));
-                if neighbours_ready {
-                    if let Some(data) = world.get_chunk_data(gen_chunk_mesh.coord) {
-                        let adjacent = world.adjacent_chunk_data(chunk.coord);
-                        let (coord, regions) = (chunk.coord, world.region_store.clone());
+                    .all(|adj| world.is_chunk_generated(adj))
+                {
+                    if let Some(data) = world.get_chunk_data(coord) {
+                        let adjacent = world.adjacent_chunk_data(coord);
+                        let regions = world.region_store.clone();
                         let solid_leaves = chunk_loader.solid_leaves;
-                        gen_chunk_mesh.task = Some(task_pool.spawn(async move {
+                        meshing.task = Some(task_pool.spawn(async move {
                             generate_chunk_mesh(
                                 data,
                                 adjacent,
@@ -368,18 +285,16 @@ pub fn unload_chunks(
     lods: Res<LodLoader>,
     pending_lods: Query<(), With<GenerateLodMesh>>,
 ) {
+    let loader = &mut *chunk_loader;
+    let reach = (loader.render_distance + NEIGHBOR_DATA_PADDING) as f32;
     let mut unloaded = HashSet::new();
-    for (entity, chunk) in chunks_query.iter() {
-        // matches the neighbour-data padding shell generated beyond render_distance
-        if chunk_distance(chunk.coord, chunk_loader.spawn_queue.anchor)
-            > (chunk_loader.render_distance + NEIGHBOR_DATA_PADDING) as f32
+    for (entity, chunk) in &chunks_query {
+        if chunk_distance(chunk.coord, loader.spawn_queue.anchor) > reach
             && lods.chunk_covered(chunk.coord, &pending_lods)
         {
-            // recursive: chunks with water spawn a child entity for the water mesh,
-            // which must be cleaned up along with the chunk itself.
             commands.entity(entity).despawn();
-            chunk_loader.chunk_to_entity.remove(&chunk.coord);
-            chunk_loader.held.remove(&chunk.coord);
+            loader.chunk_to_entity.remove(&chunk.coord);
+            loader.held.remove(&chunk.coord);
             world.clear_chunk(chunk.coord);
             unloaded.insert(LodKey::containing(chunk.coord, 1));
         }
@@ -389,31 +304,17 @@ pub fn unload_chunks(
     for key in unloaded {
         if key
             .chunks()
-            .all(|chunk| !chunk_loader.chunk_to_entity.contains_key(&chunk))
+            .all(|chunk| !loader.chunk_to_entity.contains_key(&chunk))
         {
-            chunk_loader.waiting.remove(&key);
-            if let Some(group) = chunk_loader.groups.remove(&key) {
+            loader.waiting.remove(&key);
+            if let Some(group) = loader.groups.remove(&key) {
                 commands.entity(group).despawn();
             }
         }
     }
 }
 
-fn chunk_world_pos(chunk: ChunkCoordinate) -> Vec3 {
-    Vec3::new(
-        (chunk.0.x * 16) as f32,
-        (chunk.0.y * 16) as f32,
-        (chunk.0.z * 16) as f32,
-    )
-}
-
-fn chunk_world_centre(chunk: ChunkCoordinate) -> Vec3 {
-    chunk_world_pos(chunk) + Vec3::splat(8.0)
-}
-
-// Euclidean, not Chebyshev - render distance is a sphere, not a cube, so "distance"
-// means the same thing everywhere it's used (offset building/sorting/rewinding, the
-// mesh/unload cutoffs below, and viewport-bias spawn ordering).
+// Euclidean: render distance is a sphere.
 fn chunk_distance(chunk: ChunkCoordinate, other: ChunkCoordinate) -> f32 {
     (chunk.0 - other.0).as_vec3().length()
 }
@@ -422,41 +323,27 @@ fn offset_distance(offset: I64Vec3) -> f32 {
     offset.as_vec3().length()
 }
 
-// pure data: depends only on render_distance (which never changes at runtime), so
-// it's computed exactly once at ChunkLoader::new time. Filters the bounding cube down
-// to a sphere (Euclidean distance <= render_distance), then sorts nearest-first.
+// Every offset within `render_distance`, nearest first.
 fn build_offsets(render_distance: u32) -> Vec<I64Vec3> {
     let r = render_distance as i64;
-    let r_f = render_distance as f32;
-    let mut offsets = Vec::new();
-    for x in -r..=r {
-        for y in -r..=r {
-            for z in -r..=r {
-                let o = I64Vec3::new(x, y, z);
-                if offset_distance(o) <= r_f {
-                    offsets.push(o);
-                }
-            }
-        }
-    }
-
+    let mut offsets: Vec<I64Vec3> = (-r..=r)
+        .flat_map(|x| (-r..=r).flat_map(move |y| (-r..=r).map(move |z| I64Vec3::new(x, y, z))))
+        .filter(|&o| offset_distance(o) <= render_distance as f32)
+        .collect();
     offsets.sort_by(|a, b| offset_distance(*a).total_cmp(&offset_distance(*b)));
     offsets
 }
 
-/// Decides which chunks to load next via a precomputed, distance-sorted offset table
-/// plus a scan cursor - no priority queue, no seen/boundary sets. "Already loaded" is
-/// answered fresh from `chunk_to_entity` every call, so there is no separate tracking
-/// state that can drift out of sync with it, and no permanently-stuck state is possible:
-/// any time the camera moves to a new chunk, the cursor rewinds just far enough to
-/// re-cover the chunks that might newly be in range (see `rewind_for_shift`), so
-/// newly-exposed volume is always found without re-scanning everything already done.
+/// Which chunks to load next: a distance-sorted table of offsets from the camera's chunk, scanned
+/// with a cursor that rewinds just far enough to cover chunks newly in range when the camera
+/// moves, see `rewind_for_shift`. What's loaded is asked of `chunk_to_entity` every time, so
+/// nothing is tracked twice.
 #[derive(Debug)]
 struct ChunkSpawnQueue {
     offsets: Vec<I64Vec3>,
     anchor: ChunkCoordinate,
     cursor: usize,
-    // the chunk layers loaded, as above and below the world isn't generated, see `World::beyond_world`
+    // the chunk layers loaded, as above and below the world isn't generated, see `World::chunk`
     layers: std::ops::Range<i64>,
 }
 
@@ -474,26 +361,19 @@ impl ChunkSpawnQueue {
         Self { layers, ..self }
     }
 
-    // by the triangle inequality (holds for Euclidean distance same as Chebyshev), a
-    // chunk confirmed (loaded or not) up to distance D from the old anchor is
-    // guaranteed already confirmed for the new anchor too, as long as its distance
-    // from the new anchor is <= D - shift (shift = distance the anchor moved). So only
-    // the outermost `shift`-wide band of what was already scanned needs re-checking -
-    // not the whole list. A teleport (shift > everything scanned so far) naturally
-    // rewinds all the way to 0.
+    // Chunks scanned out to D from the old anchor are scanned out to D - shift from the new one,
+    // so only the outermost `shift` of what was scanned needs scanning again.
     fn rewind_for_shift(&mut self, shift: f32) {
-        let processed_distance = if self.cursor == 0 {
-            0.0
-        } else {
-            offset_distance(self.offsets[self.cursor - 1])
-        };
-        let target_distance = (processed_distance - shift).max(0.0);
+        let scanned = self
+            .cursor
+            .checked_sub(1)
+            .map_or(0.0, |last| offset_distance(self.offsets[last]));
+        let target = (scanned - shift).max(0.0);
         self.cursor = self
             .offsets
-            .partition_point(|o| offset_distance(*o) < target_distance);
+            .partition_point(|o| offset_distance(*o) < target);
     }
 
-    // pure function of its inputs (no ECS/World access), directly unit-testable.
     fn next_batch(
         &mut self,
         camera_chunk: ChunkCoordinate,
@@ -502,67 +382,47 @@ impl ChunkSpawnQueue {
         max_scanned: usize,
     ) -> Vec<ChunkCoordinate> {
         if camera_chunk != self.anchor {
-            let shift = chunk_distance(camera_chunk, self.anchor);
-            self.rewind_for_shift(shift);
+            self.rewind_for_shift(chunk_distance(camera_chunk, self.anchor));
             self.anchor = camera_chunk;
         }
-
         let mut candidates = Vec::with_capacity(max_candidates);
-        let mut scanned = 0;
-        while self.cursor < self.offsets.len()
-            && candidates.len() < max_candidates
-            && scanned < max_scanned
-        {
+        let end = (self.cursor + max_scanned).min(self.offsets.len());
+        while self.cursor < end && candidates.len() < max_candidates {
             let coord = ChunkCoordinate(self.anchor.0 + self.offsets[self.cursor]);
             self.cursor += 1;
-            scanned += 1;
-
             if self.layers.contains(&coord.0.y) && !loaded.contains_key(&coord) {
                 candidates.push(coord);
             }
         }
-
         candidates
     }
 
-    // True once every offset in range of the current anchor has been scanned at least
-    // once. A `next_batch` call can legitimately return no candidates (a scan window
-    // landing entirely on already-loaded chunks) without this being true yet - callers
-    // that want to keep going until there's truly nothing left should check this, not
-    // an empty result, before stopping.
+    // Whether every offset has been scanned, which an empty batch alone doesn't say.
     fn is_exhausted(&self) -> bool {
         self.cursor >= self.offsets.len()
     }
 }
 
-// distance is the primary key (closer chunks must always spawn first - never let
-// viewport bias schedule a farther chunk ahead of a closer one); viewport bias only
-// breaks ties among chunks at the same/similar distance. Recomputed fresh from the
-// live camera_forward every call - nothing is cached or carried between frames, so
-// there is no staleness to go wrong as the camera turns.
+// Nearest first, and among chunks as near, those the camera faces first.
 fn sort_by_viewport_bias(
     candidates: &mut [ChunkCoordinate],
     camera_chunk: ChunkCoordinate,
     camera_forward: Dir3,
 ) {
-    let camera_pos = chunk_world_centre(camera_chunk);
-    candidates.sort_by(|a, b| {
-        let dist_a = chunk_distance(*a, camera_chunk);
-        let dist_b = chunk_distance(*b, camera_chunk);
-        dist_a.total_cmp(&dist_b).then_with(|| {
-            let score_a = viewport_score(*a, camera_pos, camera_forward);
-            let score_b = viewport_score(*b, camera_pos, camera_forward);
-            score_b.total_cmp(&score_a)
-        })
+    let camera_pos = camera_chunk.centre();
+    let facing = |chunk: ChunkCoordinate| {
+        let to_chunk = chunk.centre() - camera_pos;
+        if to_chunk == Vec3::ZERO {
+            1.0
+        } else {
+            camera_forward.dot(to_chunk.normalize())
+        }
+    };
+    candidates.sort_by(|&a, &b| {
+        chunk_distance(a, camera_chunk)
+            .total_cmp(&chunk_distance(b, camera_chunk))
+            .then_with(|| facing(b).total_cmp(&facing(a)))
     });
-}
-
-fn viewport_score(chunk: ChunkCoordinate, camera_pos: Vec3, camera_forward: Dir3) -> f32 {
-    let to_chunk = chunk_world_centre(chunk) - camera_pos;
-    if to_chunk == Vec3::ZERO {
-        return 1.0; // camera's own chunk; also avoids normalize()-of-zero NaN
-    }
-    camera_forward.dot(to_chunk.normalize())
 }
 
 #[cfg(test)]
@@ -573,9 +433,8 @@ mod tests {
     };
 
     use super::{
-        build_offsets, chunk_distance, offset_distance, scale_budget, shell_area_scale,
-        sort_by_viewport_bias, ChunkCoordinate, ChunkSpawnQueue, HashMap, LodLayout,
-        BASELINE_RENDER_DISTANCE,
+        build_offsets, chunk_distance, max_in_flight, offset_distance, sort_by_viewport_bias,
+        ChunkCoordinate, ChunkSpawnQueue, HashMap, LodLayout,
     };
 
     #[test]
@@ -606,20 +465,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_offsets_starts_at_origin() {
-        let offsets = build_offsets(2);
-        assert_eq!(I64Vec3::ZERO, offsets[0]);
-    }
-
-    #[test]
-    fn test_build_offsets_sorted_ascending_by_distance() {
+    fn test_build_offsets_sorted_nearest_first() {
         let offsets = build_offsets(3);
-        let mut last = 0.0;
-        for o in &offsets {
-            let d = offset_distance(*o);
-            assert!(d >= last);
-            last = d;
-        }
+        assert_eq!(I64Vec3::ZERO, offsets[0]);
+        assert!(offsets
+            .windows(2)
+            .all(|w| offset_distance(w[0]) <= offset_distance(w[1])));
     }
 
     #[test]
@@ -778,30 +629,9 @@ mod tests {
     }
 
     #[test]
-    fn test_shell_area_scale_is_one_at_baseline() {
-        assert_eq!(1.0, shell_area_scale(BASELINE_RENDER_DISTANCE));
-    }
-
-    #[test]
-    fn test_shell_area_scale_grows_quadratically_with_render_distance() {
-        // doubling render distance should roughly quadruple the shell area scale (not
-        // exactly 4x: the fixed neighbour-data padding added to both radii means the
-        // ratio of *effective* radii is slightly less than 2 at these magnitudes)
-        let scale_at_baseline = shell_area_scale(BASELINE_RENDER_DISTANCE);
-        let scale_at_double = shell_area_scale(BASELINE_RENDER_DISTANCE * 2);
-        let ratio = scale_at_double / scale_at_baseline;
+    fn test_in_flight_cap_scales_with_shell_area() {
+        assert_eq!(512, max_in_flight(32));
+        let ratio = max_in_flight(64) as f64 / max_in_flight(32) as f64;
         assert!((3.0..4.0).contains(&ratio), "expected ~4x, got {ratio}x");
-    }
-
-    #[test]
-    fn test_scale_budget_matches_baseline_at_baseline_distance() {
-        assert_eq!(100, scale_budget(100, BASELINE_RENDER_DISTANCE));
-    }
-
-    #[test]
-    fn test_scale_budget_increases_for_larger_render_distance() {
-        let baseline = scale_budget(100, BASELINE_RENDER_DISTANCE);
-        let larger = scale_budget(100, BASELINE_RENDER_DISTANCE * 2);
-        assert!(larger > baseline);
     }
 }

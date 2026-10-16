@@ -7,12 +7,10 @@ use super::biome::BiomeId;
 use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
 use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
+use super::trees::TreeGround;
 use crate::chunks::lod::LodKey;
 
-// 64 resident regions x ~256KB/region (256x256 f32 heights) =~ 16MB
-// worst case - generous headroom over the chunk-load front's working set at render
-// distance 64 (1024 blocks =~ 4x4 regions visible at once) without being a memory
-// concern. Retuned once real access patterns are observed.
+// The fewest regions kept, about 400KB each.
 const RESIDENT_REGION_CAP: usize = 64;
 
 pub fn resident_cap_for(radius_blocks: i64) -> usize {
@@ -20,15 +18,10 @@ pub fn resident_cap_for(radius_blocks: i64) -> usize {
     (across * across).max(RESIDENT_REGION_CAP)
 }
 
-// Coalescing slot: many concurrent chunk-gen tasks may be the first to ask for the
-// same not-yet-computed region. Exactly one of them runs `compute_region`; the rest
-// await the same `OnceLock`, rather than each sampling the same noise again.
+// Many tasks can ask for a region at once: one computes it, the rest wait on the same lock.
 type RegionSlot = Arc<OnceLock<Arc<Region>>>;
 
-// True LRU (eviction by *access* recency, not insertion order) - evicting a region
-// means the next chunk near it pays to sample it again, so recency matters. `cap` is small (64) so an O(n) scan to
-// find the least-recently-used entry on eviction is cheap; a real LRU data
-// structure would be overkill at this size.
+// Evicts the least recently used region, found by a scan, which is cheap at a few hundred.
 struct RegionLru {
     cap: usize,
     tick: u64,
@@ -70,10 +63,7 @@ impl RegionLru {
 
 pub struct RegionStore {
     noise: Arc<NoiseGenerator>,
-    // Guards *which slots exist*, not each slot's contents - the OnceLock inside a
-    // slot handles "many readers, exactly one writer" for that region's actual
-    // compute, so this lock is only ever held briefly (get-or-insert + LRU touch),
-    // never across the region's noise sampling itself.
+    // which slots exist, held only briefly: never while a region is computed
     lru: RwLock<RegionLru>,
     columns: ColumnCache,
 }
@@ -116,10 +106,7 @@ impl RegionStore {
         }
     }
 
-    // Blocks the calling thread until this region is ready (computing it, or
-    // waiting on another in-flight compute for the same coordinate) - safe to call
-    // only from inside an async-task-pool task, never a Bevy system body on the main
-    // thread, exactly like `generate_chunk` itself.
+    // Blocks until the region is computed, here or by another thread, so only call from a task.
     pub fn get_region(&self, coord: RegionCoord) -> Arc<Region> {
         let slot = self.lru.write().unwrap().get_or_insert(coord);
         slot.get_or_init(|| Arc::new(compute_region(&self.noise, coord)))
@@ -198,13 +185,7 @@ impl HeightSampler<'_> {
     // blocks. Measured over SLOPE_SPAN blocks either side, so block-sized bumps don't
     // flip the surface between snow, stone and grass column by column.
     pub fn gradient(&mut self, world_x: i64, world_z: i64) -> (f64, f64) {
-        let span = SLOPE_SPAN;
-        let scale = 1.0 / span as f64;
-        let gradient_x =
-            self.height(world_x + span, world_z) - self.height(world_x - span, world_z);
-        let gradient_z =
-            self.height(world_x, world_z + span) - self.height(world_x, world_z - span);
-        (gradient_x * scale, gradient_z * scale)
+        TreeGround::gradient(self, world_x, world_z)
     }
 
     fn region(&mut self, coord: RegionCoord) -> &Region {
@@ -285,9 +266,6 @@ mod tests {
 
     #[test]
     fn test_concurrent_get_region_computes_once() {
-        // Exercises real `compute_region` work, not a mock - the property under
-        // test (every caller observes the same computed Region under contention)
-        // only means anything against the real coalescing path.
         let store = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(1))));
         let coord = RegionCoord(I64Vec2::new(5, 5));
         let thread_count = 8;
