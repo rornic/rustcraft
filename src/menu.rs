@@ -130,12 +130,20 @@ fn toggle_menu(
 
 // Like Minecraft, clicking away from the window pauses it, rather than leaving the player
 // running about with no cursor. Not in the stats runs, which run unfocused.
+//
+// Only the latest event counts, and only once the window has had focus: opening, it reports
+// losing focus and gaining it in the same frame, which isn't clicking away.
 fn pause_when_unfocused(
     mut focus: MessageReader<WindowFocused>,
     state: Res<State<GameState>>,
     mut next: ResMut<NextState<GameState>>,
+    mut was_focused: Local<bool>,
 ) {
-    let lost = focus.read().any(|event| !event.focused);
+    let Some(focused) = focus.read().last().map(|event| event.focused) else {
+        return;
+    };
+    let lost = *was_focused && !focused;
+    *was_focused = focused;
     if lost && *state.get() == GameState::Playing && std::env::var("RC_STATS").is_err() {
         next.set(GameState::Paused);
     }
