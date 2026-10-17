@@ -49,6 +49,11 @@ impl BlockType {
         }
     }
 
+    // Whether the player is kept out of it.
+    pub fn is_solid(&self) -> bool {
+        !matches!(self, BlockType::Air | BlockType::Water)
+    }
+
     // Whether the faces of blocks behind this one are hidden by it. Leaves have holes.
     pub fn is_opaque(&self) -> bool {
         self.light_opacity() == crate::chunks::generate::light::MAX_LIGHT

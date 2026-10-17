@@ -23,7 +23,7 @@ use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
 use rustcraft::player::{
-    murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player,
+    murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player, EYE_HEIGHT,
 };
 use rustcraft::sky::{
     atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, TimeOfDay,
@@ -64,7 +64,7 @@ fn setup_scene(
 
     let player = commands
         .spawn((
-            Player,
+            Player::default(),
             Transform::from_translation(spawn).looking_to(look_direction(), Vec3::Y),
         ))
         .id();
@@ -72,7 +72,7 @@ fn setup_scene(
     let fog_distance = render_distance as f32 * 16.0;
     let camera = commands
         .spawn((
-            Transform::from_xyz(0.0, 2.0, 0.0),
+            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
             Camera3d { ..default() },
             atmosphere_camera(),
             Projection::Perspective(PerspectiveProjection {
