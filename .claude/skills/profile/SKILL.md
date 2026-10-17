@@ -21,11 +21,11 @@ cargo run --release --example bench              # every stage
 cargo run --release --example bench -- 7 lod     # seed 7, LOD meshing only
 ```
 
-`examples/bench` builds terrain round spawn on one thread and prints regions, chunk generation, chunk meshing (best of 3, with the vertex count) and LOD meshing per level (best of 3 after a warming pass). Vertex counts are the cheap check that a change left the output alone. They must match exactly before and after.
+`examples/bench` builds terrain round spawn on one thread and prints regions, chunk generation, chunk meshing (best of 3, with the vertex count) and LOD meshing per level (best of 3 after a warming pass). Vertex counts must match exactly before and after, the cheap check that output is unchanged.
 
 ## Find the hotspot
 
-Build with line tables for this crate only, which recompiles just rustcraft:
+Add line tables to rustcraft alone, so nothing else recompiles.
 
 ```
 cargo build --release --example bench --config 'profile.release.package.rustcraft.debug="line-tables-only"'
@@ -35,31 +35,31 @@ $P report -i /tmp/perf.data --no-children --sort symbol | head -40
 ```
 
 - Hottest lines in one function: `$P annotate -i /tmp/perf.data --stdio -l <mangled symbol> | grep -E '^\s+[0-9.]+ +[a-z_]+\.rs:' | sort -rn | head`. Only rustcraft's own functions have line tables, so a dependency's (`noise`'s Perlin) prints nothing.
-- Who calls the hot code: record with `--call-graph dwarf,16384`, dump with `$P script -i /tmp/perf.data --no-demangle > /tmp/perf.txt`, then `python3 .claude/skills/profile/attribute.py /tmp/perf.txt <frames>` with frame names of interest, e.g. `tree_in_cell crown_boxes SkyLight mesh_opaque_greedy perlin`. Paths come out muddled where inlining merges functions.
+- To see who calls the hot code, record with `--call-graph dwarf,16384`, dump with `$P script -i /tmp/perf.data --no-demangle > /tmp/perf.txt`, then `python3 .claude/skills/profile/attribute.py /tmp/perf.txt <frames>` naming the frames to follow, such as `tree_in_cell crown_boxes SkyLight mesh_opaque_greedy perlin`. Paths come out muddled where inlining merges functions.
 - When neither is clear, add temporary `Instant` timers round the phases (a static `[AtomicU64; N]` the bench prints), and remove them before committing.
 
 ## A/B a change
 
-Build the bench before the change, copy `target/release/examples/bench` to `/tmp/ab/old`, apply the change, build and copy to `/tmp/ab/new`, then alternate:
+Build the bench and copy `target/release/examples/bench` to `/tmp/ab/old`. Apply the change, build and copy to `/tmp/ab/new`, then alternate them.
 
 ```
 for i in 1 2 3 4; do for b in old new; do echo -n "$b "; /tmp/ab/$b | grep -E 'mesh chunks|lod total'; done; done
 ```
 
-Keep a change only if it wins in every pair. Revert one that's within noise, as it's code with nothing to show for it. To compare against an older commit, add a worktree there, copy `examples/bench.rs` in if it predates it, and build into its own target directory.
+Keep a change only if it wins in every pair. Revert one within noise, as it's code that buys nothing. To compare against an older commit, add a worktree there, copy `examples/bench.rs` in if it predates it, and build into its own target directory.
 
 ## Main thread and loading
 
-`examples/lod_sim` runs the loading systems headless and logs frames over 100ms, plus holes and LOD node counts every 2 seconds. Fix the seed to compare two builds, and write to a file, as a killed pipe loses its output:
+`examples/lod_sim` runs the loading systems headless and logs frames over 100ms, plus holes and LOD node counts every 2 seconds. Fix the seed to compare two builds, and write to a file, as a killed pipe loses its output.
 
 ```
 RC_SEED=7 timeout -s INT 30 ./target/release/examples/lod_sim 80 10 > /tmp/sim.txt 2>&1
 ```
 
-Node counts at the same timestamps show loading speed. Holes on a fixed seed must match between builds. Some persistent full-detail holes are pre-existing.
+The arguments are flying speed in blocks a second and seconds spent flying. A full run lasts about 90 seconds (20 to load, the flight, then 60 stopped), so the 30-second timeout keeps just the load and the start of the flight. Node counts at the same timestamps show loading speed. Holes on a fixed seed must match between builds. Some persistent full-detail holes are pre-existing.
 
 ## Where time went last time
 
 - Reading blocks through `ChunkData::get_block_at` scans the chunk's runs, so hot loops must read a dense grid (`ChunkNeighbourhood`, `LodBlocks`, `GridView`).
 - Distant trees cost one full noise sample per candidate (`NoiseGenerator::sample` runs every fractal). Rule candidates out cheaply first, as `TreeGround::rules_out` does.
-- Region building (65,536 noise samples each) and Perlin noise itself are the largest costs left. Changing the noise changes the terrain.
+- Region building (65,536 noise samples each) and Perlin noise are the largest costs left. Changing the noise changes the terrain.
