@@ -12,6 +12,7 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
+use rustcraft::commands::{command_bar_closed, CommandPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
@@ -196,6 +197,7 @@ fn main() {
             SunGlarePlugin,
             NightSkyPlugin,
             DebugOverlayPlugin,
+            CommandPlugin,
         ))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
@@ -208,8 +210,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                player_move,
-                player_look,
+                (player_move, player_look).run_if(command_bar_closed),
                 update_horizon,
                 update_underwater_effects,
             )

@@ -8,6 +8,15 @@ cargo run --release
 
 ![Image of rustcraft](images/readme.jpg)
 
+## Commands
+
+Press T, or / to start with the slash typed, to open the command bar. Enter runs the command and Escape closes it.
+
+- `/tp <x> <y> <z>` teleports there. `~` means where you are, and `~10` means ten blocks on from it.
+- `/tp <x> <z>` teleports to just above the ground there.
+- `/seed` prints the world's seed. Run with `RC_SEED=<seed>` to get the same world again.
+- `/help` lists the commands.
+
 ## Planned work
 
 - Chunk LODs for vastly improved render distance.

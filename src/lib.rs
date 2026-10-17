@@ -1,6 +1,7 @@
 pub mod block;
 pub mod chunks;
 pub mod clouds;
+pub mod commands;
 pub mod curvature;
 pub mod debug;
 pub mod horizon;
