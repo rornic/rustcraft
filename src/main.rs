@@ -15,6 +15,7 @@ use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
+use rustcraft::menu::{GameState, MenuPlugin};
 use rustcraft::player::{
     murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player,
 };
@@ -196,6 +197,7 @@ fn main() {
             SunGlarePlugin,
             NightSkyPlugin,
             DebugOverlayPlugin,
+            MenuPlugin,
         ))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
@@ -208,8 +210,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                player_move,
-                player_look,
+                (player_move, player_look).run_if(in_state(GameState::Playing)),
                 update_horizon,
                 update_underwater_effects,
             )
