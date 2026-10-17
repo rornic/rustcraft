@@ -8,11 +8,17 @@ cargo run --release
 
 ![Image of rustcraft](images/readme.jpg)
 
+## Controls
+
+- WASD to move, Shift to sprint, mouse to look.
+- Space to jump, or to swim up in water.
+- You start flying: Space and Ctrl move up and down, and you pass through blocks. F switches to walking and back.
+- `[` and `]` move the sun, and F1 shows the debug overlay.
+
 ## Planned work
 
-- Chunk LODs for vastly improved render distance.
-- Better terrain generation and features.
-- Player controller.
+- Breaking and placing blocks.
+- Saving the world.
 
 ## License
 
