@@ -1,6 +1,6 @@
 use super::key::LodKey;
 use super::loader::{lod_aabb, GenerateLodMesh, LodLoader, LodNode};
-use super::state::{node_ready, ChunkState, ChunkStates, LodState};
+use super::state::{lod_state, ChunkState, ChunkStates, LodState};
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk_loader::ChunkLoader;
 use crate::chunks::fade::fade_out_and_despawn;
@@ -105,26 +105,21 @@ pub fn retire_lods(
         return;
     };
 
-    let mut retired = Vec::new();
-    {
-        let nodes = &lods.nodes;
-        let node_exists = |key: LodKey| nodes.contains_key(&key);
-        let node_ready = |key: LodKey| node_ready(nodes, &pending_lods, key);
-        let state = LodState {
+    let retired: Vec<LodKey> = {
+        lod_state!(
+            state,
+            lods,
             anchor,
-            layout: lods.layout,
-            band: lods.band,
-            selected: &lods.selected,
-            node_exists: &node_exists,
-            node_ready: &node_ready,
-            chunk_state: &|chunk| chunks.get(chunk),
-        };
-        for &key in &lods.retiring {
-            if !lods.selected.contains(&key) && state.can_retire(key) {
-                retired.push(key);
-            }
-        }
-    }
+            &lods.selected,
+            &pending_lods,
+            |chunk| chunks.get(chunk)
+        );
+        lods.retiring
+            .iter()
+            .copied()
+            .filter(|key| !lods.selected.contains(key) && state.can_retire(*key))
+            .collect()
+    };
 
     if retired.is_empty() {
         return;
@@ -164,26 +159,17 @@ pub fn refresh_lod_visibility(
 
     let now = time.elapsed_secs();
     let lods = &mut *lods;
-    let nodes = &lods.nodes;
-    let node_exists = |key: LodKey| nodes.contains_key(&key);
-    let node_ready = |key: LodKey| node_ready(nodes, &pending_lods, key);
-    let state = LodState {
-        anchor,
-        layout: lods.layout,
-        band: lods.band,
-        selected: &lods.selected,
-        node_exists: &node_exists,
-        node_ready: &node_ready,
-        // the visibility rules don't look at chunks' loading state
-        chunk_state: &|_| ChunkState::Missing,
-    };
+    // the visibility rules don't look at chunks' loading state
+    lod_state!(state, lods, anchor, &lods.selected, &pending_lods, |_| {
+        ChunkState::Missing
+    });
     let mut set = |entity: Entity, visible: bool| {
         if let Ok((mut v, fade)) = visibility.get_mut(entity) {
             set_shown(&mut commands, entity, &mut v, fade, visible, now);
         }
     };
     // a node fades in once its mesh is ready, not when it's first spawned
-    let node_shown = |key: LodKey| state.node_visible(key) && node_ready(key);
+    let node_shown = |key: LodKey| state.node_visible(key) && (state.node_ready)(key);
 
     if lods.refresh_all {
         for (entity, group) in all_groups.iter() {

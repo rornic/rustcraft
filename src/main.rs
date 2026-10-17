@@ -15,15 +15,14 @@ use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
-use rustcraft::night_sky::NightSkyPlugin;
 use rustcraft::player::{
-    murk, player_look, player_move, update_underwater_effects, MurkMaterial, PlayerBundle,
+    murk, player_look, player_move, update_underwater_effects, MurkMaterial, Player,
 };
 use rustcraft::sky::{
     atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, TimeOfDay,
     FOG_MAX_OPACITY, START_TIME,
 };
-use rustcraft::sun_glare::SunGlarePlugin;
+use rustcraft::sky_dome::{NightSkyPlugin, SunGlarePlugin};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
 
 #[allow(clippy::too_many_arguments)]
@@ -55,11 +54,10 @@ fn setup_scene(
     info!("spawned at {:?}, {:?}, {:?}", spawn.x, spawn.y, spawn.z);
 
     let player = commands
-        .spawn(PlayerBundle {
-            transform: Transform::from_xyz(spawn.x, spawn.y, spawn.z)
-                .looking_to(Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0)),
-            ..default()
-        })
+        .spawn((
+            Player,
+            Transform::from_translation(spawn).looking_to(Vec3::Z, Vec3::Y),
+        ))
         .id();
 
     let fog_distance = render_distance as f32 * 16.0;

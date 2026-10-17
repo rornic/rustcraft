@@ -1,7 +1,7 @@
 use super::key::LodKey;
 use super::loader::{lod_transform, GenerateLodMesh, LodLoader, LodNode};
 use super::selection::{spawn_order, LOD_RESORT_INTERVAL};
-use super::state::{node_ready, ChunkStates, LodState};
+use super::state::{lod_state, ChunkStates, LodState};
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::columns::COARSE_CELL;
 use crate::chunks::generate::generator::generate_lod_mesh;
@@ -40,22 +40,13 @@ pub fn spawn_lods(
     *since_resort += time.delta_secs();
     if *since_resort >= LOD_RESORT_INTERVAL {
         *since_resort = 0.0;
+        let lods = &mut *lods;
         if let Some(anchor) = lods.anchor {
             let remaining = std::mem::take(&mut lods.to_spawn);
-            let nodes = &lods.nodes;
-            let node_exists = |key: LodKey| nodes.contains_key(&key);
-            let node_ready = |key: LodKey| node_ready(nodes, &pending, key);
-            let state = LodState {
-                anchor,
-                layout: lods.layout,
-                band: lods.band,
-                selected: &lods.selected,
-                node_exists: &node_exists,
-                node_ready: &node_ready,
-                chunk_state: &|chunk| chunks.get(chunk),
-            };
-            let resorted = spawn_order(&state, remaining.into_iter());
-            lods.to_spawn = resorted;
+            lod_state!(state, lods, anchor, &lods.selected, &pending, |chunk| {
+                chunks.get(chunk)
+            });
+            lods.to_spawn = spawn_order(&state, remaining.into_iter());
         }
     }
 

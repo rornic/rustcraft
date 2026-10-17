@@ -64,6 +64,13 @@ pub trait Biome: Send + Sync {
         None
     }
 
+    // The most this biome can raise a column's tree density in this climate, over the base
+    // terrain's, before strength: all of its density, unless it knows its strength from the climate.
+    fn tree_gain(&self, _climate: Climate) -> f64 {
+        self.tree_density()
+            .map_or(0.0, |density| (density - BASE_TREE_DENSITY).max(0.0))
+    }
+
     // The block to use where the base terrain would put `base`, `above_sea` blocks up, on
     // ground with the given gradient (see `terrain_block`).
     fn block(&self, base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
@@ -80,7 +87,7 @@ impl BiomeId {
 }
 
 // The base terrain's scattering of lone trees, see `Biome::tree_density`.
-const BASE_TREE_DENSITY: f64 = 0.02;
+pub(super) const BASE_TREE_DENSITY: f64 = 0.02;
 
 // Every biome that can take over from the base terrain.
 pub struct Biomes {
@@ -124,6 +131,12 @@ impl Biomes {
         (height, owner, trees.clamp(0.0, 1.0))
     }
 
+    /// The most tree density a column in this climate can have, without sampling its terrain.
+    pub fn tree_bound(&self, climate: Climate) -> f64 {
+        let gain: f64 = self.biomes.iter().map(|b| b.tree_gain(climate)).sum();
+        (BASE_TREE_DENSITY + gain).min(1.0)
+    }
+
     // The biome's name, or None for the base terrain.
     pub fn name(&self, biome: BiomeId) -> Option<&'static str> {
         biome
@@ -148,7 +161,8 @@ impl Biomes {
 }
 
 // 0 at `edge0`, rising smoothly to 1 at `edge1`; `edge1` may be below `edge0` to fall instead.
-fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
+#[inline]
+pub(super) fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }

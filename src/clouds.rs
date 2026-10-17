@@ -135,24 +135,30 @@ struct CloudTile {
 #[derive(Resource)]
 struct CloudMeshes(Vec<Handle<Mesh>>);
 
-/// Which cells of the pattern are cloud, `PATTERN` x `PATTERN`, row-major [x][z]. Sampled
-/// round a torus in 4D noise, so it wraps at its edges without a seam.
+// Where pattern cell `i` lies round a torus in 4D, for noise with features about `cells` across
+// that wraps at the pattern's edges without a seam.
+fn torus(i: usize, cells: f64) -> [f64; 4] {
+    let radius = PATTERN as f64 / (TAU * cells);
+    let angle = |c: usize| TAU * c as f64 / PATTERN as f64;
+    let (x, z) = (angle(i / PATTERN), angle(i % PATTERN));
+    [x.cos(), x.sin(), z.cos(), z.sin()].map(|v| v * radius)
+}
+
+// The four cells edge to edge with pattern cell `i`, round the wrap.
+fn neighbours(i: usize) -> [usize; 4] {
+    let n = PATTERN;
+    let (x, z) = (i / n, i % n);
+    [(1, 0), (n - 1, 0), (0, 1), (0, n - 1)].map(|(dx, dz)| ((x + dx) % n) * n + (z + dz) % n)
+}
+
+/// Which cells of the pattern are cloud, `PATTERN` x `PATTERN`, row-major [x][z].
 fn cloud_pattern(seed: u32) -> Vec<bool> {
     let noise = Fbm::<Perlin>::new(seed)
         .set_octaves(2)
         .set_persistence(0.35);
-    let radius = PATTERN as f64 / (TAU * CLOUD_CELLS);
-    let around = |cell: usize| {
-        let angle = TAU * cell as f64 / PATTERN as f64;
-        (angle.cos() * radius, angle.sin() * radius)
-    };
-    let mut values = Vec::with_capacity(PATTERN * PATTERN);
-    for x in 0..PATTERN {
-        for z in 0..PATTERN {
-            let ((a, b), (c, d)) = (around(x), around(z));
-            values.push(noise.get([a, b, c, d]));
-        }
-    }
+    let values: Vec<f64> = (0..PATTERN * PATTERN)
+        .map(|i| noise.get(torus(i, CLOUD_CELLS)))
+        .collect();
     let mut sorted = values.clone();
     sorted.sort_by(f64::total_cmp);
     let threshold = sorted[((1.0 - COVER) * sorted.len() as f64) as usize];
@@ -174,15 +180,13 @@ fn drop_small_clouds(pattern: &mut [bool]) {
         seen[start] = true;
         let mut next = 0;
         while next < cloud.len() {
-            let (x, z) = (cloud[next] / n, cloud[next] % n);
-            next += 1;
-            for (dx, dz) in [(1, 0), (n - 1, 0), (0, 1), (0, n - 1)] {
-                let neighbour = ((x + dx) % n) * n + (z + dz) % n;
+            for neighbour in neighbours(cloud[next]) {
                 if pattern[neighbour] && !seen[neighbour] {
                     seen[neighbour] = true;
                     cloud.push(neighbour);
                 }
             }
+            next += 1;
         }
         if cloud.len() < MIN_CLOUD_CELLS {
             for cell in cloud {
@@ -222,30 +226,21 @@ fn cloud_columns(pattern: &[bool], seed: u32) -> Columns {
     let mut next = 0;
     while next < queue.len() {
         let cell = queue[next];
-        let (x, z) = (cell / n, cell % n);
         next += 1;
-        for (dx, dz) in [(1, 0), (n - 1, 0), (0, 1), (0, n - 1)] {
-            let neighbour = ((x + dx) % n) * n + (z + dz) % n;
+        for neighbour in neighbours(cell) {
             if pattern[neighbour] && inside[neighbour] == 0 {
                 inside[neighbour] = inside[cell] + 1;
                 queue.push(neighbour);
             }
         }
     }
-    // round a torus, like the pattern, so lumps wrap without a seam too
     let noise = Perlin::new(seed.wrapping_add(1));
-    let radius = PATTERN as f64 / (TAU * LUMP_CELLS);
-    let around = |cell: usize| {
-        let angle = TAU * cell as f64 / PATTERN as f64;
-        (angle.cos() * radius, angle.sin() * radius)
-    };
     let cells = (0..n * n)
         .map(|i| {
             if !pattern[i] {
                 return None;
             }
-            let ((a, b), (c, d)) = (around(i / n), around(i % n));
-            let lump = noise.get([a, b, c, d]);
+            let lump = noise.get(torus(i, LUMP_CELLS));
             let top = (inside[i] as f64 * LAYERS_PER_CELL + lump * LUMPS)
                 .round()
                 .clamp(1.0, MAX_LAYERS as f64) as u8;
@@ -575,33 +570,9 @@ mod tests {
     #[test]
     fn test_only_big_clouds_are_left() {
         let pattern = cloud_pattern(3);
-        let n = PATTERN;
-        // every cloud has at least the minimum, found by flood fill as `drop_small_clouds` does
-        let mut seen = vec![false; n * n];
-        for start in 0..n * n {
-            if !pattern[start] || seen[start] {
-                continue;
-            }
-            let mut cloud = vec![start];
-            seen[start] = true;
-            let mut next = 0;
-            while next < cloud.len() {
-                let (x, z) = (cloud[next] / n, cloud[next] % n);
-                next += 1;
-                for (dx, dz) in [(1, 0), (n - 1, 0), (0, 1), (0, n - 1)] {
-                    let neighbour = ((x + dx) % n) * n + (z + dz) % n;
-                    if pattern[neighbour] && !seen[neighbour] {
-                        seen[neighbour] = true;
-                        cloud.push(neighbour);
-                    }
-                }
-            }
-            assert!(
-                cloud.len() >= MIN_CLOUD_CELLS,
-                "a cloud of {} cells",
-                cloud.len()
-            );
-        }
+        let mut dropped = pattern.clone();
+        drop_small_clouds(&mut dropped);
+        assert_eq!(pattern, dropped);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use bevy::{
     },
     input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
     light::{NotShadowCaster, NotShadowReceiver},
-    math::{Dir3, I64Vec3, Vec3},
+    math::{Dir3, Vec3},
     mesh::{Mesh, Mesh3d, MeshVertexBufferLayoutRef},
     pbr::{
         DistanceFog, FogFalloff, Material, MaterialPipeline, MaterialPipelineKey, MeshMaterial3d,
@@ -32,107 +32,67 @@ use bevy::{
 
 use crate::{block::BlockType, tonemap::scene_colour, world::World};
 
-#[derive(Bundle, Default)]
-pub struct PlayerBundle {
-    pub marker: Player,
-    pub movement: PlayerMovement,
-    pub look: PlayerLook,
-    pub transform: Transform,
-}
-
 #[derive(Component, Default)]
-pub struct Player {}
+pub struct Player;
 
-// How much faster the camera moves while Shift is held.
+// Blocks a second, and how much faster while Shift is held.
+const MOVE_SPEED: f32 = 20.0;
 const SPRINT_MULTIPLIER: f32 = 4.0;
+const LOOK_SENSITIVITY: f32 = 0.1;
 
-#[derive(Component)]
-pub struct PlayerMovement {
-    move_speed: f32,
-}
-
-impl Default for PlayerMovement {
-    fn default() -> Self {
-        Self { move_speed: 20.0 }
-    }
-}
+type PlayerCamera<'a> = (&'a ChildOf, &'a mut Transform);
 
 #[allow(clippy::type_complexity)]
 pub fn player_move(
     time: Res<Time>,
-    mut player_query: Query<(&PlayerMovement, &mut Transform)>,
-    camera_query: Query<(&ChildOf, &Transform), (With<Camera>, Without<PlayerMovement>)>,
+    mut player_query: Query<&mut Transform, With<Player>>,
+    camera_query: Query<(&ChildOf, &Transform), (With<Camera>, Without<Player>)>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
-    let (parent, camera_transform) = camera_query.single().expect("camera does not exist");
-    let (player_movement, player_transform) = &mut player_query
+    let (parent, camera) = camera_query.single().expect("camera does not exist");
+    let mut player = player_query
         .get_mut(parent.parent())
         .expect("player does not exist");
-
-    let move_speed = if keys.pressed(KeyCode::ShiftLeft) {
-        player_movement.move_speed * SPRINT_MULTIPLIER
-    } else {
-        player_movement.move_speed
+    let speed = MOVE_SPEED
+        * time.delta_secs()
+        * if keys.pressed(KeyCode::ShiftLeft) {
+            SPRINT_MULTIPLIER
+        } else {
+            1.0
+        };
+    let axis = |negative, positive| {
+        if keys.pressed(negative) {
+            -speed
+        } else if keys.pressed(positive) {
+            speed
+        } else {
+            0.0
+        }
     };
-
-    let mut movement_vector = Vec3::ZERO;
-    if keys.pressed(KeyCode::KeyA) {
-        movement_vector.x = -move_speed;
-    } else if keys.pressed(KeyCode::KeyD) {
-        movement_vector.x = move_speed;
-    }
-
-    if keys.pressed(KeyCode::KeyW) {
-        movement_vector.z = -move_speed;
-    } else if keys.pressed(KeyCode::KeyS) {
-        movement_vector.z = move_speed;
-    }
-
-    let mut vertical_movement = Vec3::ZERO;
-    if keys.pressed(KeyCode::Space) {
-        vertical_movement.y = move_speed;
-    } else if keys.pressed(KeyCode::ControlLeft) {
-        vertical_movement.y = -move_speed;
-    }
-
-    let final_movement =
-        player_transform.rotation * camera_transform.rotation * movement_vector * time.delta_secs()
-            + (vertical_movement * time.delta_secs());
-    player_transform.translation += final_movement;
+    let across = Vec3::new(
+        axis(KeyCode::KeyA, KeyCode::KeyD),
+        0.0,
+        axis(KeyCode::KeyW, KeyCode::KeyS),
+    );
+    let up = -axis(KeyCode::Space, KeyCode::ControlLeft);
+    let step = player.rotation * camera.rotation * across + Vec3::Y * up;
+    player.translation += step;
 }
 
-#[derive(Component)]
-pub struct PlayerLook {
-    sensitivity: f32,
-}
-
-impl Default for PlayerLook {
-    fn default() -> Self {
-        Self { sensitivity: 0.1 }
-    }
-}
-
-#[allow(clippy::type_complexity)]
 pub fn player_look(
     time: Res<Time>,
-    mut player_query: Query<(&PlayerLook, &mut Transform)>,
-    mut camera_query: Query<(&ChildOf, &mut Transform), (With<Camera>, Without<PlayerLook>)>,
+    mut player_query: Query<&mut Transform, With<Player>>,
+    mut camera_query: Query<PlayerCamera, (With<Camera>, Without<Player>)>,
     mut motion_evr: MessageReader<MouseMotion>,
 ) {
-    let (parent, camera_transform) = &mut camera_query.single_mut().expect("camera does not exist");
-    let (player_look, player_transform) = &mut player_query
+    let (parent, mut camera) = camera_query.single_mut().expect("camera does not exist");
+    let mut player = player_query
         .get_mut(parent.parent())
         .expect("player does not exist");
-
+    let turn = LOOK_SENSITIVITY * time.delta_secs();
     for ev in motion_evr.read() {
-        player_transform.rotate_axis(
-            Dir3::Y,
-            -ev.delta.x * player_look.sensitivity * time.delta_secs(),
-        );
-        camera_transform.rotate_axis(
-            Dir3::X,
-            -ev.delta.y * player_look.sensitivity * time.delta_secs(),
-        );
+        player.rotate_axis(Dir3::Y, -ev.delta.x * turn);
+        camera.rotate_axis(Dir3::X, -ev.delta.y * turn);
     }
 }
 
@@ -215,7 +175,7 @@ pub fn murk(
 // that could drift out of sync with setup_scene's render-distance-derived fog settings.
 #[allow(clippy::type_complexity)]
 pub fn update_underwater_effects(
-    mut world: ResMut<World>,
+    world: Res<World>,
     murk: Res<Murk>,
     mut murk_materials: ResMut<Assets<MurkMaterial>>,
     mut clear_color: ResMut<ClearColor>,
@@ -238,14 +198,8 @@ pub fn update_underwater_effects(
         .get(parent.parent())
         .expect("player does not exist");
 
-    let world_pos = player_transform.translation + camera_transform.translation;
-    let block_coord = I64Vec3::new(
-        world_pos.x.floor() as i64,
-        world_pos.y.floor() as i64,
-        world_pos.z.floor() as i64,
-    );
-
-    if world.get_block_at(block_coord) == BlockType::Water {
+    let eye = player_transform.translation + camera_transform.translation;
+    if world.get_block_at(eye.floor().as_i64vec3()) == BlockType::Water {
         if dry_defaults.is_none() {
             *dry_defaults = Some(DryDefaults {
                 fog: fog.clone(),

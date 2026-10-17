@@ -7,8 +7,6 @@ description: Generate or regenerate rustcraft's 16px seamless block textures (st
 
 The atlas `assets/textures/blocks.png` is one 16px-tall strip. Tile order is `enum Tile` in `src/block.rs` and must match `TILES` in `generate.py`. `pack.py` asserts the length.
 
-`cargo run --example gen_atlas` overwrites the whole atlas with procedural art. Don't run it unless you want to discard the current tiles.
-
 ## One-time setup
 
 Target GPU is a 6GB RTX 2060, so SD1.5.
@@ -47,6 +45,6 @@ Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-rol
 ## Add a block texture
 
 1. Add the variant to `enum Tile` and bump `TILE_COUNT` in `src/block.rs`, and use it in `BlockType::tile`.
-2. Append a row to `TILES` in `generate.py` at the same index, and to `NAMES` in `examples/gen_atlas.rs`.
+2. Append a row to `TILES` in `generate.py` at the same index.
 3. In `block_texture.wesl`, bump `ATLAS_CELLS` and add a `vec3` row to `block_mean` (`pack.py` asserts one row per tile and fills the numbers in).
 4. Widen the atlas first (`pack.py` asserts 16px per row entry), e.g. paste a blank 16px onto the right edge, then generate and pack.

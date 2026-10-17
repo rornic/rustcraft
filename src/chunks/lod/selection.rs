@@ -1,7 +1,7 @@
 use super::key::LodKey;
 use super::loader::{GenerateLodMesh, LodLoader};
 use super::select::select_lods_and_stand_ins;
-use super::state::{node_ready, ChunkStates, LodState};
+use super::state::{lod_state, ChunkStates, LodState};
 use crate::chunks::chunk::ChunkCoordinate;
 use bevy::ecs::query::With;
 use bevy::ecs::system::Query;
@@ -117,18 +117,9 @@ pub(super) fn apply_selection(
         ..
     } = done;
     let first = lods.anchor.is_none();
+    lod_state!(state, lods, anchor, &selected, pending_lods, |chunk| chunks
+        .get(chunk));
     let nodes = &lods.nodes;
-    let node_exists = |key: LodKey| nodes.contains_key(&key);
-    let node_ready = |key: LodKey| node_ready(nodes, pending_lods, key);
-    let state = LodState {
-        anchor,
-        layout: lods.layout,
-        band: lods.band,
-        selected: &selected,
-        node_exists: &node_exists,
-        node_ready: &node_ready,
-        chunk_state: &|chunk| chunks.get(chunk),
-    };
 
     // The first selection, and one for a new layout, start from scratch and check everything.
     // After that only the keys that changed can need spawning or retiring, so nothing walks
