@@ -1,4 +1,5 @@
-//! Flapping wings for the butterflies: a flat wing, a winged body to spawn, and its beat.
+//! Flapping wings, shared by the butterflies and the birds: a flat wing, a winged body to
+//! spawn, and its beat.
 use std::f32::consts::TAU;
 
 use bevy::{
