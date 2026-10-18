@@ -6,7 +6,7 @@ import bevy_pbr::render::{
     shadows::fetch_directional_shadow,
     view_transformations::{position_world_to_clip, position_world_to_view},
 };
-import super::block_texture::{block_footprint, block_mean, block_sample, material_fade};
+import super::block_texture::{block_alpha, block_footprint, block_mean, block_sample, material_fade};
 import super::foliage::{is_flora, is_leaf, leaf_holes_filled, swayed};
 import super::fog::fogged;
 import super::lighting::{direct_moon, direct_sun, open_sky};
@@ -150,6 +150,10 @@ fn fragment(
             color = vec4<f32>(block_mean(in.color.a).rgb * FAR_HOLE_SHADE, 1.0);
         }
         color.a = 1.0;
+    } else if is_leaf(in.color.a) || is_flora(in.color.a) {
+        // cut where the depth prepass and shadows do, at full detail: a blurred alpha agrees
+        // with them only up close, and where it doesn't the holes flicker
+        color.a = block_alpha(in.uv, in.color.a);
     }
 }
     // `DebugSettings::solid_leaves`: leaves without their holes, as coarse LODs draw them
