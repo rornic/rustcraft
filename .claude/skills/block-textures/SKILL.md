@@ -16,6 +16,8 @@ Target GPU is a 6GB RTX 2060, so SD1.5.
 3. `git clone https://github.com/spinagon/ComfyUI-seamless-tiling ~/ComfyUI/custom_nodes/ComfyUI-seamless-tiling` (`SeamlessTile`, `CircularVAEDecode`).
 4. `pip install pillow requests numpy` (system python is fine).
 
+On Windows it runs natively (no WSL needed): the venv's python is `venv\Scripts\python.exe`, and torch wants the CUDA 13 wheels, `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130`, for 20-series cards and newer.
+
 ## Generate
 
 ```
@@ -36,6 +38,7 @@ Open `out/contact.png` (each tile repeated 3x3, 9x zoom) and check seams. Re-rol
 - `block_texture.json` is the txt2img graph. SD1.5 renders 512px with circular padding in both axes so the result tiles. `generate.py` saves the render as `out/raw_<Tile>.png` and `finish()` turns it into 16x16: Lanczos down, wrap-around blur (`smooth`, keeps seams), normalise mean colour and luminance contrast, then a 4-colour quantise (`COLORS`). Plain `area` averaging gives flat grey, so don't use it.
 - Normalisation targets come from `reference.png`, the hand-drawn 7-tile atlas from before the procedural generator (commit 1d2587c), not the live atlas, because `pack.py` overwrites that. Its alpha also supplies the leaf holes, since SD can't draw cut-outs. A tile past the reference's 7 can set `mean=(r, g, b)` in `TILES` (sandstone, log end, ice, dirt and gravel do) and `std`, or it keeps the colour SD produced with `DEFAULT_STD` contrast.
 - `GrassTop` and `Leaves` are greyscale and tinted per climate by the shader, which assumes mean brightness 187 and 135 (sRGB), so `grey=` fixes their mean.
+- Flora tiles (`derive="sprite"`, the atlas's last six) aren't AI-generated either: SD can't draw a lone plant on transparency at 16px. `flora.py` draws them pixel by pixel, greyscale grasses and fern levelled by `grey=` for the climate tint, flowers in colour. The shaders treat every tile from `Tile::FIRST_FLORA` on as a sprite, so new flora goes on the end.
 - Side tiles are not AI-generated, since SD can't draw a fringe. `derive()` builds them from the picked tiles, so after picking new sources rerun `generate.py GrassSide SnowSide SandstoneSide`. `GrassSide` is `overlay`: only a greyscale grass fringe on transparency (shifted GrassTop pixels, 2-4 rows deep), which `world.wesl` layers over the Dirt tile by its alpha, tinting just the grass, so changing Dirt changes grass sides too. `SnowSide` is `fringe`: a snow fringe baked over Dirt. `SandstoneSide` is `strata`: darker rows over SandstoneTop.
 - `pack.py` rewrites the `block_mean` table in `block_texture.wesl`, which `material.rs` tests against the atlas.
 - Don't add the Plixel Minecraft LoRA. It was trained on sprites, so it draws a sprite on a white or checkerboard background and ignores tiling. At 512px it only produces dither noise.

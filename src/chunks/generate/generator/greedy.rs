@@ -81,7 +81,8 @@ pub(super) fn face_span(
     block: BlockType,
     leaves_cover_leaves: bool,
 ) -> Option<Option<[f32; 2]>> {
-    if matches!(block, BlockType::Air | BlockType::Water) {
+    // flora draws as crossed quads of its own, see `mesh_flora`
+    if matches!(block, BlockType::Air | BlockType::Water) || block.is_flora() {
         return None;
     }
     let neighbour = coord + normal;

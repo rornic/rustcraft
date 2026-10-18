@@ -1,6 +1,7 @@
 mod buffers;
 mod canopy;
 mod chunk;
+mod flora;
 mod greedy;
 mod lod;
 mod mesh;

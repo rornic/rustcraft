@@ -12,6 +12,7 @@ use crate::block::Face;
 use crate::block::Tile;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
+use crate::chunks::generate::light::MAX_LIGHT;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
 use std::collections::HashMap;
@@ -58,16 +59,14 @@ pub(super) fn mesh_blocks(
         blocks[grid_index(size, coord)] = block;
     }
 
-    for (block_coord, block) in non_air {
+    for &(block_coord, block) in &non_air {
         if block != BlockType::Water {
             continue;
         }
 
         for (i, offset) in FACE_NORMAL_OFFSET.into_iter().enumerate() {
-            if !matches!(
-                source.block(block_coord + offset),
-                BlockType::Air | BlockType::Leaves
-            ) {
+            let neighbour = source.block(block_coord + offset);
+            if !matches!(neighbour, BlockType::Air | BlockType::Leaves) && !neighbour.is_flora() {
                 continue;
             }
             // Only the top face carries the shore, depth, top flag and shore distance (R, G, B,
@@ -108,6 +107,10 @@ pub(super) fn mesh_blocks(
         light,
     );
     opaque.tint_grass_sides(grass_tint);
+    // flora only grows at full detail, so coarser cells have none to look for
+    if cell_size == 1 {
+        mesh_flora(&non_air, &mut opaque, grass_tint, source, light);
+    }
     // sky light there is rarely bright under a canopy, and these boxes are too small to shade smoothly
     const BOX_LIGHT: f32 = 0.8;
     // past them, so wide a box would show through to its back where leaves' holes line up, so
@@ -161,5 +164,96 @@ pub(super) fn mesh_blocks(
     ChunkMeshes {
         opaque: opaque.build_mesh(),
         water: water_mesh,
+    }
+}
+
+// How far in from the block's corners flora's quads reach, so neighbouring plants don't touch.
+const FLORA_INSET: f32 = 0.05;
+// How far a plant may stand off its block's centre, and how much shorter than a block grass
+// and other plants may be: grass varies far more, so a meadow isn't cut level.
+const FLORA_JITTER: f32 = 0.18;
+const GRASS_SHORTEN: f32 = 0.45;
+const FLORA_SHORTEN: f32 = 0.2;
+// How dark a plant is at its roots, to its tips, as the grass round it shades them.
+const FLORA_ROOT_SHADE: f32 = 0.65;
+
+// Flora as two quads crossed corner to corner, both sides drawn as block meshes cull one,
+// v = 0 at the top so `foliage.wesl` sways the tips, and facing up to light like the grass.
+fn mesh_flora(
+    non_air: &[(IVec3, BlockType)],
+    buffers: &mut MeshBuffers,
+    grass_tint: &GrassTint,
+    source: &impl BlockSource,
+    light: &impl Deref<Target = SkyLight>,
+) {
+    for &(coord, block) in non_air {
+        if !block.is_flora() {
+            continue;
+        }
+        // where in the chunk it is picks how it stands, so it's the same every time it's meshed
+        let jitter = |salt: u32| {
+            let h = (coord.x as u32)
+                .wrapping_mul(0x9E37_79B1)
+                .wrapping_add((coord.z as u32).wrapping_mul(0x85EB_CA77))
+                .wrapping_add(salt.wrapping_mul(0xC2B2_AE3D));
+            let h = (h ^ (h >> 15)).wrapping_mul(0x2C1B_3C6D);
+            (h ^ (h >> 13)) as f32 / u32::MAX as f32
+        };
+        let centre = coord.as_vec3()
+            + Vec3::new(
+                (jitter(1) - 0.5) * 2.0 * FLORA_JITTER,
+                0.0,
+                (jitter(2) - 0.5) * 2.0 * FLORA_JITTER,
+            );
+        let shorten = match block {
+            BlockType::TallGrass | BlockType::ShortGrass | BlockType::SeedGrass => GRASS_SHORTEN,
+            _ => FLORA_SHORTEN,
+        };
+        let (bottom, top) = (-0.5, 0.5 - jitter(3) * shorten);
+        let reach = 0.5 - FLORA_INSET;
+        let tile = block.tile(Face::Side);
+        // tinted just as the grass it grows from, see `mesh_opaque_greedy`
+        let ground = coord.as_vec3() - Vec3::Y * 0.5;
+        let tint = if tile.tinted() {
+            grass_tint.at(ground) * source.forest_shade(ground)
+        } else {
+            Vec3::ONE
+        };
+        let lit = light.level(coord) as f32 / MAX_LIGHT as f32;
+        let (root, tip) = (
+            (tint * FLORA_ROOT_SHADE)
+                .extend(tile.atlas_cell())
+                .to_array(),
+            tint.extend(tile.atlas_cell()).to_array(),
+        );
+        for (dx, dz) in [(reach, reach), (reach, -reach)] {
+            let corner =
+                |side: f32, y: f32| (centre + Vec3::new(side * dx, y, side * dz)).to_array();
+            let (top_a, bottom_a, top_b, bottom_b) = (
+                corner(-1.0, top),
+                corner(-1.0, bottom),
+                corner(1.0, top),
+                corner(1.0, bottom),
+            );
+            // the second winding faces the other way, as the material culls one side
+            for (positions, uvs) in [
+                (
+                    [top_a, bottom_a, top_b, bottom_b],
+                    [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]],
+                ),
+                (
+                    [top_b, bottom_b, top_a, bottom_a],
+                    [[1.0, 0.0], [1.0, 1.0], [0.0, 0.0], [0.0, 1.0]],
+                ),
+            ] {
+                buffers.push_tiled_quad(
+                    positions,
+                    [0.0, 1.0, 0.0],
+                    uvs,
+                    [tip, root, tip, root],
+                    [lit; 4],
+                );
+            }
+        }
     }
 }

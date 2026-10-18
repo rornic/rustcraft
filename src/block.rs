@@ -14,12 +14,20 @@ pub enum BlockType {
     Gravel,
     Ice,
     Sandstone,
+    // ground flora, drawn as two crossed quads, see `BlockType::is_flora`
+    TallGrass,
+    Fern,
+    Poppy,
+    Dandelion,
+    ShortGrass,
+    SeedGrass,
 }
 
 impl BlockType {
     pub fn occlusion_weight(&self) -> f32 {
         match self {
             BlockType::Air => 0.0,
+            _ if self.is_flora() => 0.0,
             BlockType::Water => 0.4,
             BlockType::Leaves => 0.3,
             _ => 1.0,
@@ -31,6 +39,7 @@ impl BlockType {
     pub fn light_opacity(&self) -> u8 {
         match self {
             BlockType::Air => 0,
+            _ if self.is_flora() => 0,
             BlockType::Leaves => 1,
             BlockType::Water => 2,
             BlockType::Ice => 3,
@@ -41,6 +50,20 @@ impl BlockType {
     // Whether the faces of blocks behind this one are hidden by it. Leaves have holes.
     pub fn is_opaque(&self) -> bool {
         self.light_opacity() == crate::chunks::generate::light::MAX_LIGHT
+    }
+
+    // Plants on the ground: drawn as two quads crossed through the block, not as a cube, and
+    // see-through, hiding nothing and shading nothing.
+    pub fn is_flora(&self) -> bool {
+        matches!(
+            self,
+            BlockType::TallGrass
+                | BlockType::Fern
+                | BlockType::Poppy
+                | BlockType::Dandelion
+                | BlockType::ShortGrass
+                | BlockType::SeedGrass
+        )
     }
 }
 
@@ -82,9 +105,15 @@ pub enum Tile {
     SandstoneSide,
     SandstoneTop,
     SnowSide,
+    TallGrass,
+    Fern,
+    Poppy,
+    Dandelion,
+    ShortGrass,
+    SeedGrass,
 }
 
-pub const TILE_COUNT: usize = 15;
+pub const TILE_COUNT: usize = 21;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -94,13 +123,23 @@ impl Tile {
 
     // Greyscale tiles that vertex colours tint to the climate's grass.
     pub fn tinted(self) -> bool {
-        matches!(self, Tile::GrassTop | Tile::Leaves)
+        matches!(
+            self,
+            Tile::GrassTop
+                | Tile::Leaves
+                | Tile::TallGrass
+                | Tile::Fern
+                | Tile::ShortGrass
+                | Tile::SeedGrass
+        )
     }
+
+    // The first of the flora sprites, which are the atlas's last tiles, see `BlockType::is_flora`.
+    pub const FIRST_FLORA: Tile = Tile::TallGrass;
 }
 
 impl BlockType {
-    // The tile a face of this block draws. A flora class would slot in here, one tile for every
-    // face, with the mesher branching on its shape before it ever asks for a face.
+    // The tile a face of this block draws. Flora draws its one sprite on both its quads.
     pub fn tile(&self, face: Face) -> Tile {
         match (self, face) {
             (BlockType::Air, _) => Tile::Stone, // never drawn
@@ -120,6 +159,12 @@ impl BlockType {
             (BlockType::Ice, _) => Tile::Ice,
             (BlockType::Sandstone, Face::Side) => Tile::SandstoneSide,
             (BlockType::Sandstone, _) => Tile::SandstoneTop,
+            (BlockType::TallGrass, _) => Tile::TallGrass,
+            (BlockType::Fern, _) => Tile::Fern,
+            (BlockType::Poppy, _) => Tile::Poppy,
+            (BlockType::Dandelion, _) => Tile::Dandelion,
+            (BlockType::ShortGrass, _) => Tile::ShortGrass,
+            (BlockType::SeedGrass, _) => Tile::SeedGrass,
         }
     }
 
@@ -138,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_tile_count_matches_the_last_tile() {
-        assert_eq!(TILE_COUNT, Tile::SnowSide as usize + 1);
+        assert_eq!(TILE_COUNT, Tile::SeedGrass as usize + 1);
     }
 
     #[test]
@@ -157,6 +202,26 @@ mod tests {
         assert!(!BlockType::Ice.is_opaque());
         assert!(BlockType::Ice.light_opacity() > BlockType::Water.light_opacity());
         assert_eq!(1.0, BlockType::Ice.occlusion_weight());
+    }
+
+    #[test]
+    fn test_flora_hides_and_shades_nothing() {
+        for flora in [
+            BlockType::TallGrass,
+            BlockType::Fern,
+            BlockType::Poppy,
+            BlockType::Dandelion,
+            BlockType::ShortGrass,
+            BlockType::SeedGrass,
+        ] {
+            assert!(flora.is_flora() && !flora.is_opaque());
+            assert_eq!(0, flora.light_opacity());
+            assert_eq!(0.0, flora.occlusion_weight());
+            assert!(flora.tile(Face::Side) as u8 >= Tile::FIRST_FLORA as u8);
+        }
+        assert!(!BlockType::Grass.is_flora() && !BlockType::Leaves.is_flora());
+        // the shaders take every tile from the first flora's on as a plant's, see `foliage.wesl`
+        assert_eq!(6, TILE_COUNT - Tile::FIRST_FLORA as usize);
     }
 
     #[test]
