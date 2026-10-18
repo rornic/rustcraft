@@ -29,7 +29,7 @@ use crate::{
     math::smoothstep,
     sky::{
         camera_exposure, moon_illuminance, sun_direction, sun_illuminance, Moon, Sun, TimeOfDay,
-        DAY_SECONDS,
+        TICKS_PER_SECOND,
     },
     world::World,
 };
@@ -149,15 +149,15 @@ const SHELTER_RAIN: f32 = 0.2;
 
 // The weather keeps game time, so winding the clock on winds it on too, and back holds it.
 // Lightning keeps real time, or a wound-on storm would strobe.
-fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Local<Option<f32>>) {
+fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Local<Option<u64>>) {
     let now = clock.0;
     let then = last.replace(now).unwrap_or(now);
     weather.advance(weather_seconds(then, now));
 }
 
-/// How many seconds of weather pass as the clock goes from `then` to `now`, in days.
-pub fn weather_seconds(then: f32, now: f32) -> f32 {
-    ((now - then) * DAY_SECONDS).max(0.0)
+/// How many seconds of weather pass as the clock goes from `then` to `now`, in ticks.
+pub fn weather_seconds(then: u64, now: u64) -> f32 {
+    now.saturating_sub(then) as f32 / TICKS_PER_SECOND as f32
 }
 
 // How much of the sun's and moon's light gets through the storm's clouds, and how dark the
@@ -437,7 +437,7 @@ fn rainbow_mesh() -> Mesh {
 
 /// How bright the daylight is, 0..1, for things that aren't lit by the world's shaders.
 fn unlit_light(clock: &TimeOfDay) -> f32 {
-    ((sun_direction(clock.0).y + 0.1) / 0.4).clamp(0.05, 1.0)
+    ((sun_direction(clock.days()).y + 0.1) / 0.4).clamp(0.05, 1.0)
 }
 
 fn fall_rain(
@@ -662,7 +662,7 @@ fn show_rainbow(
         return;
     };
     let eye = camera.translation();
-    let away = -sun_direction(clock.0);
+    let away = -sun_direction(clock.days());
     // only by day, with the sun low enough that some of the bow clears the horizon: once
     // it's higher than the bow is wide, all of it's below
     let sun_height = -away.y;
@@ -1121,11 +1121,11 @@ mod tests {
     #[test]
     fn test_weather_keeps_the_games_time() {
         // a second of play at the normal pace is a second of weather
-        assert!((weather_seconds(0.4, 0.4 + 1.0 / DAY_SECONDS) - 1.0).abs() < 1e-3);
+        assert_eq!(1.0, weather_seconds(100, 100 + TICKS_PER_SECOND));
         // a tenth of a day wound on is a tenth of a day's weather
-        assert!((weather_seconds(0.4, 0.5) - DAY_SECONDS * 0.1).abs() < 1e-2);
+        assert_eq!(DAY_SECONDS * 0.1, weather_seconds(0, DAY_TICKS / 10));
         // and winding back holds it
-        assert_eq!(0.0, weather_seconds(0.5, 0.4));
+        assert_eq!(0.0, weather_seconds(DAY_TICKS / 2, DAY_TICKS / 5));
     }
 
     #[test]
@@ -1148,4 +1148,5 @@ mod tests {
         }
         assert_eq!(0.0, weather.rainbow);
     }
+    use crate::sky::{DAY_SECONDS, DAY_TICKS};
 }
