@@ -60,6 +60,11 @@ const MOON_BOOST: f32 = 400.0;
 /// How bright moonlight is in the world shaders at full moon, as `SUN_BRIGHTNESS` is for sunlight.
 const MOON_BRIGHTNESS: f32 = 0.1;
 
+/// How much it's day, 0 at night to 1 once the sun's well up, for what's about by day.
+pub fn daylight(clock: &TimeOfDay) -> f32 {
+    ((sun_direction(clock.0).y + 0.05) / 0.25).clamp(0.0, 1.0)
+}
+
 /// The sun, with shadows out to `shadow_distance` blocks in `cascades` slices.
 pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
     (

@@ -13,6 +13,7 @@ use rustcraft::chunks::{
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
+use rustcraft::critters::CritterPlugin;
 use rustcraft::curvature::{Curvature, CurvaturePlugin};
 use rustcraft::debug::DebugOverlayPlugin;
 use rustcraft::horizon::update_horizon;
@@ -198,6 +199,7 @@ fn main() {
             NightSkyPlugin,
             DebugOverlayPlugin,
             AmbiencePlugin,
+            CritterPlugin,
         ))
         .insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
