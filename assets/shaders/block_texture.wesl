@@ -13,10 +13,17 @@ const TILE_INSET: f32 = 0.002;
 // Just the alpha of `block_sample`, at full detail: without screen-space derivatives, so
 // it's fine where only some fragments sample, as the shadow pass does for leaves.
 fn block_alpha(uv: vec2<f32>, vertex_alpha: f32) -> f32 {
+    return block_alpha_at(uv, vertex_alpha, 0.0);
+}
+
+// `block_alpha` from mip `level`, which averages away holes smaller than the lookup's footprint.
+fn block_alpha_at(uv: vec2<f32>, vertex_alpha: f32, level: f32) -> f32 {
     let atlas_cell = floor(vertex_alpha + 0.5);
-    let tile_uv = clamp(fract(uv), vec2<f32>(TILE_INSET), vec2<f32>(1.0 - TILE_INSET));
+    // a coarse level's texels are wider, so the lookup stays half of one inside the tile
+    let inset = max(TILE_INSET, 0.5 * exp2(level) / f32(textureDimensions(material_color_texture).y));
+    let tile_uv = clamp(fract(uv), vec2<f32>(inset), vec2<f32>(1.0 - inset));
     let atlas_uv = vec2<f32>((atlas_cell + tile_uv.x) / ATLAS_CELLS, tile_uv.y);
-    return textureSampleLevel(material_color_texture, material_color_sampler, atlas_uv, 0.0).a * material_color.a;
+    return textureSampleLevel(material_color_texture, material_color_sampler, atlas_uv, level).a * material_color.a;
 }
 
 // How a block face's uv covers the screen, for `block_sample`. It takes derivatives, so needs

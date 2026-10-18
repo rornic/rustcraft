@@ -52,12 +52,12 @@ impl Dial {
 }
 
 // How strong a breeze on the ground is, when one blows, see `SPELL_SECONDS`.
-const GROUND_BREEZE: f32 = 0.2;
+const GROUND_BREEZE: f32 = 0.1;
 // How far above the ground or sea the wind reaches full strength, in blocks.
 const FULL_WIND_ALTITUDE: f32 = 250.0;
 // How fast the air rushes past a camera flying flat out, in blocks a second, adding to the wind.
 const RUSH_SPEED: f32 = 80.0;
-const RUSH_GAIN: f32 = 0.35;
+const RUSH_GAIN: f32 = 0.15;
 // How strong the wind blows on the ground in the heaviest rain: strong enough to keep blowing
 // between spells, see `STEADY`.
 const STORM_WIND: f32 = 0.6;
@@ -76,8 +76,8 @@ pub fn play_wind(mut commands: Commands, mut winds: ResMut<Assets<Wind>>, dials:
 /// The wind's strength from how high the camera is over the ground or sea, and how fast it's
 /// flying.
 pub fn wind_strength(altitude: f32, speed: f32) -> f32 {
-    // slow to pick up just off the ground, so treetop height is still fairly calm
-    let height = (altitude / FULL_WIND_ALTITUDE).clamp(0.0, 1.0).powf(0.75);
+    // slow to pick up off the ground, so even treetop height is calm
+    let height = (altitude / FULL_WIND_ALTITUDE).clamp(0.0, 1.0).powf(1.5);
     let rush = (speed / RUSH_SPEED).clamp(0.0, 1.0) * RUSH_GAIN;
     (GROUND_BREEZE + (1.0 - GROUND_BREEZE) * height + rush).min(1.0)
 }

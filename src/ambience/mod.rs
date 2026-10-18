@@ -181,7 +181,7 @@ fn sense_surroundings(
         trees_overhead: overhead / overhead_total,
         warmth: smoothstep(FREEZING.0, FREEZING.1, temperature),
         desert: (noise.biomes().name(here.biome) == Some("desert")) as u8 as f32,
-        day: smoothstep(-0.05, 0.2, sun_direction(clock.0).y),
+        day: smoothstep(-0.05, 0.2, sun_direction(clock.days()).y),
         breeze: dials.breeze(),
     };
 }

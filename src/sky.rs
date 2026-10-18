@@ -7,7 +7,7 @@ use bevy::{
         component::Component,
         query::{With, Without},
         resource::Resource,
-        system::{Commands, Query, Res, ResMut},
+        system::{Commands, Local, Query, Res, ResMut},
     },
     input::{keyboard::KeyCode, ButtonInput},
     light::{
@@ -31,6 +31,9 @@ pub const FOG_MAX_OPACITY: f32 = 0.8;
 pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
 /// Seconds in a game day.
 pub const DAY_SECONDS: f32 = 600.0;
+/// The clock counts whole ticks, so it stays exact however long the game runs.
+pub const TICKS_PER_SECOND: u64 = 20;
+pub const DAY_TICKS: u64 = DAY_SECONDS as u64 * TICKS_PER_SECOND;
 /// Days of the clock the world starts at: 0 is midnight, 0.5 is noon.
 pub const START_TIME: f32 = 0.4;
 // How fast `[` and `]` wind the clock, in days a second.
@@ -72,7 +75,7 @@ pub fn moon_illuminance() -> f32 {
 
 /// How much it's day, 0 at night to 1 once the sun's well up, for what's about by day.
 pub fn daylight(clock: &TimeOfDay) -> f32 {
-    ((sun_direction(clock.0).y + 0.05) / 0.25).clamp(0.0, 1.0)
+    ((sun_direction(clock.days()).y + 0.05) / 0.25).clamp(0.0, 1.0)
 }
 
 /// The sun, with shadows out to `shadow_distance` blocks in `cascades` slices.
@@ -123,15 +126,25 @@ pub fn moon() -> impl Bundle {
     )
 }
 
-/// The time of day, in days: the whole part counts days, the rest is the clock, see `START_TIME`.
+/// The time in ticks since midnight of day 0, see `DAY_TICKS` and `START_TIME`.
 #[derive(Resource)]
-pub struct TimeOfDay(pub f32);
+pub struct TimeOfDay(pub u64);
 
 impl TimeOfDay {
-    /// Where the sun is on its path, in radians: 0 as it rises, a quarter turn at noon.
-    fn sun_angle(&self) -> f32 {
-        TAU * (self.0.fract() - 0.25)
+    pub fn from_days(days: f32) -> Self {
+        Self((days.max(0.0) * DAY_TICKS as f32).round() as u64)
     }
+
+    /// How far through the day it is, 0..1: 0 is midnight, 0.5 is noon.
+    pub fn days(&self) -> f32 {
+        (self.0 % DAY_TICKS) as f32 / DAY_TICKS as f32
+    }
+}
+
+/// Where the sun is on its path at `days` through the day, in radians: 0 as it rises, a quarter
+/// turn at noon.
+fn sun_angle(days: f32) -> f32 {
+    TAU * (days.fract() - 0.25)
 }
 
 // The sun's path across the sky as a circle through `east` and `peak`, which are square to each other.
@@ -146,14 +159,14 @@ fn on_path(angle: f32) -> Vec3 {
     east * angle.cos() + peak * angle.sin()
 }
 
-/// Toward the sun at `time` days.
+/// Toward the sun `time` of the way through the day.
 pub fn sun_direction(time: f32) -> Vec3 {
-    on_path(TimeOfDay(time).sun_angle())
+    on_path(sun_angle(time))
 }
 
-/// Toward the moon at `time` days: opposite the sun, so it rises as the sun sets.
+/// Toward the moon `time` of the way through the day: opposite the sun, so it rises as the sun sets.
 pub fn moon_direction(time: f32) -> Vec3 {
-    on_path(TimeOfDay(time).sun_angle() + PI + MOON_LAG)
+    on_path(sun_angle(time) + PI + MOON_LAG)
 }
 
 /// Runs the clock, wound with `[` and `]`, and moves the sun and moon to it: the sky, fog and
@@ -164,14 +177,20 @@ pub fn move_sky(
     mut clock: ResMut<TimeOfDay>,
     mut sun: Query<&mut Transform, (With<Sun>, Without<Moon>)>,
     mut moon: Query<&mut Transform, (With<Moon>, Without<Sun>)>,
+    // the part of a tick not yet counted
+    mut carry: Local<f32>,
 ) {
     let wound = keys.pressed(SCRUB_FORWARD_KEY) as i32 - keys.pressed(SCRUB_BACK_KEY) as i32;
-    clock.0 += time.delta_secs() * (1.0 / DAY_SECONDS + wound as f32 * SCRUB_SPEED);
+    *carry += time.delta_secs()
+        * (TICKS_PER_SECOND as f32 + wound as f32 * SCRUB_SPEED * DAY_TICKS as f32);
+    let whole = carry.floor();
+    *carry -= whole;
+    clock.0 = clock.0.saturating_add_signed(whole as i64);
     if let Ok(mut transform) = sun.single_mut() {
-        *transform = shining_from(sun_direction(clock.0));
+        *transform = shining_from(sun_direction(clock.days()));
     }
     if let Ok(mut transform) = moon.single_mut() {
-        *transform = shining_from(moon_direction(clock.0));
+        *transform = shining_from(moon_direction(clock.days()));
     }
 }
 

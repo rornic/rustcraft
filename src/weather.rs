@@ -29,7 +29,7 @@ use crate::{
     math::smoothstep,
     sky::{
         camera_exposure, moon_illuminance, sun_direction, sun_illuminance, Moon, Sun, TimeOfDay,
-        DAY_SECONDS,
+        TICKS_PER_SECOND,
     },
     world::World,
 };
@@ -92,11 +92,11 @@ impl Default for Weather {
     }
 }
 
-// The first storm comes soon after the world opens, while the sun's still up for a rainbow
-// after it; later ones come and go at random.
-const FIRST_STORM_IN: f32 = 25.0;
+// The first storm comes a game day after the world opens, in the same part of the day, so the
+// sun's still up for a rainbow after it; later ones come and go at random, well apart.
+const FIRST_STORM_IN: f32 = 600.0;
 const FIRST_STORM_SECONDS: f32 = 95.0;
-const CLEAR_SECONDS: (f32, f32) = (240.0, 480.0);
+const CLEAR_SECONDS: (f32, f32) = (1800.0, 3600.0);
 const STORM_SECONDS: (f32, f32) = (90.0, 180.0);
 // How long rain takes to come on or clear, in seconds.
 const RAIN_EASE_SECONDS: f32 = 12.0;
@@ -149,15 +149,15 @@ const SHELTER_RAIN: f32 = 0.2;
 
 // The weather keeps game time, so winding the clock on winds it on too, and back holds it.
 // Lightning keeps real time, or a wound-on storm would strobe.
-fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Local<Option<f32>>) {
+fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Local<Option<u64>>) {
     let now = clock.0;
     let then = last.replace(now).unwrap_or(now);
     weather.advance(weather_seconds(then, now));
 }
 
-/// How many seconds of weather pass as the clock goes from `then` to `now`, in days.
-pub fn weather_seconds(then: f32, now: f32) -> f32 {
-    ((now - then) * DAY_SECONDS).max(0.0)
+/// How many seconds of weather pass as the clock goes from `then` to `now`, in ticks.
+pub fn weather_seconds(then: u64, now: u64) -> f32 {
+    now.saturating_sub(then) as f32 / TICKS_PER_SECOND as f32
 }
 
 // How much of the sun's and moon's light gets through the storm's clouds, and how dark the
@@ -437,7 +437,7 @@ fn rainbow_mesh() -> Mesh {
 
 /// How bright the daylight is, 0..1, for things that aren't lit by the world's shaders.
 fn unlit_light(clock: &TimeOfDay) -> f32 {
-    ((sun_direction(clock.0).y + 0.1) / 0.4).clamp(0.05, 1.0)
+    ((sun_direction(clock.days()).y + 0.1) / 0.4).clamp(0.05, 1.0)
 }
 
 fn fall_rain(
@@ -474,11 +474,10 @@ fn fall_rain(
 }
 
 // Lightning strikes this often in the heaviest rain, at the least and most, in seconds, from
-// this far off, in blocks, and its thunder rolls in at the speed of sound in blocks a second,
-// sped up so it isn't a long wait.
+// this far off, in blocks (a metre each), and its thunder rolls in at the speed of sound.
 const STRIKE_SECONDS: (f32, f32) = (7.0, 22.0);
 const STRIKE_DISTANCE: (f32, f32) = (30.0, 520.0);
-const THUNDER_SPEED: f32 = 240.0;
+const THUNDER_SPEED: f32 = 343.0;
 // Now and then a strike lands close, within this many blocks; the rest are farther off.
 const CLOSE_STRIKE_CHANCE: f64 = 0.25;
 const CLOSE_STRIKE_WITHIN: f32 = 110.0;
@@ -662,7 +661,7 @@ fn show_rainbow(
         return;
     };
     let eye = camera.translation();
-    let away = -sun_direction(clock.0);
+    let away = -sun_direction(clock.days());
     // only by day, with the sun low enough that some of the bow clears the horizon: once
     // it's higher than the bow is wide, all of it's below
     let sun_height = -away.y;
@@ -696,8 +695,8 @@ fn next_random(state: &mut u64) -> f32 {
     (*state >> 40) as f32 / (1u64 << 24) as f32 * 2.0 - 1.0
 }
 
-/// Rain's hiss, made as it plays: noise with the rumble and the sharpest highs cut, swelling
-/// gently, as loud as the rain.
+/// Rain's patter, made as it plays: soft low thumps at random times and sizes with silence
+/// between, as busy and loud as the rain.
 #[derive(Asset, TypePath)]
 pub struct RainSound {
     level: Dial,
@@ -712,28 +711,38 @@ impl Decodable for RainSound {
             heard: 0.0,
             rng: rand::random::<u64>() | 1,
             channel: 0,
-            low: [0.0; 2],
-            high: [0.0; 2],
-            body: [0.0; 2],
+            drop: [Drop::default(); 2],
             swell: 0.0,
             t: 0,
         }
     }
 }
 
-// The rain's loudness at its heaviest, see `RainDecoder::next`.
-const RAIN_GAIN: f32 = 0.11;
+// Thumps per second per ear at the heaviest rain, and their loudest.
+const DROPS_PER_SECOND: f32 = 30.0;
+const DROP_LEVEL: f32 = 0.12;
+// Pitch range in Hz, onset ramp and fade time in seconds.
+const DROP_PITCH: (f32, f32) = (140.0, 380.0);
+const DROP_ATTACK: f32 = 0.006;
+const DROP_FADE: f32 = 0.05;
+
+// A thump is spent once it has faded this many fade times.
+const DROP_LIFE: f32 = 6.0;
+
+#[derive(Clone, Copy, Default)]
+struct Drop {
+    age: f32,
+    pitch: f32,
+    size: f32,
+}
 
 pub struct RainDecoder {
     level: Dial,
     heard: f32,
     rng: u64,
     channel: usize,
-    // per ear: a low-pass taking the harshest highs off, one finding the rumble to take away,
-    // and a soft low body of drumming
-    low: [f32; 2],
-    high: [f32; 2],
-    body: [f32; 2],
+    // per ear: the thump sounding now, one at a time so they never pile up
+    drop: [Drop; 2],
     swell: f32,
     t: u64,
 }
@@ -753,13 +762,30 @@ impl Iterator for RainDecoder {
         }
         let c = self.channel;
         self.channel = 1 - self.channel;
-        let white = next_random(&mut self.rng);
-        // low-passed near 5 kHz, then the part under ~500 Hz taken out
-        self.low[c] += (white - self.low[c]) * 0.5;
-        self.high[c] += (self.low[c] - self.high[c]) * 0.07;
-        let hiss = self.low[c] - self.high[c];
-        self.body[c] += (white - self.body[c]) * 0.02;
-        let sample = (hiss * 0.8 + self.body[c] * 1.2) * self.heard.sqrt() * self.swell * RAIN_GAIN;
+        let rate = SAMPLE_RATE as f32;
+        let d = self.drop[c];
+        if d.age > DROP_LIFE * DROP_FADE {
+            let chance = self.heard * DROPS_PER_SECOND / rate;
+            if next_random(&mut self.rng) * 0.5 + 0.5 < chance {
+                let r = next_random(&mut self.rng) * 0.5 + 0.5;
+                let size = next_random(&mut self.rng) * 0.5 + 0.5;
+                let pitch = DROP_PITCH.0 + (DROP_PITCH.1 - DROP_PITCH.0) * r;
+                self.drop[c] = Drop {
+                    age: 0.0,
+                    pitch,
+                    size: size * size,
+                };
+            }
+        }
+        let d = &mut self.drop[c];
+        let ramp = (d.age / DROP_ATTACK).min(1.0);
+        let env = ramp * ramp * ops::exp(-d.age / DROP_FADE);
+        let sample = ops::sin(std::f32::consts::TAU * d.pitch * d.age)
+            * env
+            * d.size
+            * self.swell
+            * DROP_LEVEL;
+        d.age += 1.0 / rate;
         Some(sample.clamp(-1.0, 1.0))
     }
 }
@@ -794,6 +820,8 @@ pub struct Thunder {
 // How long a clap lasts, in seconds, and its loudness from the nearest strikes.
 const THUNDER_SECONDS: f32 = 7.0;
 const THUNDER_GAIN: f32 = 0.46;
+// Strikes within the first distance are heard at full force, fading by the log out to the second.
+const THUNDER_HEARD: (f32, f32) = (120.0, 520.0);
 // The roll's gain from the farthest strikes and the nearest.
 const ROLL_GAIN: (f32, f32) = (0.30, 1.16);
 // How far back, in frames, the two echoes come from, ~120 ms and ~270 ms; the first heard in
@@ -807,8 +835,8 @@ impl Decodable for Thunder {
     fn decoder(&self) -> ThunderDecoder {
         // by the log of the distance, as loudness falls off
         let near = 1.0
-            - (ops::ln(self.distance / STRIKE_DISTANCE.0)
-                / ops::ln(STRIKE_DISTANCE.1 / STRIKE_DISTANCE.0))
+            - (ops::ln(self.distance / THUNDER_HEARD.0)
+                / ops::ln(THUNDER_HEARD.1 / THUNDER_HEARD.0))
             .clamp(0.0, 1.0);
         let mut rng = (self.seed << 1) | 1;
         let mut uniform = || next_random(&mut rng) * 0.5 + 0.5;
@@ -1121,11 +1149,11 @@ mod tests {
     #[test]
     fn test_weather_keeps_the_games_time() {
         // a second of play at the normal pace is a second of weather
-        assert!((weather_seconds(0.4, 0.4 + 1.0 / DAY_SECONDS) - 1.0).abs() < 1e-3);
+        assert_eq!(1.0, weather_seconds(100, 100 + TICKS_PER_SECOND));
         // a tenth of a day wound on is a tenth of a day's weather
-        assert!((weather_seconds(0.4, 0.5) - DAY_SECONDS * 0.1).abs() < 1e-2);
+        assert_eq!(DAY_SECONDS * 0.1, weather_seconds(0, DAY_TICKS / 10));
         // and winding back holds it
-        assert_eq!(0.0, weather_seconds(0.5, 0.4));
+        assert_eq!(0.0, weather_seconds(DAY_TICKS / 2, DAY_TICKS / 5));
     }
 
     #[test]
@@ -1148,4 +1176,5 @@ mod tests {
         }
         assert_eq!(0.0, weather.rainbow);
     }
+    use crate::sky::{DAY_SECONDS, DAY_TICKS};
 }

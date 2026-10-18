@@ -223,7 +223,7 @@ fn main() {
             )
                 .chain(),
         )
-        .insert_resource(TimeOfDay(start_time()))
+        .insert_resource(TimeOfDay::from_days(start_time()))
         .add_systems(Update, move_sky)
         .run();
 }
