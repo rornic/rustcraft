@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use bevy::{
-    asset::{Asset, Assets, Handle},
+    asset::{Assets, Handle},
     camera::visibility::Visibility,
     ecs::hierarchy::Children,
     ecs::{
@@ -15,8 +15,8 @@ use bevy::{
 
 use super::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 
-// One step per level of the shaders' 4x4 dither pattern.
-const FADE_STEPS: usize = 16;
+// One step per level of the shaders' 8x8 dither pattern.
+const FADE_STEPS: usize = 64;
 
 /// The dither window that draws every pixel.
 pub const FULLY_VISIBLE: Vec4 = Vec4::new(0.0, 1.0, 0.0, 0.0);
@@ -25,14 +25,41 @@ pub const FULLY_VISIBLE: Vec4 = Vec4::new(0.0, 1.0, 0.0, 0.0);
 // their surfaces coincide, as a LOD node's skirts and flat ground do with full detail.
 const FADE_DEPTH_PUSH: f32 = 0.0005;
 
-// The window drawn at `step` of a fade out: one more level of the dither is gone each step.
-fn fade_window(step: usize) -> Vec4 {
-    Vec4::new(
-        (step + 1) as f32 / FADE_STEPS as f32,
-        1.0,
-        FADE_DEPTH_PUSH,
-        0.0,
-    )
+// A swap is staggered so one of the two meshes is always whole: the new one dithers in over the
+// old for this share of the fade, then the old one dithers out from under it for the rest. So
+// trees in the new mesh grow in over the old one's tint rather than popping up on top of it, and
+// no pixel is ever given up by both.
+const FADE_IN_SHARE: f32 = 0.5;
+
+// The window drawn at `step` of a fade in: one more level of the dither is drawn each step.
+fn fade_in_window(step: usize) -> Vec4 {
+    Vec4::new(0.0, (step + 1) as f32 / FADE_STEPS as f32, 0.0, 0.0)
+}
+
+// The window drawn at `step` of a fade out, which hides `step` levels of the dither: whole at
+// step 0, while what replaces it is still coming in, but pushed back already so that wins.
+fn fade_out_window(step: usize) -> Vec4 {
+    Vec4::new(step as f32 / FADE_STEPS as f32, 1.0, FADE_DEPTH_PUSH, 0.0)
+}
+
+// Which step of its fade, in or out, a mesh is at `progress` through it, or none once it's done.
+fn fade_step(progress: f32, out: bool) -> Option<usize> {
+    let progress = progress.max(0.0);
+    let (start, end) = if out {
+        (FADE_IN_SHARE, 1.0)
+    } else {
+        (0.0, FADE_IN_SHARE)
+    };
+    if progress >= end {
+        return None;
+    }
+    if progress < start {
+        // a fade out held whole while what replaces it comes in
+        return Some(0);
+    }
+    let step = ((progress - start) / (end - start) * FADE_STEPS as f32) as usize;
+    // once a fade out starts, one level is already gone, as one is already drawn as a fade in starts
+    Some((step + out as usize).min(FADE_STEPS - 1))
 }
 
 #[derive(Resource)]
@@ -41,10 +68,18 @@ pub struct FadeMaterials {
     chunk: Handle<ChunkMaterial>,
     water: Handle<WaterMaterial>,
     solid_water: Handle<WaterMaterial>,
-    // a material for each step of a fade out
-    chunk_steps: Vec<Handle<ChunkMaterial>>,
-    water_steps: Vec<Handle<WaterMaterial>>,
-    solid_water_steps: Vec<Handle<WaterMaterial>>,
+    // a material for each step of a fade, indexed [out as usize][step]
+    chunk_steps: [Vec<Handle<ChunkMaterial>>; 2],
+    water_steps: [Vec<Handle<WaterMaterial>>; 2],
+    solid_water_steps: [Vec<Handle<WaterMaterial>>; 2],
+}
+
+fn window(out: bool, step: usize) -> Vec4 {
+    if out {
+        fade_out_window(step)
+    } else {
+        fade_in_window(step)
+    }
 }
 
 impl FadeMaterials {
@@ -59,32 +94,49 @@ impl FadeMaterials {
             water,
             solid_water,
         } = materials.clone();
-        let water_fade = |m: WaterMaterial, fade: Vec4| WaterMaterial { fade, ..m };
+        let base_chunk = chunk_materials.get(&chunk).unwrap().clone();
+        let base_water = water_materials.get(&water).unwrap().clone();
+        let base_solid = water_materials.get(&solid_water).unwrap().clone();
+        let chunk_steps = [false, true].map(|out| {
+            (0..FADE_STEPS)
+                .map(|step| {
+                    chunk_materials.add(ChunkMaterial {
+                        fade: window(out, step),
+                        ..base_chunk.clone()
+                    })
+                })
+                .collect()
+        });
+        let water_steps = [false, true].map(|out| {
+            (0..FADE_STEPS)
+                .map(|step| {
+                    water_materials.add(WaterMaterial {
+                        fade: window(out, step),
+                        ..base_water.clone()
+                    })
+                })
+                .collect()
+        });
+        let solid_water_steps = [false, true].map(|out| {
+            (0..FADE_STEPS)
+                .map(|step| {
+                    water_materials.add(WaterMaterial {
+                        fade: window(out, step),
+                        ..base_solid.clone()
+                    })
+                })
+                .collect()
+        });
         Self {
             seconds,
-            chunk_steps: fade_steps(chunk_materials, &chunk, |m, fade| ChunkMaterial {
-                fade,
-                ..m
-            }),
-            water_steps: fade_steps(water_materials, &water, water_fade),
-            solid_water_steps: fade_steps(water_materials, &solid_water, water_fade),
             chunk,
             water,
             solid_water,
+            chunk_steps,
+            water_steps,
+            solid_water_steps,
         }
     }
-}
-
-// A copy of the material at `base` for each step of a fade out.
-fn fade_steps<M: Asset + Clone>(
-    materials: &mut Assets<M>,
-    base: &Handle<M>,
-    with_fade: impl Fn(M, Vec4) -> M,
-) -> Vec<Handle<M>> {
-    let base = materials.get(base).unwrap().clone();
-    (0..FADE_STEPS)
-        .map(|step| materials.add(with_fade(base.clone(), fade_window(step))))
-        .collect()
 }
 
 /// On a water mesh drawn with the solid material.
@@ -98,9 +150,9 @@ pub struct Fade {
     despawn: bool,
 }
 
-/// Shows `entity` at once, or fades it out, unless it's already shown or hidden as asked. What
-/// replaces it is drawn in full from the start, so its dissolving never leaves gaps: a mesh
-/// dithered out and one dithered in only fill a pixel between them if both cover it.
+/// Fades `entity` in or out unless it's already shown or hidden as asked. The two are staggered,
+/// see `FADE_IN_SHARE`, so a mesh and the one replacing it, set going together, never both leave
+/// a pixel undrawn.
 pub fn set_shown(
     commands: &mut Commands,
     entity: Entity,
@@ -118,15 +170,14 @@ pub fn set_shown(
         return;
     }
     if shown {
+        // one fading out is brought back by finishing a fade in at once, which resets its material
+        let start = if fade.is_some() { f32::MIN } else { now };
         *visibility = Visibility::Inherited;
-        // one fading out is brought back by finishing a fade at once, which resets its material
-        if fade.is_some() {
-            commands.entity(entity).insert(Fade {
-                start: f32::MIN,
-                out: false,
-                despawn: false,
-            });
-        }
+        commands.entity(entity).insert(Fade {
+            start,
+            out: false,
+            despawn: false,
+        });
     } else {
         commands.entity(entity).insert(Fade {
             start: now,
@@ -163,23 +214,26 @@ pub fn apply_fades(
 
     for (entity, fade, mut visibility, children) in fading.iter_mut() {
         let progress = (now - fade.start) / materials.seconds.max(f32::EPSILON);
-        let (chunk, water, solid_water) = if progress >= 1.0 {
-            if fade.out && fade.despawn {
-                commands.entity(entity).despawn();
-                continue;
+        let (chunk, water, solid_water) = match fade_step(progress, fade.out) {
+            None => {
+                if fade.out && fade.despawn {
+                    commands.entity(entity).despawn();
+                    continue;
+                }
+                if fade.out {
+                    *visibility = Visibility::Hidden;
+                }
+                commands.entity(entity).remove::<Fade>();
+                (&materials.chunk, &materials.water, &materials.solid_water)
             }
-            if fade.out {
-                *visibility = Visibility::Hidden;
+            Some(step) => {
+                let out = fade.out as usize;
+                (
+                    &materials.chunk_steps[out][step],
+                    &materials.water_steps[out][step],
+                    &materials.solid_water_steps[out][step],
+                )
             }
-            commands.entity(entity).remove::<Fade>();
-            (&materials.chunk, &materials.water, &materials.solid_water)
-        } else {
-            let step = ((progress.max(0.0) * FADE_STEPS as f32) as usize).min(FADE_STEPS - 1);
-            (
-                &materials.chunk_steps[step],
-                &materials.water_steps[step],
-                &materials.solid_water_steps[step],
-            )
         };
 
         if let Ok(mut material) = chunk_materials.get_mut(entity) {
@@ -214,11 +268,11 @@ mod tests {
         },
     };
 
-    use super::{fade_window, set_shown, Fade, FADE_STEPS};
+    use super::{fade_in_window, fade_out_window, fade_step, set_shown, Fade, FADE_STEPS};
 
-    // Every dither threshold the shader can produce, (level + 0.5) / 16.
+    // Every dither threshold the shader can produce, (level + 0.5) / 64.
     fn thresholds() -> impl Iterator<Item = f32> {
-        (0..16).map(|level| (level as f32 + 0.5) / 16.0)
+        (0..FADE_STEPS).map(|level| (level as f32 + 0.5) / FADE_STEPS as f32)
     }
 
     fn draws(window: bevy::math::Vec4, threshold: f32) -> bool {
@@ -226,13 +280,45 @@ mod tests {
     }
 
     #[test]
+    fn test_fade_in_draws_one_more_level_per_step() {
+        for step in 0..FADE_STEPS {
+            let drawn = thresholds()
+                .filter(|&t| draws(fade_in_window(step), t))
+                .count();
+            assert_eq!(step + 1, drawn);
+        }
+    }
+
+    #[test]
     fn test_fade_out_hides_one_more_level_per_step() {
         for step in 0..FADE_STEPS {
             let hidden = thresholds()
-                .filter(|&t| !draws(fade_window(step), t))
+                .filter(|&t| !draws(fade_out_window(step), t))
                 .count();
-            assert_eq!(step + 1, hidden);
+            assert_eq!(step, hidden);
         }
+    }
+
+    #[test]
+    fn test_one_of_a_swapped_pair_is_always_whole() {
+        // a mesh and its replacement, set fading together, at every point through the fade
+        for i in 0..=1000 {
+            let progress = i as f32 / 1000.0;
+            let coming = fade_step(progress, false).map_or(FADE_STEPS, |step| step + 1);
+            let going = fade_step(progress, true).unwrap_or(FADE_STEPS);
+            assert!(
+                coming == FADE_STEPS || going == 0,
+                "at {progress}: {coming} drawn and {going} hidden"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_fade_in_finishes_as_the_fade_out_starts() {
+        assert_eq!(None, fade_step(0.5, false));
+        assert_eq!(Some(1), fade_step(0.5, true));
+        assert_eq!(Some(0), fade_step(0.49, true));
+        assert_eq!(None, fade_step(1.0, true));
     }
 
     // `set_shown` for an entity with this visibility and fade, then what's left of it.
@@ -266,10 +352,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_new_mesh_is_shown_in_full_at_once() {
-        // no fade in to leave gaps under what's dissolving
+    fn test_showing_fades_in_from_now() {
         assert_eq!(
-            (Visibility::Inherited, None),
+            (Visibility::Inherited, Some((5.0, false))),
             shown(Visibility::Hidden, None, true)
         );
     }
