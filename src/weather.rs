@@ -92,11 +92,11 @@ impl Default for Weather {
     }
 }
 
-// The first storm comes soon after the world opens, while the sun's still up for a rainbow
-// after it; later ones come and go at random.
-const FIRST_STORM_IN: f32 = 25.0;
+// The first storm comes a game day after the world opens, in the same part of the day, so the
+// sun's still up for a rainbow after it; later ones come and go at random, well apart.
+const FIRST_STORM_IN: f32 = 600.0;
 const FIRST_STORM_SECONDS: f32 = 95.0;
-const CLEAR_SECONDS: (f32, f32) = (240.0, 480.0);
+const CLEAR_SECONDS: (f32, f32) = (1800.0, 3600.0);
 const STORM_SECONDS: (f32, f32) = (90.0, 180.0);
 // How long rain takes to come on or clear, in seconds.
 const RAIN_EASE_SECONDS: f32 = 12.0;
