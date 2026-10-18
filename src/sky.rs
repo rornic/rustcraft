@@ -30,7 +30,7 @@ pub const FOG_MAX_OPACITY: f32 = 0.8;
 /// Where the sun is at noon: its path across the sky is the great circle through this and the horizon, see `path_basis`.
 pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
 /// Seconds in a game day.
-const DAY_SECONDS: f32 = 600.0;
+pub const DAY_SECONDS: f32 = 600.0;
 /// Days of the clock the world starts at: 0 is midnight, 0.5 is noon.
 pub const START_TIME: f32 = 0.4;
 // How fast `[` and `]` wind the clock, in days a second.

@@ -29,6 +29,7 @@ use crate::{
     math::smoothstep,
     sky::{
         camera_exposure, moon_illuminance, sun_direction, sun_illuminance, Moon, Sun, TimeOfDay,
+        DAY_SECONDS,
     },
     world::World,
 };
@@ -146,8 +147,17 @@ impl Weather {
 // How hard it rains, see `Weather::rain`, before birds and insects take shelter.
 const SHELTER_RAIN: f32 = 0.2;
 
-fn run_weather(time: Res<Time>, mut weather: ResMut<Weather>) {
-    weather.advance(time.delta_secs());
+// The weather keeps game time, so winding the clock on winds it on too, and back holds it.
+// Lightning keeps real time, or a wound-on storm would strobe.
+fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Local<Option<f32>>) {
+    let now = clock.0;
+    let then = last.replace(now).unwrap_or(now);
+    weather.advance(weather_seconds(then, now));
+}
+
+/// How many seconds of weather pass as the clock goes from `then` to `now`, in days.
+pub fn weather_seconds(then: f32, now: f32) -> f32 {
+    ((now - then) * DAY_SECONDS).max(0.0)
 }
 
 // How much of the sun's and moon's light gets through the storm's clouds, and how dark the
@@ -1106,6 +1116,16 @@ mod tests {
         );
         // and it's loud from the very start
         assert!(rms(&near[..88]) > 0.1, "{}", rms(&near[..88]));
+    }
+
+    #[test]
+    fn test_weather_keeps_the_games_time() {
+        // a second of play at the normal pace is a second of weather
+        assert!((weather_seconds(0.4, 0.4 + 1.0 / DAY_SECONDS) - 1.0).abs() < 1e-3);
+        // a tenth of a day wound on is a tenth of a day's weather
+        assert!((weather_seconds(0.4, 0.5) - DAY_SECONDS * 0.1).abs() < 1e-2);
+        // and winding back holds it
+        assert_eq!(0.0, weather_seconds(0.5, 0.4));
     }
 
     #[test]
