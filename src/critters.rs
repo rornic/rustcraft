@@ -43,6 +43,11 @@ const SEARCHES: usize = 3;
 const FADE_SECONDS: f32 = 1.5;
 // How much of the day it is, see `daylight`, when butterflies come out and fireflies leave.
 const BUTTERFLY_DAY: f32 = 0.55;
+// A firefly's glow on what's round it: its colour, how bright it is lit up, in lumens (the
+// camera's exposed for sunlight, so it takes a lot), and how far it reaches, in blocks.
+const FIREFLY_COLOUR: Color = Color::srgb(0.75, 1.0, 0.3);
+const FIREFLY_LUMENS: f32 = 150_000.0;
+const FIREFLY_LIGHT_RANGE: f32 = 5.0;
 const FIREFLY_NIGHT: f32 = 0.35;
 
 #[derive(Resource)]
@@ -273,6 +278,15 @@ fn spawn_critters(
                     MeshMaterial3d(assets.glow.clone()),
                     Transform::from_translation(home).with_scale(Vec3::ZERO),
                     bevy::light::NotShadowCaster,
+                    // a faint glow on the grass round it, see `point_lights.wesl`
+                    PointLight {
+                        color: FIREFLY_COLOUR,
+                        intensity: 0.0,
+                        range: FIREFLY_LIGHT_RANGE,
+                        radius: 0.05,
+                        shadow_maps_enabled: false,
+                        ..default()
+                    },
                 ));
                 fireflies += 1;
             }
@@ -378,10 +392,10 @@ fn fly_butterflies(
 
 fn fly_fireflies(
     time: Res<Time>,
-    mut fireflies: Query<(&mut Critter, &mut Transform), With<Firefly>>,
+    mut fireflies: Query<(&mut Critter, &mut Transform, &mut PointLight), With<Firefly>>,
 ) {
     let (t, dt) = (time.elapsed_secs(), time.delta_secs());
-    for (mut critter, mut transform) in &mut fireflies {
+    for (mut critter, mut transform, mut light) in &mut fireflies {
         let size = fade(&mut critter, dt);
         let p = critter.phase;
         // a slow, lazy drift, rising and sinking
@@ -396,6 +410,7 @@ fn fly_fireflies(
             .max(0.0)
             .powi(3);
         transform.scale = Vec3::splat(size * (0.15 + 0.85 * blink));
+        light.intensity = FIREFLY_LUMENS * size * blink;
     }
 }
 
