@@ -27,7 +27,7 @@ at your option.
 
 ## Contribution
 
-All contributions are welcome. Feel free to open issues for fixes or discussing changes.
+Issues for bugs and ideas are welcome. Please open an issue to discuss any non-trivial change **before** opening a pull request; large or unsolicited PRs will likely be closed. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
