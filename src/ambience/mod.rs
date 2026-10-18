@@ -65,14 +65,17 @@ pub struct Surroundings {
     pub underwater: bool,
     // how much of what's round it is sea; the rest is land
     pub water: f32,
-    // how thick the forest round it is
+    // how thick the forest round it is, and right round it, under the trees' crowns
     pub trees: f32,
+    pub trees_overhead: f32,
     // 0 where it's cold enough to freeze, up to 1 where it's mild
     pub warmth: f32,
     // 1 over desert
     pub desert: f32,
     // 1 by day, 0 by night, in between at dawn and dusk
     pub day: f32,
+    // how much of a breeze is blowing, see `WindDials`
+    pub breeze: f32,
 }
 
 impl Default for Surroundings {
@@ -83,9 +86,11 @@ impl Default for Surroundings {
             underwater: false,
             water: 0.0,
             trees: 0.0,
+            trees_overhead: 0.0,
             warmth: 1.0,
             desert: 0.0,
             day: 1.0,
+            breeze: 0.0,
         }
     }
 }
@@ -103,10 +108,12 @@ const DENSE_FOREST: f64 = 0.4;
 // The temperatures, see `NoiseGenerator::temperature`, between which the cold sets in.
 const FREEZING: (f32, f32) = (0.15, 0.35);
 
+#[allow(clippy::too_many_arguments)]
 fn sense_surroundings(
     time: Res<Time>,
     world: Res<World>,
     clock: Res<TimeOfDay>,
+    dials: Res<WindDials>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut around: ResMut<Surroundings>,
     mut since: Local<f32>,
@@ -132,20 +139,33 @@ fn sense_surroundings(
         .get_height(eye.x.floor() as i64, eye.z.floor() as i64)
         .max(WATER_LEVEL as f64) as f32;
     let (mut water, mut trees, mut total) = (0.0, 0.0, 0.0);
-    let mut sample = |x: f32, z: f32, weight: f32| {
+    let (mut overhead, mut overhead_total) = (0.0, 0.0);
+    // the camera's own column and the inner ring count as overhead
+    let mut sample = |x: f32, z: f32, weight: f32, is_overhead: bool| {
         let column = noise.sample(x as f64, z as f64);
+        let mut cover = 0.0;
         if column.height < WATER_LEVEL as f64 {
             water += weight;
         } else {
-            trees += weight * (column.trees / DENSE_FOREST).min(1.0) as f32;
+            cover = (column.trees / DENSE_FOREST).min(1.0) as f32;
+            trees += weight * cover;
         }
         total += weight;
+        if is_overhead {
+            overhead += weight * cover;
+            overhead_total += weight;
+        }
     };
-    sample(eye.x, eye.z, CENTRE_WEIGHT);
-    for (radius, weight) in RINGS {
+    sample(eye.x, eye.z, CENTRE_WEIGHT, true);
+    for (ring, (radius, weight)) in RINGS.into_iter().enumerate() {
         for i in 0..RING_COLUMNS {
             let (sin, cos) = ops::sin_cos(i as f32 / RING_COLUMNS as f32 * TAU);
-            sample(eye.x + cos * radius, eye.z + sin * radius, weight);
+            sample(
+                eye.x + cos * radius,
+                eye.z + sin * radius,
+                weight,
+                ring == 0,
+            );
         }
     }
     let here = noise.sample(eye.x as f64, eye.z as f64);
@@ -157,9 +177,11 @@ fn sense_surroundings(
         underwater: world.get_block_at(eye.floor().as_i64vec3()) == BlockType::Water,
         water: water / total,
         trees: trees / total,
+        trees_overhead: overhead / overhead_total,
         warmth: smoothstep(FREEZING.0, FREEZING.1, temperature),
         desert: (noise.biomes().name(here.biome) == Some("desert")) as u8 as f32,
         day: smoothstep(-0.05, 0.2, sun_direction(clock.0).y),
+        breeze: dials.breeze(),
     };
 }
 
@@ -171,15 +193,17 @@ pub enum Loop {
     Waves,
     Desert,
     Underwater,
+    Leaves,
 }
 
 impl Loop {
-    const ALL: [Loop; 5] = [
+    const ALL: [Loop; 6] = [
         Loop::Forest,
         Loop::Crickets,
         Loop::Waves,
         Loop::Desert,
         Loop::Underwater,
+        Loop::Leaves,
     ];
 
     fn file(self) -> &'static str {
@@ -189,6 +213,7 @@ impl Loop {
             Loop::Waves => "sounds/waves.ogg",
             Loop::Desert => "sounds/desert.ogg",
             Loop::Underwater => "sounds/underwater.ogg",
+            Loop::Leaves => "sounds/leaves.ogg",
         }
     }
 
@@ -201,6 +226,7 @@ impl Loop {
             Loop::Waves => (-19.7, -24.0),
             Loop::Desert => (-24.5, -31.0),
             Loop::Underwater => (-18.4, -22.0),
+            Loop::Leaves => (-20.2, -31.0),
         }
     }
 
@@ -227,7 +253,8 @@ impl Loop {
                 seconds: (12.0, 40.0),
                 quiet: (0.35, 0.75),
             }),
-            Loop::Waves | Loop::Underwater => None,
+            // the leaves come and go with the wind's breezes instead, see `Loop::level`
+            Loop::Waves | Loop::Underwater | Loop::Leaves => None,
         }
     }
 
@@ -252,6 +279,8 @@ impl Loop {
             Loop::Waves => around.water * around.warmth * near(10.0, 120.0),
             Loop::Desert => around.desert * near(30.0, 150.0),
             Loop::Underwater => 0.0,
+            // only under the trees' crowns, and only while a breeze stirs them
+            Loop::Leaves => around.trees_overhead * around.breeze * near(8.0, 40.0),
         }
     }
 }
@@ -404,6 +433,27 @@ mod tests {
             vec![Loop::Crickets],
             levels(night).into_iter().map(|l| l.0).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_leaves_rustle_only_under_trees_in_a_breeze() {
+        let still = Surroundings {
+            trees: 0.9,
+            trees_overhead: 0.9,
+            ..Default::default()
+        };
+        assert_eq!(0.0, Loop::Leaves.level(&still));
+        let breeze = Surroundings {
+            breeze: 1.0,
+            ..still
+        };
+        assert!(Loop::Leaves.level(&breeze) > 0.8);
+        // forest down the slope doesn't rustle over a bare peak
+        let peak = Surroundings {
+            trees_overhead: 0.0,
+            ..breeze
+        };
+        assert_eq!(0.0, Loop::Leaves.level(&peak));
     }
 
     #[test]

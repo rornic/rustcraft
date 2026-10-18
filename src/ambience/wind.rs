@@ -25,6 +25,15 @@ use super::{smoothstep, Surroundings};
 pub struct WindDials {
     // how hard the wind blows where the camera is, 0..1
     strength: Dial,
+    // how much of a breeze the sound is blowing right now, 0..1, whatever its strength: set
+    // on the audio thread, for the leaves to rustle in, see `Loop::Leaves`
+    breeze: Dial,
+}
+
+impl WindDials {
+    pub(super) fn breeze(&self) -> f32 {
+        self.breeze.get()
+    }
 }
 
 /// An f32 shared between threads through its bits, so the sounds made as they play can read
@@ -204,6 +213,7 @@ impl WindDecoder {
         let steady = smoothstep(STEADY.0, STEADY.1, self.level);
         let blowing = up + (1.0 - up) * steady;
         let gusting = 0.65 + 0.35 * gust;
+        self.dials.breeze.set(blowing * gusting);
         // gusts swing a calm day's wind far less than a gale's
         let blow = (self.level * blowing * gusting * (0.9 + 0.1 * flutter)).clamp(0.0, 1.0);
         let cutoff = lerp(ROAR_CUTOFF, blow);
