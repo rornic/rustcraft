@@ -201,7 +201,7 @@ pub(super) const TRUNK_MAX_CELL: i64 = 16;
 
 // From cells this wide a crown is a box too, of its real size: as cells it would round up to a
 // cube a cell wide, several times its size.
-pub(super) const BOX_CROWN_CELL: i64 = 4;
+pub(super) const BOX_CROWN_CELL: i64 = 8;
 
 // Each tree a cell grows covers this much of its ground, see `Biome::tree_density`, and a cell
 // that's all covered is drawn this fraction as bright.
