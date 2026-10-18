@@ -13,6 +13,7 @@ import super::lighting::{direct_moon, direct_sun, open_sky};
 import super::sky::SUN_LIGHT;
 import super::cloud_shadow::cloud_shadow;
 import super::lod_patch::patch_tint;
+import super::point_lights::point_light_glow;
 import super::dither::dither_threshold;
 import super::curvature::{curved, uncurved};
 // How bright the leaves seen through a solid tree box's holes are, to its surface's.
@@ -169,7 +170,8 @@ fn fragment(
 }
 
     let shaded = lit_normal(normal, world_position);
-    let light = sunlight(in.world_position, normal, shaded, sky, in.position.xy) + sky_ambient(sky, shaded);
+    let light = sunlight(in.world_position, normal, shaded, sky, in.position.xy) + sky_ambient(sky, shaded)
+        + point_light_glow(world_position, normal, in.position.xy);
     color = vec4<f32>(color.rgb * light, color.a);
 
     // so distant chunks fade into the sky instead of popping in and out
