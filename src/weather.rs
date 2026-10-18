@@ -149,15 +149,15 @@ const SHELTER_RAIN: f32 = 0.2;
 
 // The weather keeps game time, so winding the clock on winds it on too, and back holds it.
 // Lightning keeps real time, or a wound-on storm would strobe.
-fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Local<Option<f32>>) {
+fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Local<Option<f64>>) {
     let now = clock.0;
     let then = last.replace(now).unwrap_or(now);
     weather.advance(weather_seconds(then, now));
 }
 
 /// How many seconds of weather pass as the clock goes from `then` to `now`, in days.
-pub fn weather_seconds(then: f32, now: f32) -> f32 {
-    ((now - then) * DAY_SECONDS).max(0.0)
+pub fn weather_seconds(then: f64, now: f64) -> f32 {
+    ((now - then) * DAY_SECONDS as f64).max(0.0) as f32
 }
 
 // How much of the sun's and moon's light gets through the storm's clouds, and how dark the
@@ -437,7 +437,7 @@ fn rainbow_mesh() -> Mesh {
 
 /// How bright the daylight is, 0..1, for things that aren't lit by the world's shaders.
 fn unlit_light(clock: &TimeOfDay) -> f32 {
-    ((sun_direction(clock.0).y + 0.1) / 0.4).clamp(0.05, 1.0)
+    ((sun_direction(clock.of_day()).y + 0.1) / 0.4).clamp(0.05, 1.0)
 }
 
 fn fall_rain(
@@ -453,8 +453,9 @@ fn fall_rain(
         return;
     };
     let eye = camera.translation();
-    // none underwater, nor once high above the clouds' base
+    // none underwater, under a roof or in a cave, nor once high above the clouds' base
     let dry = world.get_block_at(eye.floor().as_i64vec3()) == BlockType::Water
+        || under_cover(&world, eye)
         || eye.y > crate::clouds::CLOUD_BASE;
     let rain = if dry { 0.0 } else { weather.rain };
     let light = unlit_light(&clock) * (1.0 - 0.5 * weather.rain);
@@ -471,6 +472,16 @@ fn fall_rain(
             material.params = params;
         }
     }
+}
+
+// How far up something solid keeps the rain off, in blocks: a roof or a cave's ceiling, not a
+// cliff's overhang far above.
+const COVER_BLOCKS: i64 = 24;
+
+// Whether something solid is overhead, so the rain round `eye` would land on it instead.
+fn under_cover(world: &World, eye: Vec3) -> bool {
+    let column = eye.floor().as_i64vec3();
+    (1..=COVER_BLOCKS).any(|up| world.get_block_at(column.with_y(column.y + up)).is_opaque())
 }
 
 // Lightning strikes this often in the heaviest rain, at the least and most, in seconds, from
@@ -662,7 +673,7 @@ fn show_rainbow(
         return;
     };
     let eye = camera.translation();
-    let away = -sun_direction(clock.0);
+    let away = -sun_direction(clock.of_day());
     // only by day, with the sun low enough that some of the bow clears the horizon: once
     // it's higher than the bow is wide, all of it's below
     let sun_height = -away.y;
@@ -1119,9 +1130,32 @@ mod tests {
     }
 
     #[test]
+    fn test_rain_stays_off_under_a_roof() {
+        use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
+        use bevy::math::{I64Vec3, U16Vec3};
+
+        let chunk = |roofed: bool| {
+            let mut data = ChunkData::default();
+            data.set_block_at(U16Vec3::new(6, 10, 5), BlockType::Stone);
+            data.set_block_at(U16Vec3::new(5, 8, 5), BlockType::Leaves);
+            if roofed {
+                data.set_block_at(U16Vec3::new(5, 10, 5), BlockType::Stone);
+            }
+            data
+        };
+        let mut world = World::new(16);
+        let eye = Vec3::new(5.5, 5.5, 5.5);
+        // a block beside the column, or leaves above, keep no rain off
+        world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), chunk(false));
+        assert!(!under_cover(&world, eye));
+        world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), chunk(true));
+        assert!(under_cover(&world, eye));
+    }
+
+    #[test]
     fn test_weather_keeps_the_games_time() {
         // a second of play at the normal pace is a second of weather
-        assert!((weather_seconds(0.4, 0.4 + 1.0 / DAY_SECONDS) - 1.0).abs() < 1e-3);
+        assert!((weather_seconds(0.4, 0.4 + 1.0 / DAY_SECONDS as f64) - 1.0).abs() < 1e-3);
         // a tenth of a day wound on is a tenth of a day's weather
         assert!((weather_seconds(0.4, 0.5) - DAY_SECONDS * 0.1).abs() < 1e-2);
         // and winding back holds it

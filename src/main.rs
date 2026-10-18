@@ -171,11 +171,11 @@ fn winit_settings() -> bevy::winit::WinitSettings {
 }
 
 // RC_TIME starts the clock at that time of day, in days, for looking at the sky at any hour
-fn start_time() -> f32 {
+fn start_time() -> f64 {
     std::env::var("RC_TIME")
         .ok()
         .and_then(|time| time.parse().ok())
-        .unwrap_or(START_TIME)
+        .unwrap_or(START_TIME as f64)
 }
 
 fn main() {

@@ -72,7 +72,7 @@ pub fn moon_illuminance() -> f32 {
 
 /// How much it's day, 0 at night to 1 once the sun's well up, for what's about by day.
 pub fn daylight(clock: &TimeOfDay) -> f32 {
-    ((sun_direction(clock.0).y + 0.05) / 0.25).clamp(0.0, 1.0)
+    ((sun_direction(clock.of_day()).y + 0.05) / 0.25).clamp(0.0, 1.0)
 }
 
 /// The sun, with shadows out to `shadow_distance` blocks in `cascades` slices.
@@ -124,14 +124,26 @@ pub fn moon() -> impl Bundle {
 }
 
 /// The time of day, in days: the whole part counts days, the rest is the clock, see `START_TIME`.
+/// It's an f64 so a world left running for months still moves on by a frame's step: an f32
+/// past a few hundred days is too coarse to, and the clock would stop.
 #[derive(Resource)]
-pub struct TimeOfDay(pub f32);
+pub struct TimeOfDay(pub f64);
 
 impl TimeOfDay {
-    /// Where the sun is on its path, in radians: 0 as it rises, a quarter turn at noon.
-    fn sun_angle(&self) -> f32 {
-        TAU * (self.0.fract() - 0.25)
+    /// How far through the day it is, 0..1: 0 is midnight, 0.5 is noon.
+    pub fn of_day(&self) -> f32 {
+        self.0.rem_euclid(1.0) as f32
     }
+
+    // Moves the clock on by `seconds` of play, wound forward or back by `wound`.
+    fn wind(&mut self, seconds: f64, wound: i32) {
+        self.0 += seconds * (1.0 / DAY_SECONDS as f64 + wound as f64 * SCRUB_SPEED as f64);
+    }
+}
+
+/// Where the sun is on its path at `time` days, in radians: 0 as it rises, a quarter turn at noon.
+fn sun_angle(time: f32) -> f32 {
+    TAU * (time.fract() - 0.25)
 }
 
 // The sun's path across the sky as a circle through `east` and `peak`, which are square to each other.
@@ -148,12 +160,12 @@ fn on_path(angle: f32) -> Vec3 {
 
 /// Toward the sun at `time` days.
 pub fn sun_direction(time: f32) -> Vec3 {
-    on_path(TimeOfDay(time).sun_angle())
+    on_path(sun_angle(time))
 }
 
 /// Toward the moon at `time` days: opposite the sun, so it rises as the sun sets.
 pub fn moon_direction(time: f32) -> Vec3 {
-    on_path(TimeOfDay(time).sun_angle() + PI + MOON_LAG)
+    on_path(sun_angle(time) + PI + MOON_LAG)
 }
 
 /// Runs the clock, wound with `[` and `]`, and moves the sun and moon to it: the sky, fog and
@@ -166,12 +178,12 @@ pub fn move_sky(
     mut moon: Query<&mut Transform, (With<Moon>, Without<Sun>)>,
 ) {
     let wound = keys.pressed(SCRUB_FORWARD_KEY) as i32 - keys.pressed(SCRUB_BACK_KEY) as i32;
-    clock.0 += time.delta_secs() * (1.0 / DAY_SECONDS + wound as f32 * SCRUB_SPEED);
+    clock.wind(time.delta_secs_f64(), wound);
     if let Ok(mut transform) = sun.single_mut() {
-        *transform = shining_from(sun_direction(clock.0));
+        *transform = shining_from(sun_direction(clock.of_day()));
     }
     if let Ok(mut transform) = moon.single_mut() {
-        *transform = shining_from(moon_direction(clock.0));
+        *transform = shining_from(moon_direction(clock.of_day()));
     }
 }
 
@@ -249,6 +261,22 @@ pub fn match_sky_horizon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_clock_keeps_running_in_a_long_lived_world() {
+        // a thousand days in, a frame at 144 fps still moves the clock its full step
+        let mut clock = TimeOfDay(1000.0 + START_TIME as f64);
+        let frames = 144 * 60;
+        for _ in 0..frames {
+            clock.wind(1.0 / 144.0, 0);
+        }
+        let minute = 60.0 / DAY_SECONDS;
+        assert!((clock.of_day() - (START_TIME + minute)).abs() < 1e-5);
+        // and winding back past the first midnight still tells the time of day
+        let mut clock = TimeOfDay(0.1);
+        clock.wind(2.0, -1);
+        assert!((0.0..1.0).contains(&clock.of_day()));
+    }
 
     #[test]
     fn test_sun_rises_peaks_and_sets_on_its_path() {
