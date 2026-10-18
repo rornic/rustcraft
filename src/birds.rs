@@ -1,5 +1,5 @@
 //! Birds by day: a murmuration of starlings wheeling round the camera, and now and then a
-//! skein of geese in a V. They roost at night.
+//! skein of geese in a V. They roost at night and shelter from the rain.
 use std::f32::consts::TAU;
 
 use bevy::{math::ops, prelude::*};
@@ -8,6 +8,7 @@ use crate::{
     chunks::generate::WATER_LEVEL,
     math::ease,
     sky::{daylight, TimeOfDay},
+    weather::Weather,
     wings::{spawn_winged, wing_mesh, Flap, WingPlugin},
     world::World,
 };
@@ -60,7 +61,7 @@ struct BirdAssets {
 #[derive(Resource, Default)]
 struct Murmuration {
     gathered: f32,
-    // whether it's the time for birds, or they're leaving
+    // whether it's the time and weather for birds, or they're leaving
     about: bool,
     // where it's heading round the camera, which wanders on so the flock never settles
     clock: f32,
@@ -113,15 +114,17 @@ fn swept_wing(span: f32, chord: f32) -> Mesh {
     ])
 }
 
-fn birds_about(clock: &TimeOfDay) -> bool {
-    daylight(clock) >= BIRD_DAY
+fn birds_about(clock: &TimeOfDay, weather: Option<&Weather>) -> bool {
+    daylight(clock) >= BIRD_DAY && weather.is_none_or(|weather| !weather.sheltering())
 }
 
-// The flock gathers round the camera by day and leaves at dusk.
+// The flock gathers round the camera by day and leaves at dusk or in the rain.
+#[allow(clippy::too_many_arguments)]
 fn gather_flock(
     mut commands: Commands,
     time: Res<Time>,
     clock: Res<TimeOfDay>,
+    weather: Option<Res<Weather>>,
     assets: Option<Res<BirdAssets>>,
     mut murmuration: ResMut<Murmuration>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
@@ -130,7 +133,7 @@ fn gather_flock(
     let (Some(assets), Ok(camera)) = (assets, camera.single()) else {
         return;
     };
-    let about = birds_about(&clock);
+    let about = birds_about(&clock, weather.as_deref());
     murmuration.about = about;
     let step = time.delta_secs() / FADE_SECONDS;
     murmuration.gathered =
@@ -268,10 +271,12 @@ const SKEIN_HEIGHT: f32 = 48.0;
 const GOOSE_SPEED: f32 = 11.0;
 const SKEIN_REACH: f32 = 230.0;
 
+#[allow(clippy::too_many_arguments)]
 fn fly_geese(
     mut commands: Commands,
     time: Res<Time>,
     clock: Res<TimeOfDay>,
+    weather: Option<Res<Weather>>,
     assets: Option<Res<BirdAssets>>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut geese: Query<(Entity, &mut Goose, &mut Transform)>,
@@ -301,7 +306,7 @@ fn fly_geese(
         return;
     }
     *due = t + rand::random_range(SKEIN_SECONDS.0..SKEIN_SECONDS.1);
-    if !birds_about(&clock) {
+    if !birds_about(&clock, weather.as_deref()) {
         return;
     }
     // across the camera's view, passing a little to one side of it

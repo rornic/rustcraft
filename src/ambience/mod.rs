@@ -34,6 +34,7 @@ use crate::{
 };
 use wind::Gust;
 pub use wind::{wind_strength, Wind, WindDials};
+pub(crate) use wind::{Dial, SAMPLE_RATE};
 
 pub struct AmbiencePlugin;
 
@@ -316,8 +317,11 @@ fn play_loops(mut commands: Commands, assets: Res<AssetServer>) {
 fn mix_loops(
     time: Res<Time>,
     around: Res<Surroundings>,
+    weather: Option<Res<crate::weather::Weather>>,
     mut loops: Query<(&Loop, &mut Activity, &mut AudioSink)>,
 ) {
+    // birds and crickets fall silent in the rain
+    let rain = weather.map_or(0.0, |weather| weather.rain);
     let follow = 1.0 - (-time.delta_secs() / LOOP_FOLLOW_SECONDS).exp();
     for (kind, mut activity, mut sink) in &mut loops {
         let active = kind.coming_and_going().map_or(1.0, |bursts| {
@@ -328,7 +332,11 @@ fn mix_loops(
         let current = sink.volume().to_linear();
         // square-rooted, as loudness goes by power: a wood a third as thick as the deepest
         // forest sounds about 5 dB quieter, not 10
-        let wanted = kind.level(&around).sqrt() * kind.gain() * active;
+        let sheltering = match kind {
+            Loop::Forest | Loop::Crickets => 1.0 - rain,
+            _ => 1.0,
+        };
+        let wanted = kind.level(&around).sqrt() * kind.gain() * active * sheltering;
         let volume = current + (wanted - current) * follow;
         sink.set_volume(Volume::Linear(volume));
         // a loop no one can hear is paused, so it isn't decoded for nothing

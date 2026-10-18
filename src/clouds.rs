@@ -80,6 +80,17 @@ pub struct CloudMaterial {
     curvature: Handle<ShaderBuffer>,
 }
 
+impl CloudMaterial {
+    /// Darkens the clouds to `shade` of their colour, as storm clouds, see `weather.rs`.
+    pub fn set_shade(&mut self, shade: f32) {
+        self.color = LinearRgba::rgb(
+            CLOUD_COLOR.red * shade,
+            CLOUD_COLOR.green * shade,
+            CLOUD_COLOR.blue * shade,
+        );
+    }
+}
+
 impl Material for CloudMaterial {
     // clouds are far above anything they could shade, see `CLOUD_BASE`
     fn enable_prepass() -> bool {

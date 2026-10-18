@@ -27,6 +27,7 @@ use rustcraft::sky::{
 };
 use rustcraft::sky_dome::{NightSkyPlugin, SunGlarePlugin};
 use rustcraft::tonemap::{dry_color_grading, TONEMAPPING};
+use rustcraft::weather::WeatherPlugin;
 
 #[allow(clippy::too_many_arguments)]
 fn setup_scene(
@@ -201,6 +202,7 @@ fn main() {
             DebugOverlayPlugin,
             AmbiencePlugin,
             CritterPlugin,
+            WeatherPlugin,
             BirdPlugin,
         ))
         .insert_resource(winit_settings())
