@@ -70,7 +70,7 @@ pub fn play_wind(mut commands: Commands, mut winds: ResMut<Assets<Wind>>, dials:
     let wind = winds.add(Wind {
         dials: dials.clone(),
     });
-    commands.spawn((AudioPlayer(wind), PlaybackSettings::LOOP));
+    commands.spawn((AudioPlayer(wind), PlaybackSettings::ONCE));
 }
 
 /// The wind's strength from how high the camera is over the ground or sea, and how fast it's

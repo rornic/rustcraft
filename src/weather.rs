@@ -370,7 +370,7 @@ fn spawn_weather(
         AudioPlayer(sounds.add(RainSound {
             level: weather.sound.clone(),
         })),
-        PlaybackSettings::LOOP,
+        PlaybackSettings::ONCE,
     ));
 }
 
