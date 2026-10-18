@@ -1,4 +1,4 @@
-use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
+use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle};
 use super::flora::flora_at;
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
@@ -145,7 +145,11 @@ pub fn generate_chunk_mesh(
         MeshStyle {
             ambient_occlusion: true,
             textured: true,
-            solid_leaves,
+            inner_leaves: if solid_leaves {
+                InnerLeaves::Hidden
+            } else {
+                InnerLeaves::Apart
+            },
         },
         &tint,
         &light,

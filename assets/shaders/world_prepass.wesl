@@ -8,8 +8,8 @@ import bevy_pbr::{
 import bevy_render::globals::Globals;
 import super::block_texture::{block_alpha, material_fade};
 import super::dither::dither_threshold;
-import super::foliage::{is_flora, is_leaf, swayed};
-import super::curvature::{curved, curved_last};
+import super::foliage::{is_flora, is_leaf, leaf_holes_filled, swayed};
+import super::curvature::{curved, curved_last, eye};
 
 // the prepass's view bindings are the view and then the frame's globals, see Bevy's `PrepassPipeline`
 @group(0) @binding(1) var<uniform> globals: Globals;
@@ -74,6 +74,14 @@ fn cut_leaf_holes(in: prepass_io::VertexOutput) {
 @if(!SOLID_LEAVES) {
 @if(VERTEX_UVS_B) {
     if in.uv_b.y > 0.5 {
+        return;
+    }
+}
+    // the view's depth fills in far leaves' holes as the main pass does, with the same dither,
+    // see `leaf_holes_filled`. The sun's shadows, the orthographic views, still cast through
+    // them: filled in, a crown's outside alone shades far more than all its leaves did.
+@if(!VIEW_PROJECTION_ORTHOGRAPHIC) {
+    if is_leaf(in.color.a) && dither_threshold(in.position.xy) < leaf_holes_filled(in.world_position.xyz, eye()) {
         return;
     }
 }

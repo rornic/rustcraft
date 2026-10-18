@@ -1,4 +1,4 @@
-use super::buffers::{ChunkMeshes, GrassTint, MeshStyle, TEXTURE_MAX_CELL_SIZE};
+use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle, TEXTURE_MAX_CELL_SIZE};
 use super::canopy::{
     crown_layers, Canopy, BOX_CROWN_CELL, CANOPY_CELL, CANOPY_SHADE, CANOPY_SHADE_SPAN,
     FOREST_COVER, FOREST_DARKEN, TREE_MAX_CELL, TRUNK_MAX_CELL,
@@ -574,14 +574,15 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
         )
     });
     let textured = cell_size <= TEXTURE_MAX_CELL_SIZE;
-    // untextured leaves are drawn solid, so hide the leaves behind them
+    // untextured leaves are drawn solid, and textured ones are all past `INNER_LEAVES_REACH`, so
+    // have their holes filled: both hide the leaves behind them
     let meshes = mesh_blocks(
         &blocks,
         cell_size,
         MeshStyle {
             ambient_occlusion: true,
             textured,
-            solid_leaves: !textured,
+            inner_leaves: InnerLeaves::Hidden,
         },
         &tint,
         &light,

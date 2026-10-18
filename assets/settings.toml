@@ -1,7 +1,8 @@
 [renderer]
 render_distance = 1024
-full_detail_distance = 16
+full_detail_distance = 24
 lod_level_scale = 2
+lod_base_distance = 16
 lod_fade_seconds = 1.5
 shadow_distance = 64
 shadow_cascades = 3

@@ -149,10 +149,42 @@ fn test_full_detail_distance_comes_from_layout() {
     assert_eq!(20, near.full_detail_reach());
 }
 
+#[test]
+fn test_full_detail_reaches_further_with_the_levels_where_they_were() {
+    let base = LodLayout::new(16, 1024, 2);
+    let further = base.with_full_detail_distance(24);
+    assert_eq!(24.0, further.reach(0));
+    for level in 1..=base.max_level {
+        assert_eq!(base.reach(level), further.reach(level));
+    }
+    assert_eq!(base.max_level, further.max_level);
+    let anchor = chunk(0, 5, 0);
+    assert!(further.full_detail(chunk(21, 5, 0), anchor));
+    assert!(!base.full_detail(chunk(21, 5, 0), anchor));
+    assert!(further.full_detail_reach() > base.full_detail_reach());
+}
+
+#[test]
+fn test_full_detail_always_leaves_level_one_a_ring() {
+    // level 1 reaches 32, so full detail stops short of it however far it's asked to reach
+    let layout = LodLayout::new(16, 1024, 2).with_full_detail_distance(40);
+    assert_eq!(28.0, layout.reach(0));
+    assert_eq!(32.0, layout.reach(1));
+    let anchor = chunk(0, 5, 0);
+    let selected = select_lods(anchor, layout, BAND);
+    assert!(selected.iter().any(|key| key.level == 1));
+}
+
+// Full detail out past where the levels scale from, as the shipped settings draw.
+fn further_full_detail() -> LodLayout {
+    LodLayout::new(16, 256, 2).with_full_detail_distance(24)
+}
+
 fn assert_exact_cover(anchor: ChunkCoordinate, max_level: u8) {
     assert_exact_cover_with(anchor, layout(max_level));
     // further out per level, and a render distance short of the last level's reach
     assert_exact_cover_with(anchor, LodLayout::new(8, 100, 4));
+    assert_exact_cover_with(anchor, further_full_detail());
 }
 
 fn assert_exact_cover_with(anchor: ChunkCoordinate, layout: LodLayout) {
@@ -201,7 +233,7 @@ fn test_stand_ins_cover_exactly_the_full_detail_chunks() {
 
 #[test]
 fn test_selection_neighbours_differ_by_at_most_one_level() {
-    for layout in [layout(3), LodLayout::new(8, 128, 4)] {
+    for layout in [layout(3), LodLayout::new(8, 128, 4), further_full_detail()] {
         let anchor = chunk(3, 4, -2);
         let selected = select_lods(anchor, layout, BAND);
         let level_at = |c: ChunkCoordinate| -> u8 {

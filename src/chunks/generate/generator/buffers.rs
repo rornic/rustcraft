@@ -215,26 +215,46 @@ pub(super) struct FanQuad<'a> {
     pub(super) reversed: bool,
 }
 
-// `solid_leaves` draws leaves without their holes, so they hide the leaves behind them; `textured`
-// is whether faces draw their own tile, not the one their block's colour is read from.
+// `textured` is whether faces draw their own tile, not the one their block's colour is read from.
 #[derive(Clone, Copy)]
 pub(super) struct MeshStyle {
     pub(super) ambient_occlusion: bool,
     pub(super) textured: bool,
-    pub(super) solid_leaves: bool,
+    pub(super) inner_leaves: InnerLeaves,
+}
+
+// The faces between two leaves, which only show through the leaves' holes. In a forest of big
+// crowns they're most of its faces.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum InnerLeaves {
+    // left out: leaves drawn solid hide them, as do leaves past `INNER_LEAVES_REACH`, whose
+    // holes are filled
+    Hidden,
+    // meshed apart, into `ChunkMeshes::inner_leaves`, drawn only near the camera
+    Apart,
 }
 
 pub struct ChunkMeshes {
     pub opaque: Mesh,
     pub water: Option<Mesh>,
+    /// The faces between leaves, drawn only within `INNER_LEAVES_REACH` of the camera.
+    pub inner_leaves: Option<Mesh>,
 }
 
 impl ChunkMeshes {
     /// Whether there's anything to draw: buried chunks mesh to nothing.
     pub fn has_geometry(&self) -> bool {
-        self.opaque.count_vertices() > 0 || self.water.is_some()
+        self.opaque.count_vertices() > 0 || self.water.is_some() || self.inner_leaves.is_some()
     }
 }
+
+/// Within this many blocks of the camera leaves show the leaves behind them through their holes.
+/// Farther out their holes fill in with those leaves' shade, dithered in over
+/// `INNER_LEAVES_BAND` blocks, and the faces between leaves aren't drawn: a leaf's hole is about
+/// a pixel by then, and a dense forest's crowns hold several times the faces on their outsides.
+pub const INNER_LEAVES_REACH: f32 = 64.0;
+
+pub const INNER_LEAVES_BAND: f32 = 16.0;
 
 // Tints grass by the climate it grows in. Climate drifts over thousands of blocks, so it's
 // sampled at the mesh's four corners and blended across it, rather than at every vertex.

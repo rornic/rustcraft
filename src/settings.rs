@@ -20,8 +20,11 @@ pub struct RendererSettings {
     /// How far terrain is drawn at full detail, in chunks.
     pub full_detail_distance: u32,
     /// Each LOD level reaches this many times as far as the one before it, starting
-    /// from the full-detail distance.
+    /// from `lod_base_distance`: level n reaches it times this to the n.
     pub lod_level_scale: u32,
+    /// The distance, in chunks, LOD levels scale out from, the full-detail distance if unset.
+    /// Full detail reaching further than this only narrows the first LOD level's ring.
+    pub lod_base_distance: Option<u32>,
     /// How long swapping between LOD levels takes to cross-fade, in seconds.
     pub lod_fade_seconds: f32,
     /// How far the sun casts shadows, in chunks.
@@ -50,10 +53,11 @@ impl Settings {
 impl RendererSettings {
     pub fn lod_layout(&self) -> LodLayout {
         LodLayout::new(
-            self.full_detail_distance,
+            self.lod_base_distance.unwrap_or(self.full_detail_distance),
             self.render_distance,
             self.lod_level_scale,
         )
+        .with_full_detail_distance(self.full_detail_distance)
     }
 }
 
@@ -63,6 +67,7 @@ impl Default for RendererSettings {
             render_distance: 8,
             full_detail_distance: 32,
             lod_level_scale: 4,
+            lod_base_distance: None,
             lod_fade_seconds: 1.5,
             shadow_distance: 64,
             shadow_cascades: 3,
@@ -94,8 +99,13 @@ mod tests {
     fn test_settings_file_parses() {
         let file = std::fs::read_to_string("assets/settings.toml").unwrap();
         let settings: Settings = toml::from_str(&file).unwrap();
-        assert_eq!(16, settings.renderer.full_detail_distance);
+        assert_eq!(24, settings.renderer.full_detail_distance);
+        assert_eq!(Some(16), settings.renderer.lod_base_distance);
         assert_eq!(2, settings.renderer.lod_level_scale);
+        // full detail reaches further than the levels scale from, with level 1 still between it and level 2
+        let layout = settings.renderer.lod_layout();
+        assert_eq!(24.0, layout.reach(0));
+        assert_eq!([32.0, 64.0], [layout.reach(1), layout.reach(2)]);
         // the debug switches ship off
         assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);
     }

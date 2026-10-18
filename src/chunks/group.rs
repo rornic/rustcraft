@@ -1,9 +1,12 @@
 use bevy::{
     asset::{Assets, RenderAssetUsages},
-    camera::{primitives::Aabb, visibility::Visibility},
+    camera::{primitives::Aabb, visibility::Visibility, Camera},
     ecs::{
+        change_detection::DetectChangesMut,
         component::Component,
         entity::Entity,
+        hierarchy::ChildOf,
+        query::With,
         system::{Commands, Query, Res, ResMut},
     },
     math::Vec3,
@@ -12,13 +15,13 @@ use bevy::{
     render::mesh::{Indices, Mesh, PrimitiveTopology, VertexAttributeValues},
     tasks::futures,
     tasks::{AsyncComputeTaskPool, Task},
-    transform::components::Transform,
+    transform::components::{GlobalTransform, Transform},
 };
 
 use super::{
     chunk::ChunkCoordinate,
     chunk_loader::{ChunkLoader, Unsettled},
-    generate::generator::ChunkMeshes,
+    generate::generator::{ChunkMeshes, INNER_LEAVES_REACH},
     lod::LodKey,
 };
 use crate::chunks::chunk::CHUNK_SIZE;
@@ -48,6 +51,11 @@ pub struct MeshedChunk;
 /// A chunk drawn as part of its group.
 #[derive(Component)]
 pub struct GroupedChunk;
+
+/// Draws the faces between its group's leaves, see `ChunkMeshes::inner_leaves`. Hidden unless
+/// the group is in `INNER_LEAVES_REACH` of the camera.
+#[derive(Component)]
+pub struct InnerLeafFaces;
 
 fn group_aabb() -> Aabb {
     let width = (2 * CHUNK_SIZE) as f32;
@@ -107,6 +115,38 @@ pub fn build_groups(
     }
 }
 
+/// Shows the faces between leaves of the groups near the camera, and hides the rest, whose leaves
+/// have their holes filled. A group is near if any of it is, so it's never missing faces that
+/// would show through a hole.
+pub fn show_inner_leaves(
+    camera: Query<&GlobalTransform, (With<Camera>, With<ChildOf>)>,
+    groups: Query<&ChunkGroup>,
+    mut inner_leaves: Query<(&ChildOf, &mut Visibility), With<InnerLeafFaces>>,
+) {
+    let Ok(camera) = camera.single() else {
+        return;
+    };
+    let eye = camera.translation();
+    for (parent, mut visibility) in &mut inner_leaves {
+        let Ok(group) = groups.get(parent.parent()) else {
+            continue;
+        };
+        let near = inner_leaves_near(group.key, eye);
+        visibility.set_if_neq(if near {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+}
+
+// Whether any of the group at `key` is within `INNER_LEAVES_REACH` of `eye`.
+fn inner_leaves_near(key: LodKey, eye: Vec3) -> bool {
+    let min = key.min_block().as_vec3();
+    let max = min + Vec3::splat((2 * CHUNK_SIZE) as f32);
+    eye.clamp(min, max).distance(eye) < INNER_LEAVES_REACH
+}
+
 /// Draws groups whose merged meshes are ready.
 pub fn load_groups(
     mut commands: Commands,
@@ -134,6 +174,20 @@ pub fn load_groups(
                         MeshMaterial3d(water_material),
                         Transform::default(),
                         group_aabb(),
+                    ));
+                });
+            }
+            if let Some(inner_leaves) = merged.inner_leaves {
+                let material = loader.material.clone();
+                commands.entity(entity).with_children(|parent| {
+                    parent.spawn((
+                        InnerLeafFaces,
+                        Mesh3d(meshes.add(inner_leaves)),
+                        MeshMaterial3d(material),
+                        Transform::default(),
+                        group_aabb(),
+                        // shown by `show_inner_leaves` once it's near
+                        Visibility::Hidden,
                     ));
                 });
             }
@@ -222,9 +276,11 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
 pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
     let mut opaque = Vec::new();
     let mut water = Vec::new();
+    let mut inner_leaves = Vec::new();
     for (offset, meshes) in parts {
         opaque.push((offset, meshes.opaque));
         water.extend(meshes.water.map(|mesh| (offset, mesh)));
+        inner_leaves.extend(meshes.inner_leaves.map(|mesh| (offset, mesh)));
     }
     ChunkMeshes {
         // an empty mesh, so there's always something to hand back
@@ -235,6 +291,7 @@ pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
             )
         }),
         water: merge_meshes(water),
+        inner_leaves: merge_meshes(inner_leaves),
     }
 }
 
@@ -245,11 +302,13 @@ mod tests {
     use bevy::math::{I64Vec3, U16Vec3, Vec3};
     use bevy::render::mesh::{Indices, Mesh};
 
-    use super::merge_chunk_meshes;
+    use super::{inner_leaves_near, merge_chunk_meshes};
     use crate::block::BlockType;
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
+    use crate::chunks::generate::generator::INNER_LEAVES_REACH;
     use crate::chunks::generate::generator::{generate_chunk_mesh, ChunkMeshes};
     use crate::chunks::generate::noise::NoiseGenerator;
+    use crate::chunks::lod::LodKey;
 
     fn block_mesh(at: U16Vec3) -> ChunkMeshes {
         let mut chunk = ChunkData::default();
@@ -310,6 +369,45 @@ mod tests {
         assert!(indices
             .iter()
             .all(|&i| (i as usize) < merged.opaque.count_vertices()));
+    }
+
+    #[test]
+    fn test_faces_between_leaves_merge_apart() {
+        let mut chunk = ChunkData::default();
+        chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Leaves);
+        chunk.set_block_at(U16Vec3::new(5, 4, 4), BlockType::Leaves);
+        let meshes = generate_chunk_mesh(
+            Arc::new(chunk),
+            vec![None; 26],
+            ChunkCoordinate(I64Vec3::ZERO),
+            &NoiseGenerator::new(1),
+            false,
+        );
+        let inner = meshes.inner_leaves.as_ref().unwrap().count_vertices();
+        let merged = merge_chunk_meshes(vec![
+            (Vec3::ZERO, meshes),
+            (Vec3::ZERO, block_mesh(U16Vec3::ONE)),
+        ]);
+        assert_eq!(inner, merged.inner_leaves.unwrap().count_vertices());
+    }
+
+    #[test]
+    fn test_inner_leaves_are_near_if_any_of_their_group_is() {
+        let key = LodKey::containing(ChunkCoordinate(I64Vec3::ZERO), 1);
+        // inside the group, and just off its far corner
+        assert!(inner_leaves_near(key, Vec3::splat(10.0)));
+        assert!(inner_leaves_near(
+            key,
+            Vec3::new(32.0 + INNER_LEAVES_REACH - 1.0, 5.0, 5.0)
+        ));
+        assert!(!inner_leaves_near(
+            key,
+            Vec3::new(32.0 + INNER_LEAVES_REACH + 1.0, 5.0, 5.0)
+        ));
+        assert!(!inner_leaves_near(
+            key,
+            Vec3::new(-INNER_LEAVES_REACH - 1.0, 5.0, 5.0)
+        ));
     }
 
     #[test]

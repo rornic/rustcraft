@@ -2,11 +2,18 @@ use super::key::LodKey;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::generate::columns::COARSE_CELL;
 
+/// The narrowest level 1's ring may be, in chunks, however far full detail reaches: two of its
+/// nodes, so the step from full detail to level 2 is never made at once.
+const LEVEL_ONE_MIN_RING: f32 = 4.0;
+
 /// How the world is split into detail levels, set from the renderer settings.
 #[derive(Debug, Copy, Clone)]
 pub struct LodLayout {
     /// Chunks within this many chunks of the camera are drawn at full detail.
     pub full_detail_distance: f32,
+    // Level n reaches this many chunks times `level_scale` to the n. Full detail can reach
+    // further than this, narrowing level 1's ring, see `with_full_detail_distance`.
+    lod_base: f32,
     /// Each LOD level up to the set render distance reaches this many times as far as the one before.
     pub level_scale: f32,
     // The levels that draw out to the set render distance. Any beyond, drawing further for a
@@ -19,11 +26,14 @@ pub struct LodLayout {
 }
 
 impl LodLayout {
-    /// Uses the fewest LOD levels that draw terrain out to `render_distance` chunks.
+    /// Uses the fewest LOD levels that draw terrain out to `render_distance` chunks, with full
+    /// detail out to `full_detail_distance` chunks and each level after reaching `level_scale`
+    /// times as far as the one before.
     pub fn new(full_detail_distance: u32, render_distance: u32, level_scale: u32) -> Self {
         let full_detail_distance = full_detail_distance.max(1) as f32;
         let layout = Self {
             full_detail_distance,
+            lod_base: full_detail_distance,
             // below 2, a level's nodes would be wider than the ring it draws
             level_scale: level_scale.max(2) as f32,
             scaled_levels: u8::MAX,
@@ -35,6 +45,18 @@ impl LodLayout {
             scaled_levels: layout.max_level,
             ..layout
         }
+    }
+
+    /// This layout with full detail out to `distance` chunks instead, and every LOD level reaching
+    /// as far as it did: only level 1's ring moves, starting where full detail ends. It keeps
+    /// `LEVEL_ONE_MIN_RING` however far full detail is asked to reach.
+    pub fn with_full_detail_distance(self, distance: u32) -> Self {
+        let full_detail_distance = (distance.max(1) as f32).min(self.reach(1) - LEVEL_ONE_MIN_RING);
+        Self {
+            full_detail_distance,
+            ..self
+        }
+        .with_render_distance(self.render_distance)
     }
 
     /// This layout drawing out to `render_distance` chunks instead, adding or dropping levels
@@ -58,9 +80,12 @@ impl LodLayout {
 
     /// How far, in chunks, `level` draws out to - level 0 being full detail.
     pub fn reach(self, level: u8) -> f32 {
+        if level == 0 {
+            return self.full_detail_distance;
+        }
         let scaled = level.min(self.scaled_levels);
         let doubled = level - scaled;
-        self.full_detail_distance * self.level_scale.powi(scaled as i32) * 2f32.powi(doubled as i32)
+        self.lod_base * self.level_scale.powi(scaled as i32) * 2f32.powi(doubled as i32)
     }
 
     /// How far, in chunks, terrain is built from full-detail regions: LOD nodes with coarser
