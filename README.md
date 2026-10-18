@@ -1,18 +1,30 @@
 # rustcraft
 
-Another Minecraft clone, originally written using [specs](https://github.com/amethyst/specs) and [glium](https://github.com/glium/glium) but recently migrated to Bevy.
+A voxel survival game in Rust and [Bevy](https://bevy.org), where nature is the only enemy and you can see for miles.
+
+It began as a Minecraft clone and is turning into something harsher: the player against the elements, not a creative sandbox. There are no monsters and no strip mining. The threats are cold, wet, steep ground, storms and fire.
 
 ```
 cargo run --release
 ```
 
+On Linux, Bevy's audio and input need ALSA and udev headers (`libasound2-dev` and `libudev-dev` on Debian and Ubuntu).
+
 ![Image of rustcraft](images/readme.jpg)
 
-## Planned work
+## What's there
 
-- Chunk LODs for vastly improved render distance.
-- Better terrain generation and features.
-- Player controller.
+- Terrain drawn out to a curved horizon, with LODs, continents, biomes and trees.
+- A day and night cycle with a moon and stars, clouds lit by the sun, and water that follows the wind.
+- Storms with rain, lightning, thunder and rainbows, running on the game clock.
+- Ambient sound, ground flora swaying in the wind, insects and birds.
+
+## Where it's going
+
+- **Systems that interact.** Materials burn, rot and collapse. Fire spreads by material, wind and dryness, and rain puts it out.
+- **Seasons and climate.** Gather in summer, prepare in autumn, survive winter. Body temperature, wetness and injuries per body part.
+- **Distance as a cost.** You can't carry much. Moving goods in bulk takes carts, pack animals and boats, so every long trip is an expedition.
+- **A persistent world.** Unkept buildings decay into ruins, iron is scarce and shared, and raiding is a slow, planned siege rather than a quick fight.
 
 ## License
 
