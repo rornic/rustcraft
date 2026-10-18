@@ -13,5 +13,6 @@ pub mod settings;
 pub mod sky;
 pub mod sky_dome;
 pub mod tonemap;
+pub mod weather;
 pub mod wings;
 pub mod world;

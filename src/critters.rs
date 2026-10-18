@@ -14,6 +14,7 @@ use crate::{
     block::BlockType,
     math::ease,
     sky::{daylight, TimeOfDay},
+    weather::Weather,
     wings::{spawn_winged, wing_mesh, Flap, WingPlugin},
     world::World,
 };
@@ -223,11 +224,13 @@ fn is_meadow(block: BlockType) -> bool {
     block == BlockType::Grass || block.is_flora()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_critters(
     mut commands: Commands,
     assets: Option<Res<CritterAssets>>,
     world: Res<World>,
     clock: Res<TimeOfDay>,
+    weather: Option<Res<Weather>>,
     camera: Query<&GlobalTransform, With<Camera3d>>,
     mut critters: Query<(Entity, &mut Critter, &Transform, Has<Butterfly>)>,
 ) {
@@ -237,7 +240,9 @@ fn spawn_critters(
     let eye = camera.translation();
     let ahead = Some(camera.forward().with_y(0.0));
     let day = daylight(&clock);
-    let underwater = world.get_block_at(eye.floor().as_i64vec3()) == BlockType::Water;
+    // nothing's out in the rain
+    let sheltering = world.get_block_at(eye.floor().as_i64vec3()) == BlockType::Water
+        || weather.is_some_and(|weather| weather.sheltering());
     let (mut butterflies, mut fireflies) = (0, 0);
     for (entity, mut critter, transform, is_butterfly) in &mut critters {
         let wrong_time = if is_butterfly {
@@ -245,7 +250,7 @@ fn spawn_critters(
         } else {
             day > FIREFLY_NIGHT
         };
-        if wrong_time || underwater {
+        if wrong_time || sheltering {
             critter.leaving = true;
         }
         if transform.translation.distance(eye) > FAR || (critter.leaving && critter.life <= 0.0) {
@@ -258,7 +263,7 @@ fn spawn_critters(
             fireflies += 1;
         }
     }
-    if underwater {
+    if sheltering {
         return;
     }
     for _ in 0..SEARCHES {

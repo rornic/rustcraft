@@ -30,7 +30,7 @@ pub const FOG_MAX_OPACITY: f32 = 0.8;
 /// Where the sun is at noon: its path across the sky is the great circle through this and the horizon, see `path_basis`.
 pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
 /// Seconds in a game day.
-const DAY_SECONDS: f32 = 600.0;
+pub const DAY_SECONDS: f32 = 600.0;
 /// Days of the clock the world starts at: 0 is midnight, 0.5 is noon.
 pub const START_TIME: f32 = 0.4;
 // How fast `[` and `]` wind the clock, in days a second.
@@ -60,6 +60,16 @@ const MOON_BOOST: f32 = 400.0;
 /// How bright moonlight is in the world shaders at full moon, as `SUN_BRIGHTNESS` is for sunlight.
 const MOON_BRIGHTNESS: f32 = 0.1;
 
+/// The sun's illuminance in clear air, which a storm dims, see `weather.rs`.
+pub fn sun_illuminance() -> f32 {
+    SUN_BRIGHTNESS * SKY_GAIN / camera_exposure().exposure()
+}
+
+/// The moon's illuminance in clear air, see `sun_illuminance`.
+pub fn moon_illuminance() -> f32 {
+    MOON_BRIGHTNESS * SKY_GAIN / MOON_BOOST / camera_exposure().exposure()
+}
+
 /// How much it's day, 0 at night to 1 once the sun's well up, for what's about by day.
 pub fn daylight(clock: &TimeOfDay) -> f32 {
     ((sun_direction(clock.0).y + 0.05) / 0.25).clamp(0.0, 1.0)
@@ -70,7 +80,7 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
     (
         DirectionalLight {
             color: SUN_COLOR,
-            illuminance: SUN_BRIGHTNESS * SKY_GAIN / camera_exposure().exposure(),
+            illuminance: sun_illuminance(),
             shadow_maps_enabled: true,
             ..Default::default()
         },
@@ -104,7 +114,7 @@ pub fn moon() -> impl Bundle {
     (
         DirectionalLight {
             color: MOON_COLOR,
-            illuminance: MOON_BRIGHTNESS * SKY_GAIN / MOON_BOOST / camera_exposure().exposure(),
+            illuminance: moon_illuminance(),
             shadow_maps_enabled: false,
             ..Default::default()
         },

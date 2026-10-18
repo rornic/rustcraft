@@ -37,7 +37,7 @@ impl WindDials {
 }
 
 /// An f32 shared between threads through its bits, so the sounds made as they play can read
-/// what they follow.
+/// what they follow, see `weather::RainSound` too.
 #[derive(Clone, Default)]
 pub(crate) struct Dial(Arc<AtomicU32>);
 
@@ -58,6 +58,9 @@ const FULL_WIND_ALTITUDE: f32 = 250.0;
 // How fast the air rushes past a camera flying flat out, in blocks a second, adding to the wind.
 const RUSH_SPEED: f32 = 80.0;
 const RUSH_GAIN: f32 = 0.35;
+// How strong the wind blows on the ground in the heaviest rain: strong enough to keep blowing
+// between spells, see `STEADY`.
+const STORM_WIND: f32 = 0.6;
 // Underwater the wind is only a murmur through the surface.
 const UNDERWATER_WIND: f32 = 0.02;
 // How long the wind takes to follow a change in where the camera is, in seconds.
@@ -79,11 +82,17 @@ pub fn wind_strength(altitude: f32, speed: f32) -> f32 {
     (GROUND_BREEZE + (1.0 - GROUND_BREEZE) * height + rush).min(1.0)
 }
 
-pub fn update_wind(time: Res<Time>, around: Res<Surroundings>, dials: Res<WindDials>) {
+pub fn update_wind(
+    time: Res<Time>,
+    around: Res<Surroundings>,
+    dials: Res<WindDials>,
+    weather: Option<Res<crate::weather::Weather>>,
+) {
+    let storm = weather.map_or(0.0, |weather| weather.rain) * STORM_WIND;
     let wanted = if around.underwater {
         UNDERWATER_WIND
     } else {
-        wind_strength(around.altitude, around.speed)
+        wind_strength(around.altitude, around.speed).max(storm)
     };
     let follow = 1.0 - (-time.delta_secs() / WIND_FOLLOW_SECONDS).exp();
     let current = dials.strength.get();
