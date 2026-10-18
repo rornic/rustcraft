@@ -187,8 +187,13 @@ pub fn apply_fades(
                 material.0 = chunk.clone();
             }
         }
-        // water is drawn by a child entity with its own material
+        // water and the faces between leaves are drawn by child entities with their own materials
         for &child in children.into_iter().flatten() {
+            if let Ok(mut material) = chunk_materials.get_mut(child) {
+                if material.0 != *chunk {
+                    material.0 = chunk.clone();
+                }
+            }
             if let Ok((mut material, solid)) = water_materials.get_mut(child) {
                 let water = if solid { solid_water } else { water };
                 if material.0 != *water {

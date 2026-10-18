@@ -18,7 +18,7 @@ use chunk_loader::{
     gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
 };
 use fade::{apply_fades, FadeMaterials};
-use group::{build_groups, load_groups};
+use group::{build_groups, load_groups, show_inner_leaves};
 use lod::{
     load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_lod_selection, LodLoader,
 };
@@ -53,6 +53,7 @@ impl Plugin for TerrainPlugin {
                     .after(gather_chunks)
                     .before(unload_chunks),
                 unload_chunks,
+                show_inner_leaves.after(load_groups),
             ),
         );
     }

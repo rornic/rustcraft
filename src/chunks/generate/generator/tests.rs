@@ -7,7 +7,7 @@ use bevy::render::mesh::{Indices, Mesh, VertexAttributeValues};
 
 use crate::block::{BlockType, Tile};
 
-use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
+use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle};
 use super::chunk::{generate_chunk, generate_chunk_mesh};
 use super::lod::LodBlocks;
 use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
@@ -20,12 +20,12 @@ use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
 
-// solid leaves, as every LOD draws them
+// leaves hiding the leaves behind them, as every LOD draws them
 fn style(ambient_occlusion: bool, textured: bool) -> MeshStyle {
     MeshStyle {
         ambient_occlusion,
         textured,
-        solid_leaves: true,
+        inner_leaves: InnerLeaves::Hidden,
     }
 }
 
@@ -1118,10 +1118,49 @@ fn leaf_cube_chunk() -> ChunkData {
 }
 
 #[test]
-fn test_full_detail_leaves_show_the_leaves_behind_them() {
+fn test_full_detail_leaves_mesh_the_leaves_behind_them_apart() {
     // blocks 4 and 5 meet at 4.5, where the faces between them show through the holes
-    let mesh = mesh_chunk(leaf_cube_chunk()).opaque;
-    assert!(vertices_in_plane(&mesh, 4.5) > 0);
+    let meshes = mesh_chunk(leaf_cube_chunk());
+    let inner = meshes.inner_leaves.expect("faces between leaves");
+    assert!(vertices_in_plane(&inner, 4.5) > 0);
+    // and only those: the shell is drawn with the rest of the chunk
+    assert_eq!(
+        0,
+        vertices_in_plane(&inner, 3.5) + vertices_in_plane(&inner, 5.5)
+    );
+    assert_eq!(0, vertices_in_plane(&meshes.opaque, 4.5));
+    assert!(
+        vertices_in_plane(&meshes.opaque, 3.5) > 0 && vertices_in_plane(&meshes.opaque, 5.5) > 0
+    );
+}
+
+#[test]
+fn test_leaves_alone_have_no_inner_faces() {
+    let mut chunk = ChunkData::default();
+    chunk.set_block_at(U16Vec3::new(4, 4, 4), BlockType::Leaves);
+    chunk.set_block_at(U16Vec3::new(5, 4, 4), BlockType::Stone);
+    let meshes = mesh_chunk(chunk);
+    assert!(meshes.inner_leaves.is_none());
+}
+
+#[test]
+fn test_leaves_on_the_chunks_edge_keep_their_faces_with_the_rest() {
+    // past the edge the leaves may be drawn by a LOD node, with none just there
+    let mut chunk = ChunkData::default();
+    chunk.set_block_at(U16Vec3::new(15, 4, 4), BlockType::Leaves);
+    let mut east = ChunkData::default();
+    east.set_block_at(U16Vec3::new(0, 4, 4), BlockType::Leaves);
+    let mut neighbours = vec![None; 26];
+    neighbours[neighbor_26_index(1, 0, 0)] = Some(Arc::new(east));
+    let meshes = generate_chunk_mesh(
+        Arc::new(chunk),
+        neighbours,
+        ChunkCoordinate(I64Vec3::new(0, 40, 0)),
+        &NoiseGenerator::new(3),
+        false,
+    );
+    assert!(meshes.inner_leaves.is_none());
+    assert!(vertices_in_plane(&meshes.opaque, 15.5) > 0);
 }
 
 #[test]
@@ -1133,8 +1172,9 @@ fn test_full_detail_solid_leaves_hide_the_leaves_behind_them() {
         coord,
         &NoiseGenerator::new(3),
         true,
-    )
-    .opaque;
+    );
+    assert!(mesh.inner_leaves.is_none());
+    let mesh = mesh.opaque;
     assert_eq!(0, vertices_in_plane(&mesh, 4.5));
     assert!(vertices_in_plane(&mesh, 3.5) > 0 && vertices_in_plane(&mesh, 5.5) > 0);
 }

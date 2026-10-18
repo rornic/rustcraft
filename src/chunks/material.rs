@@ -18,6 +18,7 @@ use bevy::{
 
 use crate::block::Tile;
 use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::generate::generator::{INNER_LEAVES_BAND, INNER_LEAVES_REACH};
 use crate::chunks::generate::WATER_LEVEL;
 use crate::chunks::lod::{LodLayout, SOLID_WATER_LEVEL};
 use crate::settings::DebugSettings;
@@ -181,8 +182,15 @@ impl Material for ChunkMaterial {
             "FIRST_FLORA_CELL".into(),
             Tile::FIRST_FLORA.atlas_cell() as u32,
         );
+        // leaves' holes fill in past where the faces between leaves are drawn, see `InnerLeaves`
+        let inner_leaves_reach =
+            ShaderDefVal::UInt("INNER_LEAVES_REACH".into(), INNER_LEAVES_REACH as u32);
+        let inner_leaves_band =
+            ShaderDefVal::UInt("INNER_LEAVES_BAND".into(), INNER_LEAVES_BAND as u32);
         let mut defs = vec![
             leaf_cell,
+            inner_leaves_reach,
+            inner_leaves_band,
             grass_top_cell,
             dirt_cell,
             first_flora_cell,

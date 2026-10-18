@@ -36,3 +36,8 @@ fn uncurved(world_position: vec3<f32>) -> vec3<f32> {
     let across = world_position.xz - curvature.now.eye.xz;
     return world_position + vec3<f32>(0.0, dot(across, across) * curvature.now.per_square_block, 0.0);
 }
+
+// Where the camera is, in every pass: the sun's shadow passes' view is the light's.
+fn eye() -> vec3<f32> {
+    return curvature.now.eye;
+}

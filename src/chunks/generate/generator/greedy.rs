@@ -1,5 +1,5 @@
 use super::buffers::Vertex;
-use super::buffers::{FanQuad, GrassTint, MeshBuffers, MeshStyle};
+use super::buffers::{FanQuad, GrassTint, InnerLeaves, MeshBuffers, MeshStyle};
 use super::lod::SKIRT_CELLS;
 use super::shading::{
     axis_of, face_light, vertex_ao, vertex_light, AO_GAMMA, FACE_NORMAL_OFFSET, FACE_TANGENTS,
@@ -38,6 +38,8 @@ pub(super) struct FaceCell {
     pub(super) light: [f32; 4],
     // where the face starts and ends up the mesh, if not the whole cell, see `face_span`
     pub(super) span: Option<[f32; 2]>,
+    // a face between leaves, see `InnerLeaves`
+    pub(super) inner: bool,
 }
 
 impl FaceCell {
@@ -66,20 +68,20 @@ impl FaceCell {
             && self.ao == other.ao
             && self.light == other.light
             && self.span == other.span
+            && self.inner == other.inner
             && self.even_along(corners, axis)
     }
 }
 
 // Whether a face of `block` at `coord` shows, and if so how much of it up the mesh's y axis,
 // with LOD surface cells topped out at the ground's real height (see `LodBlocks::surface_top`):
-// `Some(None)` for the whole face. Faces show through leaves' holes, other leaves' too, unless
-// `leaves_cover_leaves`.
+// `Some(None)` for the whole face. Faces show through leaves' holes, other leaves' too, see
+// `InnerLeaves`.
 pub(super) fn face_span(
     source: &impl BlockSource,
     coord: IVec3,
     normal: IVec3,
     block: BlockType,
-    leaves_cover_leaves: bool,
 ) -> Option<Option<[f32; 2]>> {
     // flora draws as crossed quads of its own, see `mesh_flora`
     if matches!(block, BlockType::Air | BlockType::Water) || block.is_flora() {
@@ -88,9 +90,6 @@ pub(super) fn face_span(
     let neighbour = coord + normal;
     let neighbour_block = source.block(neighbour);
     let covered = neighbour_block.is_opaque()
-        || (leaves_cover_leaves
-            && block == BlockType::Leaves
-            && neighbour_block == BlockType::Leaves)
         || (block == BlockType::Ice && neighbour_block == BlockType::Ice);
     // every face is asked about, and most are hidden, so those leave before any lookups
     if !source.has_surface_tops() || normal.y < 0 {
@@ -123,11 +122,13 @@ thread_local! {
 
 // Merges runs of identically shaded opaque faces into single quads, one face direction slice at a
 // time, where the shading doesn't change along the run, see `FaceCell::merges_along`.
-// With `solid_leaves`, leaves hide the faces of the leaves behind them.
+// Faces between leaves go to `inner`, or nowhere, see `InnerLeaves`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn mesh_opaque_greedy(
     source: &GridView<impl BlockSource>,
     faces: &[[Vertex; 4]; 6],
     buffers: &mut MeshBuffers,
+    inner: &mut MeshBuffers,
     style: MeshStyle,
     // how many times the texture repeats across a cell
     uv_tiles: f32,
@@ -137,7 +138,7 @@ pub(super) fn mesh_opaque_greedy(
     let MeshStyle {
         ambient_occlusion,
         textured,
-        solid_leaves,
+        inner_leaves,
     } = style;
     let size = CHUNK_SIZE as i32;
     let n = size as usize;
@@ -199,9 +200,13 @@ pub(super) fn mesh_opaque_greedy(
                     // past the mesh's edge the terrain may be drawn at another detail, with no
                     // leaves just there, so leaves on the edge keep their faces
                     let inside = source.contains(coord + normal);
-                    let Some(span) =
-                        face_span(source, coord, normal, block, solid_leaves && inside)
-                    else {
+                    let between_leaves = inside
+                        && block == BlockType::Leaves
+                        && source.block(coord + normal) == BlockType::Leaves;
+                    if between_leaves && inner_leaves == InnerLeaves::Hidden {
+                        continue;
+                    }
+                    let Some(span) = face_span(source, coord, normal, block) else {
                         continue;
                     };
                     faces += 1;
@@ -227,6 +232,7 @@ pub(super) fn mesh_opaque_greedy(
                     });
                     mask[(b * size + a) as usize] = Some(FaceCell {
                         span,
+                        inner: between_leaves,
                         block,
                         tint: if block == BlockType::Leaves {
                             source.leaf_tint(coord)
@@ -294,6 +300,11 @@ pub(super) fn mesh_opaque_greedy(
                     }
 
                     let origin = (normal_unit * slice + ta * a0 as i32 + tb * b0 as i32).as_vec3();
+                    let buffers = if cell.inner {
+                        &mut *inner
+                    } else {
+                        &mut *buffers
+                    };
                     let tile = if textured {
                         cell.block.tile(Face::of_normal_y(normal.y as f32))
                     } else {

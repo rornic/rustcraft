@@ -15,6 +15,15 @@ fn is_leaf(vertex_alpha: f32) -> bool {
     return abs(vertex_alpha - f32(constants::LEAF_CELL)) < 0.5;
 }
 
+// How much of the way leaves at `world_position` are to having their holes filled with the shade
+// of the leaves behind them, 0..1: past `INNER_LEAVES_REACH` blocks of the camera at `eye` those
+// leaves aren't drawn, see `InnerLeaves`, and the holes fill in over the band before it.
+fn leaf_holes_filled(world_position: vec3<f32>, eye: vec3<f32>) -> f32 {
+    let reach = f32(constants::INNER_LEAVES_REACH);
+    let band = f32(constants::INNER_LEAVES_BAND);
+    return smoothstep(reach - band, reach, distance(world_position, eye));
+}
+
 // Whether it's ground flora's, whose sprites are the atlas's last tiles. `FIRST_FLORA_CELL`
 // comes from `ChunkMaterial::specialize`.
 fn is_flora(vertex_alpha: f32) -> bool {
