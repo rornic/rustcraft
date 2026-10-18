@@ -15,7 +15,7 @@ serde = { version = "1.0", features = ["serde_derive"] }
 # the default features minus wayland, which needs system libs we don't have
 bevy = { version = "0.20", default-features = false, features = [
     "trace", "async_executor", "bevy_asset", "bevy_log", "bevy_state", "reflect_auto_register",
-    "std", "bevy_gilrs", "bevy_winit", "bevy_clipboard", "default_font", "multi_threaded", "x11", "custom_cursor",
+    "std", "bevy_gilrs", "bevy_winit", "bevy_clipboard", "audio", "default_font", "multi_threaded", "x11", "custom_cursor",
     "common_api", "3d_bevy_render", "ui_api", "ui_bevy_render", "bevy_ui_widgets",
 ] }
 tracing = { version = "0.1.40", features = ["attributes"] }
