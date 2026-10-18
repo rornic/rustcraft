@@ -1,4 +1,5 @@
 use super::buffers::{ChunkMeshes, GrassTint, MeshStyle};
+use super::flora::flora_at;
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
 use super::terrain::{column_block, ground_top, under_grass};
@@ -57,9 +58,11 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     let mut chunk_data = ChunkData::from_cells(cells);
 
     let origin = chunk_pos.0 * size;
+    // any ground in the chunk is within the trees' reach, so flora sees every tree over it
+    let mut trees = Vec::new();
     if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
         let min = I64Vec2::new(origin.x, origin.z);
-        let trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
+        trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
         for tree in &trees {
             tree.plant(
                 origin,
@@ -74,6 +77,44 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
             );
         }
         chunk_data.trees = TreeTints::new(&trees, origin, 1);
+    }
+
+    // plants on the grass, in the air just over it, after the trees, so trunks keep their place
+    let seed = regions.noise().seed();
+    for x in 0..size {
+        for z in 0..size {
+            let column_height = columns.height(x, z);
+            let local_y = column_height - world_y;
+            if !(0..size).contains(&local_y) {
+                continue;
+            }
+            let (gradient, biome, temperature) = (
+                columns.gradient(x, z),
+                columns.biome(x, z),
+                columns.temperature(x, z),
+            );
+            let ground = column_block(
+                biomes,
+                biome,
+                column_height - 1,
+                column_height,
+                gradient,
+                temperature,
+            );
+            let coord = bevy::math::U16Vec3::new(x as u16, local_y as u16, z as u16);
+            if ground != BlockType::Grass || chunk_data.get_block_at(coord) != BlockType::Air {
+                continue;
+            }
+            let (world_x, world_z) = (origin.x + x, origin.z + z);
+            // ferns grow on the forest floor, and in the shade of a lone tree's crown
+            let shaded = biomes.name(biome) == Some("forest")
+                || trees
+                    .iter()
+                    .any(|tree| tree.shades(world_x as f64 + 0.5, world_z as f64 + 0.5));
+            if let Some(plant) = flora_at(seed, world_x, world_z, shaded, temperature) {
+                chunk_data.set_block_at(coord, plant);
+            }
+        }
     }
 
     chunk_data

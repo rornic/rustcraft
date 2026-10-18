@@ -7,6 +7,8 @@ import numpy as np
 import requests
 from PIL import Image, ImageDraw
 
+from flora import sprite
+
 HERE = Path(__file__).parent
 OUT = HERE / "out"
 API = "http://127.0.0.1:8188"
@@ -35,6 +37,13 @@ TILES = [
     dict(name="SandstoneSide", derive="strata", body="SandstoneTop"),
     dict(name="SandstoneTop", prompt="pale tan sandstone, smooth fine grain", avoid="orange, red, brown, bricks, terracotta", mean=(214, 192, 148)),
     dict(name="SnowSide", derive="fringe", body="Dirt", top="Snow", depth=(3, 5)),
+    # ground flora, drawn by flora.py; grass and fern are greyscale for the climate's tint
+    dict(name="TallGrass", derive="sprite", grey=187),  # as bright as GrassTop, so it tints alike
+    dict(name="Fern", derive="sprite", grey=150),
+    dict(name="Poppy", derive="sprite"),
+    dict(name="Dandelion", derive="sprite"),
+    dict(name="ShortGrass", derive="sprite", grey=187),
+    dict(name="SeedGrass", derive="sprite", grey=187),
 ]
 
 
@@ -104,7 +113,11 @@ def finish(t, data, suffix=""):
 
 
 def derive(t, seed):
-    """Tiles built from already-picked ones: `overlay` (just a ragged fringe, on transparency), `fringe` (over a body tile) or `strata` (darker rows)."""
+    """Tiles built from already-picked ones: `overlay` (just a ragged fringe, on transparency), `fringe` (over a body tile) or `strata` (darker rows).
+    `sprite` tiles are drawn from scratch by flora.py."""
+    if t["derive"] == "sprite":
+        Image.fromarray(sprite(t["name"], seed, t.get("grey")), "RGBA").save(OUT / f"{t['name']}.png")
+        return
     rng = np.random.default_rng(seed)
     load = lambda name: np.asarray(Image.open(OUT / f"{name}.png").convert("RGB"), float)
     if t["derive"] != "strata":
