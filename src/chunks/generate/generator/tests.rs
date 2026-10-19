@@ -1705,7 +1705,7 @@ fn test_canopy_is_no_bigger_than_the_crowns_under_it() {
         let canopy: Vec<_> = blocks
             .boxes
             .iter()
-            .filter(|b| b.faces == super::source::BoxFaces::NoBottom)
+            .filter(|b| b.block == BlockType::Leaves)
             .collect();
         let area = |b: &&super::source::TreeBox| (b.max.x - b.min.x) * (b.max.z - b.min.z);
         let drawn: f32 = canopy.iter().map(area).sum();

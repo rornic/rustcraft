@@ -75,8 +75,6 @@ pub(super) struct TreeBox {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(super) enum BoxFaces {
     All,
-    // a box standing on the ground
-    NoBottom,
     // a trunk, standing on the ground with its top in the crown
     Sides,
 }

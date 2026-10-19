@@ -134,7 +134,6 @@ pub(super) fn mesh_blocks(
         };
         let faces = match tree_box.faces {
             BoxFaces::All => &CUBE[..],
-            BoxFaces::NoBottom => &CUBE[..5],
             BoxFaces::Sides => &CUBE[..4],
         };
         for face in faces {

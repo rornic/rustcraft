@@ -197,6 +197,11 @@ impl Tree {
         self.base.y as f64 + top + 1.0
     }
 
+    /// The bottom of the crown, in blocks.
+    pub fn crown_bottom(&self) -> f64 {
+        (self.base.y + self.leaf_bounds().0.y.max(0)) as f64
+    }
+
     pub fn width(&self) -> i64 {
         if self.trunk >= THICK_TRUNK {
             2

@@ -41,6 +41,8 @@ pub(super) struct Canopy {
     pub(super) cover: Vec<f32>,
     // the crowns' tops over each column, in blocks, weighed by how much of it each covers
     pub(super) tops: Vec<f64>,
+    // the same for the crowns' bottoms
+    pub(super) bottoms: Vec<f64>,
     // the mean tint of the crowns over each column
     pub(super) tints: Vec<Vec3>,
 }
@@ -48,8 +50,9 @@ pub(super) struct Canopy {
 impl Canopy {
     pub(super) fn new(trees: &[Tree], base: I64Vec3, cell: i64, size: i32) -> Self {
         let padded = ((size + 2) * (size + 2)) as usize;
-        let (mut hits, mut tops, mut tints) = (
+        let (mut hits, mut tops, mut bottoms, mut tints) = (
             vec![0u32; padded],
+            vec![0.0; padded],
             vec![0.0; padded],
             vec![Vec3::ZERO; padded],
         );
@@ -61,7 +64,7 @@ impl Canopy {
             let reach = |x: i64, base: i64| {
                 column_of(x - TREE_REACH, base)..=column_of(x + TREE_REACH, base)
             };
-            let (top, tint) = (tree.crown_top(), tree.tint());
+            let (top, bottom, tint) = (tree.crown_top(), tree.crown_bottom(), tree.tint());
             for cx in reach(tree.base.x, base.x) {
                 for cz in reach(tree.base.z, base.z) {
                     let column = LodBlocks::column(size, cx, cz);
@@ -77,6 +80,7 @@ impl Canopy {
                     if under != 0 {
                         hits[column] |= under;
                         tops[column] += top * under.count_ones() as f64;
+                        bottoms[column] += bottom * under.count_ones() as f64;
                         tints[column] += tint * under.count_ones() as f32;
                         weights[column] += under.count_ones();
                     }
@@ -98,10 +102,16 @@ impl Canopy {
             .zip(&weights)
             .map(|(&t, &w)| if w > 0 { t / w as f64 } else { 0.0 })
             .collect();
+        let bottoms = bottoms
+            .iter()
+            .zip(&weights)
+            .map(|(&b, &w)| if w > 0 { b / w as f64 } else { 0.0 })
+            .collect();
         Self {
             hits,
             cover,
             tops,
+            bottoms,
             tints,
         }
     }
@@ -152,14 +162,14 @@ impl Canopy {
                 }
                 // one column alone is a cube that stands out from afar, and the ground is tinted for it
                 let alone = x1 - x0 == 1 && z1 - z0 == 1;
-                let (mut lowest, mut tint, mut count) = (f32::MAX, Vec3::ZERO, 0.0);
+                let (mut lowest, mut tint, mut count) = (f64::MAX, Vec3::ZERO, 0.0);
                 // the points under crowns' bounds, in points across the node
                 let (mut near, mut far) = (UVec2::MAX, UVec2::ZERO);
                 for x in x0..x1 {
                     for z in z0..z1 {
                         taken[x * n + z] = true;
                         let column = column_of(x, z);
-                        lowest = lowest.min(ground_heights[column]);
+                        lowest = lowest.min(self.bottoms[column]);
                         tint += self.tints[column];
                         count += 1.0;
                         for i in (0..CANOPY_SAMPLES * CANOPY_SAMPLES)
@@ -179,8 +189,8 @@ impl Canopy {
                     near.as_vec2() / samples - 0.5,
                     (far + 1).as_vec2() / samples - 0.5,
                 );
-                // from a little under the ground, so no gap shows on slopes
-                let bottom = mesh_y(lowest as f64 - 2.0);
+                // from the crowns' bottoms, so no pillar stands where the trunks are too thin to draw
+                let bottom = mesh_y(lowest);
                 if alone {
                     continue;
                 }
@@ -189,7 +199,7 @@ impl Canopy {
                     max: Vec3::new(far.x, mesh_y(steps as f64 * step).max(bottom + 0.1), far.y),
                     block: BlockType::Leaves,
                     tint: tint / count,
-                    faces: BoxFaces::NoBottom,
+                    faces: BoxFaces::All,
                     taper: 0.0,
                 });
             }
