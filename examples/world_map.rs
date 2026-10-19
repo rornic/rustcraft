@@ -325,6 +325,7 @@ fn layers(terrain: &dyn TerrainSource, args: &Args) -> [(&'static str, image::Rg
                 Some("steppe") => [190, 180, 100],
                 Some("savanna") => [205, 165, 65],
                 Some("jungle") => [10, 85, 30],
+                Some("mountain") => [135, 125, 115],
                 Some(_) => [255, 0, 255],
             };
             biome.put_pixel(

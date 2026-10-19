@@ -14,11 +14,11 @@ pub const LAPSE_PER_BLOCK: f32 = 1.0 / 800.0;
 // Moisture the wind picks up crossing a cell of warm sea, and how much of what it carries falls
 // on a cell of flat land and on a cell rising a full OROGRAPHIC_RISE.
 const EVAPORATION: f32 = 0.1;
-const BASE_RAIN: f32 = 0.008;
+const BASE_RAIN: f32 = 0.011;
 const OROGRAPHIC_RAIN: f32 = 0.12;
 const OROGRAPHIC_RISE: f32 = 18.0;
 // The share of rain that evaporates again off the land and carries on inland.
-const RECYCLED: f32 = 0.6;
+const RECYCLED: f32 = 0.72;
 // The rain this share of the way up the land's rainfall is as wet as it gets.
 const WETTEST_PERCENTILE: f64 = 0.9;
 // Moisture is blurred across the wind this many cells each way, so rows of sweeps don't streak.
@@ -26,19 +26,25 @@ const BLUR: usize = 10;
 // Warmth and moisture are blurred this many cells each way before biomes are picked from them.
 const FIELD_BLUR: usize = 4;
 // Cells round a river or lake that it wets and cools, and by how much at the water's edge.
-const RIPARIAN_REACH: u8 = 10;
+const RIPARIAN_REACH: u8 = 14;
 // River widths, in blocks, that count for a little, a lot and everything of that reach, and the
 // moisture between which streams dry up, and the width a river must have to survive the driest.
 const RIPARIAN_WIDTHS: (f32, f32, f32) = (20.0, 38.0, 65.0);
 const DRY_BELOW: (f64, f64) = (0.2, 0.45);
-const DRY_RIVER_WIDTH: f32 = 22.0;
-const RIPARIAN_MOISTURE: f32 = 0.7;
+const DRY_RIVER_WIDTH: f32 = 34.0;
+// A lake this many cells or fewer in dry ground dries up; only a great one survives a desert.
+const DESERT_LAKE_CELLS: usize = 6_000;
+const RIPARIAN_MOISTURE: f32 = 1.0;
 const RIPARIAN_COOLING: f32 = 0.14;
 // A cell takes the most common biome within this many cells, MODE_PASSES times, and a patch of
 // fewer cells than MIN_BIOME_CELLS joins a neighbour.
 const MODE_RADIUS: usize = 2;
 const MODE_PASSES: usize = 2;
-const MIN_BIOME_CELLS: usize = 150;
+const MIN_BIOME_CELLS: usize = 400;
+// Land this many blocks over the sea is mountain, or this many with ground at least this steep.
+const MOUNTAIN_ABOVE: f32 = 150.0;
+const MOUNTAIN_STEEP_ABOVE: f32 = 70.0;
+const MOUNTAIN_STEEP: f32 = 0.4;
 
 /// What grows on a stretch of land, stored in `WorldMap::biome`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -55,10 +61,12 @@ pub enum BiomeKind {
     Jungle = 8,
     /// The sea floor, which has no land biome.
     Sea = 9,
+    /// High, steep ground, whatever the climate.
+    Mountain = 10,
 }
 
 impl BiomeKind {
-    pub const ALL: [BiomeKind; 10] = [
+    pub const ALL: [BiomeKind; 11] = [
         Self::Grassland,
         Self::Glacier,
         Self::Desert,
@@ -69,6 +77,7 @@ impl BiomeKind {
         Self::Savanna,
         Self::Jungle,
         Self::Sea,
+        Self::Mountain,
     ];
 
     pub fn from_u8(v: u8) -> Self {
@@ -90,6 +99,7 @@ impl BiomeKind {
             Self::Steppe => Some("steppe"),
             Self::Savanna => Some("savanna"),
             Self::Jungle => Some("jungle"),
+            Self::Mountain => Some("mountain"),
         }
     }
 }
@@ -112,8 +122,8 @@ pub fn classify(temperature: f32, moisture: f32) -> BiomeKind {
         }
     } else {
         match moisture {
-            m if m < 0.28 => BiomeKind::Desert,
-            m if m < 0.58 => BiomeKind::Savanna,
+            m if m < 0.14 => BiomeKind::Desert,
+            m if m < 0.5 => BiomeKind::Savanna,
             m if m < 0.7 => BiomeKind::Forest,
             _ => BiomeKind::Jungle,
         }
@@ -138,7 +148,7 @@ fn sea_level_warmth(seed: u32, x: f64, z: f64, half: f64) -> f32 {
 
 // Wet at the equator and in the mid latitudes, dry in the subtropics and at the poles.
 fn rainy_belt(latitude: f32) -> f32 {
-    0.65 + 0.35 * (3.0 * std::f32::consts::PI * latitude).cos()
+    0.78 + 0.22 * (3.0 * std::f32::consts::PI * latitude).cos()
 }
 
 pub fn run(map: &mut WorldMap) {
@@ -225,6 +235,8 @@ pub fn run(map: &mut WorldMap) {
             map.river_width[i] = 0.0;
         }
     }
+    // and so do lakes: one in dry ground that isn't a great one is gone, its basin left dry
+    dry_lakes(map, &moisture);
     // only big water changes the ground round it: a wide river or a lake cools and wets its
     // banks, so a green belt follows one through a desert, and a stream does nothing of the kind
     let near_water = fresh_water_closeness(map);
@@ -235,6 +247,7 @@ pub fn run(map: &mut WorldMap) {
         }
     }
 
+    let slope = super::gameplay::slope_layer(map);
     let mut kinds = vec![BiomeKind::Sea as u8; dim * dim];
     for i in 0..dim * dim {
         let h = map.height[i];
@@ -244,6 +257,14 @@ pub fn run(map: &mut WorldMap) {
         // what a cell grows depends on how warm it is at its height
         let warmth = (temperature[i] - (h - sea) * LAPSE_PER_BLOCK).max(0.0);
         kinds[i] = classify(warmth, moisture[i]) as u8;
+        // high or steep ground is mountain whatever the climate, but for the ice on top of it
+        let above = h - sea;
+        if kinds[i] != BiomeKind::Glacier as u8
+            && (above >= MOUNTAIN_ABOVE
+                || (above >= MOUNTAIN_STEEP_ABOVE && slope[i] >= MOUNTAIN_STEEP))
+        {
+            kinds[i] = BiomeKind::Mountain as u8;
+        }
     }
     let kinds = tidy_biomes(&kinds, dim);
 
@@ -263,6 +284,34 @@ pub fn run(map: &mut WorldMap) {
     map.moisture = moisture;
     map.biome = kinds;
     map.trees = trees;
+}
+
+// Lakes in dry ground disappear, a whole lake at a time, unless there are more cells of it than
+// DESERT_LAKE_CELLS.
+fn dry_lakes(map: &mut WorldMap, moisture: &[f32]) {
+    let dim = map.dim();
+    let lake: Vec<bool> = map
+        .water_kind
+        .iter()
+        .map(|&k| k == WaterCell::Lake as u8)
+        .collect();
+    let (comp, sizes) = super::gameplay::components(&lake, dim);
+    let mut dryness = vec![0.0f32; sizes.len()];
+    for (i, &c) in comp.iter().enumerate() {
+        if c != u32::MAX {
+            dryness[c as usize] += smoothstep(DRY_BELOW.1, DRY_BELOW.0, moisture[i] as f64) as f32;
+        }
+    }
+    for (i, &c) in comp.iter().enumerate() {
+        if c == u32::MAX {
+            continue;
+        }
+        let mean = dryness[c as usize] / sizes[c as usize] as f32;
+        if mean > 0.5 && sizes[c as usize] <= DESERT_LAKE_CELLS {
+            map.water_kind[i] = WaterCell::None as u8;
+            map.water_surface[i] = 0.0;
+        }
+    }
 }
 
 // How strongly water near each cell wets and cools it, 0..1: a lake or a very wide river counts
@@ -529,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_a_big_river_wets_and_cools_the_dry_ground_round_it() {
-        let mut map = with_river(70.0, 165..215);
+        let mut map = with_river(70.0, 150..252);
         let (dim, row) = (map.dim(), map.dim() / 2);
         run(&mut map);
         let at = |x: usize, z: usize| map.moisture[z * dim + x];
@@ -547,7 +596,7 @@ mod tests {
             at(190, row + 40)
         );
         // (warmth falls with latitude, so the dry ground to compare with is along the same row)
-        assert!(t(190, row + 2) < t(235, row + 2) - 0.05);
+        assert!(t(190, row + 2) < t(125, row + 2) - 0.05);
         // and wet enough for trees where it would otherwise be steppe or desert
         let dry = BiomeKind::from_u8(map.biome[(row + 40) * dim + 190]);
         let bank = BiomeKind::from_u8(map.biome[(row + 2) * dim + 190]);

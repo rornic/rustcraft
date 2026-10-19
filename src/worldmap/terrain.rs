@@ -26,6 +26,11 @@ const RIDGE_HEIGHT: f64 = 230.0;
 const HILL_WAVELENGTH: f64 = 900.0;
 const HILLINESS_WAVELENGTH: f64 = 2500.0;
 const HILL_HEIGHT: f64 = 45.0;
+// Coastal bluffs: where noise this many blocks across says so, land rises this high within
+// BLUFF_RISE of continentalness of the shore, which is a few hundred blocks.
+const BLUFF_WAVELENGTH: f64 = 5200.0;
+const BLUFF_HEIGHT: f64 = 120.0;
+const BLUFF_RISE: f64 = 0.005;
 // The ocean ring around the world starts and ends at this fraction of the half size, measured
 // along a rounded square, so no stretch of coast runs straight along the world's edge.
 const EDGE_FALLOFF: (f64, f64) = (0.66, 0.92);
@@ -138,7 +143,17 @@ pub(super) fn column(seed: u32, x: f64, z: f64, half: f64) -> (f64, f64) {
     } else {
         0.0
     };
-    let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains).max(0.0);
+    // In some stretches the land rises almost at once from the shore, in hills with cliffs onto
+    // the sea; elsewhere it slopes gently down to the water as the spline above has it.
+    let bluffs = if continentalness > 0.0 {
+        smoothstep(-0.12, 0.2, fbm(field(12), wx, wz, BLUFF_WAVELENGTH, 3))
+            * smoothstep(0.0, BLUFF_RISE, continentalness)
+            * BLUFF_HEIGHT
+            * (1.0 - mountain_mask)
+    } else {
+        0.0
+    };
+    let height = ease_peaks(WATER_LEVEL as f64 + base + hills + mountains + bluffs).max(0.0);
     (height, continentalness)
 }
 

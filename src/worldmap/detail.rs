@@ -18,9 +18,9 @@ pub const ROUGH_DETAIL: f64 = 38.0;
 // Rows of dunes driven by a wind along +x: a long gentle slope up to each crest, and a steep
 // face falling away behind it.
 const DUNE_SPACING: f64 = 90.0;
-const DUNE_HEIGHT: f64 = 18.0;
+const DUNE_HEIGHT: f64 = 16.0;
 // The share of each dune that's the gentle windward slope.
-const WINDWARD: f64 = 0.75;
+const WINDWARD: f64 = 0.6;
 // How far, in dunes, the rows bend, and over what distance, so crests wander.
 const CREST_BEND: f64 = 0.8;
 const CREST_BEND_WAVELENGTH: f64 = 400.0;
@@ -30,10 +30,11 @@ const DUNE_FIELD_WAVELENGTH: f64 = 700.0;
 const DUNE_SHORE: (f64, f64) = (2.0, 14.0);
 const DUNE_HIGH_GROUND: (f64, f64) = (70.0, 140.0);
 
-// Where the ground is steeper than this (see `terrain_block`), cliffs start to take shape, and
-// by the second the surface can move this far either way.
-const CLIFF_GRADIENT: (f64, f64) = (2.0, 4.5);
-const CLIFF_REACH: f64 = 7.0;
+// Where the ground is steeper than this (see `terrain_block`), cliffs start to take shape: about
+// half of a range's columns are over the first, and nine in ten are under the second. And
+// by the second the surface can move this far either way, which is not far, or cliffs turn abrupt.
+const CLIFF_GRADIENT: (f64, f64) = (1.0, 2.8);
+const CLIFF_REACH: f64 = 9.0;
 
 /// How many blocks the surface of ground this steep can be moved up or down by `cliff_density`,
 /// 0 on ground too gentle for cliffs.
@@ -48,6 +49,66 @@ pub fn cliff_density(seed: u32, x: i64, y: i64, z: i64) -> f64 {
     let (fx, fy, fz) = (x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5);
     0.65 * perlin3(seed ^ 0xC11F, fx / 14.0, fy / 14.0, fz / 14.0)
         + 0.35 * perlin3(seed ^ 0xC120, fx / 6.0, fy / 6.0, fz / 6.0)
+}
+
+// Mountain ground is stepped into terraces in patches: plateaus joined by near-vertical risers,
+// each step between these two heights, as the rock strata weather into big ledges and cliff faces.
+const TERRACE_STEP: (f64, f64) = (55.0, 120.0);
+// The share of each step that is the riser, the rest being flat.
+const TERRACE_RISER: f64 = 0.3;
+// Patches of terraces are noise this many blocks across, with this much of the ground in them
+// (the noise is over `TERRACE_PATCH_START`), and the strata in each tilt by up to this many
+// blocks a block, which is what points the ledges different ways.
+const TERRACE_PATCH_WAVELENGTH: f64 = 2200.0;
+const TERRACE_PATCH_START: f64 = -0.05;
+const TERRACE_TILT: f64 = 0.45;
+
+/// How much of the way, 0..1, mountain ground at (`x`, `z`) is terraced, before its height.
+pub fn terrace_patch(seed: u32, x: f64, z: f64) -> f64 {
+    smoothstep(
+        TERRACE_PATCH_START,
+        TERRACE_PATCH_START + 0.3,
+        perlin(
+            seed ^ 0x7E21,
+            x / TERRACE_PATCH_WAVELENGTH,
+            z / TERRACE_PATCH_WAVELENGTH,
+        ),
+    )
+}
+
+/// `height`, blocks above the sea `above_sea`, stepped into terraces on mountain ground where a
+/// patch of them is, more the higher it is, in cells `cell` blocks wide: wide cells see the
+/// ground without its steps, as the steps are finer than they are. The strata are tilted
+/// differently from patch to patch, so their ledges run every which way, not along the contours.
+pub fn terraced(
+    seed: u32,
+    x: f64,
+    z: f64,
+    cell: f64,
+    mountain: bool,
+    height: f64,
+    above_sea: f64,
+) -> f64 {
+    if !mountain {
+        return height;
+    }
+    let weight = terrace_patch(seed, x, z)
+        * smoothstep(40.0, 130.0, above_sea)
+        * (1.0 - smoothstep(2.0, 12.0, cell));
+    if weight <= 0.0 {
+        return height;
+    }
+    // each patch's step height and the lie of its strata wander from place to place
+    let wander = 0.5 + 0.5 * perlin(seed ^ 0x7E22, x / 3100.0, z / 3100.0);
+    let step = TERRACE_STEP.0 + (TERRACE_STEP.1 - TERRACE_STEP.0) * wander.clamp(0.0, 1.0);
+    let tilt_x = perlin(seed ^ 0x7E23, x / 2700.0, z / 2700.0) * TERRACE_TILT;
+    let tilt_z = perlin(seed ^ 0x7E24, x / 2700.0, z / 2700.0) * TERRACE_TILT;
+    let plane = height + tilt_x * x + tilt_z * z;
+    let t = plane / step;
+    let floor = t.floor();
+    let stepped =
+        (floor + smoothstep(1.0 - TERRACE_RISER, 1.0, t - floor)) * step - tilt_x * x - tilt_z * z;
+    height + (stepped - height) * weight
 }
 
 /// How high the detail rises over, or falls under, the map's ground at (`x`, `z`) on ground
@@ -114,7 +175,11 @@ pub fn roughness_layer(map: &mut WorldMap) {
             let mut r = (0.75 * smoothstep(0.1, 0.6, slope)
                 + 0.35 * smoothstep(60.0, 300.0, above_sea))
             .clamp(0.08, 1.0);
-            r *= match BiomeKind::from_u8(map.biome[row * dim + col]) {
+            let kind = BiomeKind::from_u8(map.biome[row * dim + col]);
+            if kind == BiomeKind::Mountain {
+                r = r.max(0.75);
+            }
+            r *= match kind {
                 BiomeKind::Desert => 0.6,
                 BiomeKind::Glacier => 0.5,
                 BiomeKind::Sea => 0.15,
@@ -154,7 +219,7 @@ mod tests {
             let step = dune(1, x as f64 + 1.0, 0.0) - dune(1, x as f64, 0.0);
             (up, down) = (up.max(step), down.min(step));
         }
-        assert!(-down > up * 2.0, "steepest rise {up}, steepest fall {down}");
+        assert!(-down > up * 1.3, "steepest rise {up}, steepest fall {down}");
     }
 
     #[test]
@@ -162,11 +227,86 @@ mod tests {
         assert_eq!(0.0, cliff_reach(0.0));
         assert_eq!(0.0, cliff_reach(CLIFF_GRADIENT.0));
         assert_eq!(CLIFF_REACH, cliff_reach(CLIFF_GRADIENT.1 + 1.0));
-        assert!(cliff_reach(3.0) > 0.0 && cliff_reach(3.0) < CLIFF_REACH);
+        assert!(cliff_reach(2.0) > 0.0 && cliff_reach(2.0) < CLIFF_REACH);
         for i in 0..500 {
             let d = cliff_density(4, i * 3, i % 40, -i * 7);
             assert!((-1.0..=1.0).contains(&d), "{d}");
         }
+    }
+
+    #[test]
+    fn test_terraces_are_few_and_big_and_only_on_mountains() {
+        // a hillside climbing half a block a block, along a line through terraced and plain patches
+        let steepest_in = |mountain: bool, above_sea: f64, range: std::ops::Range<i64>| {
+            let h = |x: f64| {
+                terraced(
+                    1,
+                    x,
+                    0.0,
+                    1.0,
+                    mountain,
+                    448.0 + above_sea + x * 0.5,
+                    above_sea,
+                )
+            };
+            range
+                .map(|i| (h(i as f64 + 1.0) - h(i as f64)).abs())
+                .fold(0.0, f64::max)
+        };
+        // somewhere along it steps turn the hillside into cliffs, and they are tall
+        assert!(
+            steepest_in(true, 200.0, 0..20_000) > 2.0,
+            "{}",
+            steepest_in(true, 200.0, 0..20_000)
+        );
+        // but not low mountain, nor ground that is not mountain
+        assert!(steepest_in(true, 20.0, 0..20_000) < 0.55);
+        assert!(steepest_in(false, 200.0, 0..20_000) < 0.55);
+        // patches: some of the ground is left as it was, and some is terraced
+        let patched: Vec<bool> = (0..400)
+            .map(|i| terrace_patch(1, i as f64 * 97.0, i as f64 * 41.0) > 0.5)
+            .collect();
+        let share = patched.iter().filter(|&&p| p).count() as f64 / patched.len() as f64;
+        assert!(
+            (0.15..0.65).contains(&share),
+            "{share} of the ground terraced"
+        );
+        // and cells too wide for the steps see the ground without them
+        assert_eq!(540.0, terraced(1, 5.0, 5.0, 32.0, true, 540.0, 200.0));
+    }
+
+    #[test]
+    fn test_terraces_run_different_ways() {
+        // where a terraced patch is, the direction the ledges strike in (across which way the
+        // ground steps) differs from patch to patch: sample the step's tilt over a wide area
+        let tilts: Vec<(f64, f64)> = (0..60)
+            .map(|i| {
+                let (x, z) = (i as f64 * 1900.0, i as f64 * 1300.0);
+                (
+                    perlin(1 ^ 0x7E23, x / 2700.0, z / 2700.0),
+                    perlin(1 ^ 0x7E24, x / 2700.0, z / 2700.0),
+                )
+            })
+            .collect();
+        let (mut north, mut south, mut east, mut west) = (0, 0, 0, 0);
+        for (tx, tz) in tilts {
+            if tz > 0.1 {
+                north += 1;
+            }
+            if tz < -0.1 {
+                south += 1;
+            }
+            if tx > 0.1 {
+                east += 1;
+            }
+            if tx < -0.1 {
+                west += 1;
+            }
+        }
+        assert!(
+            north > 3 && south > 3 && east > 3 && west > 3,
+            "{north} {south} {east} {west}"
+        );
     }
 
     #[test]

@@ -140,3 +140,15 @@ flight now crosses forest and jungle where the baseline crossed open land, so th
 mesh per frame; the same build moved 0.4-0.5 ms between runs, which does not cover it. Treat it as a regression
 to chase with a render-side profile, not as settled. Chunk generation is faster than the baseline (cold p50
 11.1 / 11.0 ms against 26.2 / 27.1, plains p99 43.9 against 60.2).
+
+## After flying it, round three
+
+Cliffs and terrain: mountain is now a biome (high or steep ground, grey on the map) with terraces in patches
+(55-120 block steps, strata tilted differently in each patch), cliff carving starts at gradient 1.0 (half of
+mountain columns are over it; it started at 2.6, which almost none were), and some stretches of coast rise
+60+ m within 190 m of the shore (13-16% of coast points) so there are sea cliffs. Dunes are gentler and
+desert below 90 m has no cliffs. Streams join rivers (two rivers sampled at a confluence), rivers are smooth
+curves, and the bed is cut down into the land rather than levelled. The climate is wetter (desert 10-12%
+of land, from 23-25%), lakes and narrow streams dry up in dry ground, only big water greens its banks.
+Foothills is gone: it needed the old noise generator's ruggedness.
+`GENERATOR_VERSION` is 5: a map cached by an earlier version is regenerated, not reused.

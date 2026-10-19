@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::climate::BiomeKind;
-use super::detail::{detail, dunes};
+use super::detail::{detail, dunes, terraced};
 use super::noise::perlin;
 use super::terrain::smoothstep;
 use super::water::RiverHit;
@@ -11,6 +11,9 @@ use crate::chunks::generate::biome::{BiomeId, Biomes, Climate};
 use crate::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
 use crate::chunks::generate::WATER_LEVEL;
 
+// How far under the land's ground, in blocks, a river's water lies at most.
+const FREEBOARD: f32 = 0.4;
+
 // Cells at least this wide leave a river's channel to the map's own carving.
 const RIVER_DETAIL_CELL: f64 = 16.0;
 
@@ -18,15 +21,34 @@ const RIVER_DETAIL_CELL: f64 = 16.0;
 // easing out into the ground beside it.
 fn channel(ground: f32, river: RiverHit) -> f32 {
     let half = river.width / 2.0;
-    let depth = river.surface - river.bed;
     if river.distance < half {
-        let t = river.distance / half;
-        return ground.min(river.bed + depth * t * t);
+        return ground.min(bed_height(river));
     }
-    // the bank starts level with the water, ground lower than it filled in and ground higher cut
-    // down, and eases out to the land's own height, so no dry crevice is left along the river
+    // ground above the water is cut down to it at the water's edge and eases back up to the
+    // land's own height; ground already lower is left, never built up
+    if ground <= river.surface {
+        return ground;
+    }
     let t = ((river.distance - half) / bank_width(river)).clamp(0.0, 1.0);
     river.surface + (ground - river.surface) * t * t * (3.0 - 2.0 * t)
+}
+
+// The river with its water no higher than `FREEBOARD` under the land's ground `base`, and the
+// bed the same depth under that as before.
+fn sunk_into(river: RiverHit, base: f64) -> RiverHit {
+    let depth = river.surface - river.bed;
+    let surface = river.surface.min(base as f32 - FREEBOARD);
+    RiverHit {
+        surface,
+        bed: surface - depth,
+        ..river
+    }
+}
+
+// Where the bed of the river under it is, a parabola across it.
+fn bed_height(river: RiverHit) -> f32 {
+    let t = (river.distance / (river.width / 2.0)).min(1.0);
+    river.bed + (river.surface - river.bed) * t * t
 }
 
 fn bank_width(river: RiverHit) -> f32 {
@@ -72,8 +94,11 @@ pub struct WorldTerrain {
     // the biome each `BiomeKind` is, indexed by kind
     kinds: Vec<BiomeId>,
     desert: BiomeId,
+    mountain: BiomeId,
     // cells with a river or lake within a few cells of them, so the rest skip looking for water
     near_water: Vec<bool>,
+    // the way each river cell's water leaves it, see `WorldMap::river_tangents`
+    tangents: Vec<[f32; 2]>,
 }
 
 impl WorldTerrain {
@@ -88,13 +113,17 @@ impl WorldTerrain {
             })
             .collect();
         let desert = biomes.id("desert").expect("desert in table");
+        let mountain = biomes.id("mountain").expect("mountain in table");
         let near_water = near_water(&map);
+        let tangents = map.river_tangents();
         Self {
             map,
             biomes,
             kinds,
             desert,
+            mountain,
             near_water,
+            tangents,
         }
     }
 
@@ -142,11 +171,12 @@ impl TerrainSource for WorldTerrain {
                 v.round().clamp(0.0, max) as usize,
             )]
         };
-        let river = if near_water && cell <= RIVER_DETAIL_CELL {
+        // the nearest river and, where one joins another, the other too
+        let rivers = if near_water && cell <= RIVER_DETAIL_CELL {
             let (mx, mz) = meander(seed, x, z);
-            map.river_at(x + mx, z + mz)
+            map.river_hits(&self.tangents, x + mx, z + mz)
         } else {
-            None
+            [None, None]
         };
         let roughness = map.bilinear_bytes(&map.roughness, x, z) as f64 / 255.0;
         let mut detail = detail(seed, x, z, cell, roughness, base - sea);
@@ -160,20 +190,45 @@ impl TerrainSource for WorldTerrain {
             }
         }
         // the channel of a river is smooth, banks and all
-        if let Some(river) = river {
+        for river in rivers.iter().flatten() {
             let half = river.width as f64 / 2.0;
-            detail *= smoothstep(half, half + bank_width(river) as f64, river.distance as f64);
+            detail *= smoothstep(
+                half,
+                half + bank_width(*river) as f64,
+                river.distance as f64,
+            );
         }
-        let mut ground = base + detail;
-        if let Some(river) = river {
+        // the water lies just under the land's smooth ground where it is, and the bed is cut down
+        // from there, so a river is carved into the terrain, and never stands above or beside
+        // ground lower than itself
+        let rivers = rivers.map(|r| r.map(|r| sunk_into(r, base)));
+        let mut ground = terraced(
+            seed,
+            x,
+            z,
+            cell,
+            biome == self.mountain,
+            base + detail,
+            base - sea,
+        );
+        if let Some(river) = rivers[0] {
             ground = channel(ground as f32, river) as f64;
+        }
+        // a river the nearest one meets still has its bed cut where its water is, so a stream is
+        // not cut off short of the bank of the river it runs into
+        if let Some(joining) = rivers[1].filter(|r| r.distance < r.width / 2.0) {
+            ground = ground.min(bed_height(joining) as f64);
         }
         let ground = ground.max(0.0);
 
         let (water_surface, water_kind) = if ground < sea {
             (WATER_LEVEL as f32, WaterKind::Ocean)
-        } else if let Some(river) =
-            river.filter(|r| r.distance < r.width / 2.0 && ground < r.surface as f64)
+        } else if let Some(river) = rivers
+            .iter()
+            .flatten()
+            .filter(|r| r.distance < r.width / 2.0 && ground < r.surface as f64)
+            // where two meet, the wider river's level is the water's
+            .max_by(|a, b| a.width.total_cmp(&b.width))
         {
             (river.surface, WaterKind::River)
         } else if let Some(surface) = near_water

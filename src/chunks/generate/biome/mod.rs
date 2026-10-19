@@ -1,6 +1,7 @@
 mod desert;
 mod forest;
 mod glacier;
+mod mountain;
 mod plain;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
@@ -10,6 +11,7 @@ use crate::block::BlockType;
 pub use desert::Desert;
 pub use forest::Forest;
 pub use glacier::Glacier;
+pub use mountain::Mountain;
 pub use plain::Plain;
 
 // How hot and how wet a column is, each 0..1. See `TerrainSource::climate`.
@@ -68,13 +70,12 @@ impl Biomes {
             Box::new(Glacier),
             Box::new(Desert),
             Box::new(Forest),
-            // placeholder kept so ids stay put, see `worldmap::climate::BiomeKind`
-            Box::new(Plain::new("foothills", BASE_TREE_DENSITY)),
             Box::new(Plain::new("tundra", 0.01)),
             Box::new(Plain::new("taiga", 0.3)),
             Box::new(Plain::new("steppe", 0.004)),
             Box::new(Plain::new("savanna", 0.03)),
             Box::new(Plain::new("jungle", 0.4)),
+            Box::new(Mountain),
         ])
     }
 

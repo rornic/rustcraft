@@ -487,6 +487,14 @@ fn tree_in_cell(
 
     // the biome before the slope, which samples elsewhere, while the ground here is to hand
     let height = heights.height(x, z).round() as i64;
+    // a trunk is more than a column wide, and stands on ground level with its foot: not across a
+    // step or a cliff's edge, where its far side would be buried or hang in the air
+    for (dx, dz) in [(1, 0), (0, 1), (1, 1)] {
+        let beside = heights.height(x + dx, z + dz).round() as i64;
+        if !(height - 1..=height).contains(&beside) {
+            return None;
+        }
+    }
     let biome = heights.biome(x, z);
     let (gradient_x, gradient_z) = heights.gradient(x, z);
     let gradient = gradient_x.abs() + gradient_z.abs();

@@ -22,6 +22,10 @@ use bevy::math::IVec3;
 use std::cell::LazyCell;
 use std::sync::Arc;
 
+// Blocks above the sea desert ground must be before it has cliffs: below it the steep ground is
+// dunes.
+const DESERT_CLIFFS_ABOVE: i64 = 90;
+
 pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> ChunkData {
     let mut heights = regions.sampler();
     let biomes = regions.terrain().biomes();
@@ -30,6 +34,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     let (lowest, highest) = (columns.lowest, columns.highest);
     let size = CHUNK_SIZE as i64;
     let seed = regions.terrain().seed();
+    let desert = biomes.id("desert");
     let world_y = chunk_pos.0.y * size;
     // cells in `ChunkData::from_cells` order, which is the order they're worked out in here
     let mut cells = Vec::with_capacity((size * size * size) as usize);
@@ -40,7 +45,10 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
             let water_top = columns.water_top(x, z);
             let gradient = columns.gradient(x, z);
             // how far the surface here is cut or built up into cliffs, on steep ground
-            let cliff = cliff_reach(gradient);
+            // dunes' steep faces are not cliffs: desert has them only up in its mountains
+            let dunes = Some(columns.biome(x, z)) == desert
+                && column_height - WATER_LEVEL < DESERT_CLIFFS_ABOVE;
+            let cliff = if dunes { 0.0 } else { cliff_reach(gradient) };
             let bulge = cliff.ceil() as i64;
             // above the ground and the water, the column is air here whatever its climate
             if world_y >= (ground_top(column_height) + bulge).max(water_top) {

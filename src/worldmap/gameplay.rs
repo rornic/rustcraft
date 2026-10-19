@@ -43,7 +43,7 @@ fn sea() -> f32 {
 }
 
 // Rise per run to the steepest of a cell's four neighbours.
-fn slope_layer(map: &WorldMap) -> Vec<f32> {
+pub(super) fn slope_layer(map: &WorldMap) -> Vec<f32> {
     let dim = map.dim();
     let cell = map.config.map_cell as f32;
     let mut slope = vec![0.0f32; dim * dim];
@@ -67,7 +67,7 @@ const NONE: u32 = u32::MAX;
 
 // Connected runs of cells where `mask` holds, 8-connected: each cell's run, or NONE, and the
 // runs' sizes.
-fn components(mask: &[bool], dim: usize) -> (Vec<u32>, Vec<usize>) {
+pub(super) fn components(mask: &[bool], dim: usize) -> (Vec<u32>, Vec<usize>) {
     let mut comp = vec![NONE; mask.len()];
     let mut sizes = Vec::new();
     let mut stack = Vec::new();
