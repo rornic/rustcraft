@@ -82,7 +82,7 @@ fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3) {
                 .map(|n| data.get(n).cloned())
                 .collect();
             let meshes =
-                generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise(), false);
+                generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.terrain(), false);
             vertices += meshes.opaque.count_vertices();
         }
         best = best.min(start.elapsed());

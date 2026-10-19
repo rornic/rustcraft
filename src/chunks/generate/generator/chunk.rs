@@ -9,8 +9,8 @@ use crate::chunks::chunk::ChunkData;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
-use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::terrain_source::TerrainSource;
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::TreeTints;
@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> ChunkData {
     let mut heights = regions.sampler();
-    let biomes = regions.noise().biomes();
+    let biomes = regions.terrain().biomes();
     // the same for every chunk stacked over these columns, so worked out once for them all
     let columns = regions.chunk_columns(&mut heights, chunk_pos.0.x, chunk_pos.0.z);
     let (lowest, highest) = (columns.lowest, columns.highest);
@@ -62,7 +62,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     let mut trees = Vec::new();
     if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
         let min = I64Vec2::new(origin.x, origin.z);
-        trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
+        trees = trees_near(regions.terrain(), &mut heights, min, min + size - 1);
         for tree in &trees {
             tree.plant(
                 origin,
@@ -80,7 +80,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     }
 
     // plants on the grass, in the air just over it, after the trees, so trunks keep their place
-    let seed = regions.noise().seed();
+    let seed = regions.terrain().seed();
     for x in 0..size {
         for z in 0..size {
             let column_height = columns.height(x, z);
@@ -131,7 +131,7 @@ pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
     coord: ChunkCoordinate,
-    noise: &NoiseGenerator,
+    noise: &dyn TerrainSource,
     solid_leaves: bool,
 ) -> ChunkMeshes {
     let source = ChunkNeighbourhood::new(&chunk, &adjacent_chunks);

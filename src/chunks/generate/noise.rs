@@ -2,8 +2,10 @@ use bevy::math::{FloatExt, I64Vec2};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use super::fractal::{resolved, Fractal};
+pub use super::terrain_source::TerrainSample;
+use super::terrain_source::TerrainSource;
 
-use super::biome::{smoothstep, BaseColumn, BiomeId, Biomes, Climate};
+use super::biome::{smoothstep, BaseColumn, Biomes, Climate};
 use super::{WATER_LEVEL, WORLD_HEIGHT};
 
 // The world is a finite square centred on the origin, ringed by deep ocean.
@@ -99,16 +101,6 @@ const CONTINENT_SPLINE: [(f64, f64); 14] = [
     (0.2, 18.0),
     (0.5, 36.0),
 ];
-
-// A column's height, with how far inland it is (negative out to sea), the biome owning it
-// and how thickly trees grow there.
-#[derive(Debug, Default, Copy, Clone)]
-pub struct TerrainSample {
-    pub continentalness: f64,
-    pub height: f64,
-    pub biome: BiomeId,
-    pub trees: f64,
-}
 
 pub struct NoiseGenerator {
     seed: u32,
@@ -372,6 +364,32 @@ fn spline(points: &[(f64, f64)], x: f64) -> f64 {
     let (x0, y0) = points[i - 1];
     let (x1, y1) = points[i];
     y0.lerp(y1, (x - x0) / (x1 - x0))
+}
+
+impl TerrainSource for NoiseGenerator {
+    fn seed(&self) -> u32 {
+        NoiseGenerator::seed(self)
+    }
+
+    fn biomes(&self) -> &Biomes {
+        NoiseGenerator::biomes(self)
+    }
+
+    fn sample_for_cell(&self, x: f64, z: f64, cell: f64) -> TerrainSample {
+        NoiseGenerator::sample_for_cell(self, x, z, cell)
+    }
+
+    fn climate(&self, x: f64, z: f64) -> Climate {
+        NoiseGenerator::climate(self, x, z)
+    }
+
+    fn temperature(&self, x: f64, z: f64) -> f32 {
+        NoiseGenerator::temperature(self, x, z)
+    }
+
+    fn find_spawn(&self) -> (i64, i64, f64) {
+        NoiseGenerator::find_spawn(self)
+    }
 }
 
 #[cfg(test)]

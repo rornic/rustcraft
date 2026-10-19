@@ -261,7 +261,7 @@ pub fn load_chunks(
                                 data,
                                 adjacent,
                                 coord,
-                                regions.noise(),
+                                regions.terrain(),
                                 solid_leaves,
                             )
                         }));

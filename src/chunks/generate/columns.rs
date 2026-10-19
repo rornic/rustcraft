@@ -3,8 +3,8 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::biome::BiomeId;
-use super::noise::NoiseGenerator;
 use super::region_store::HeightSampler;
+use super::terrain_source::TerrainSource;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;
 
@@ -58,7 +58,7 @@ pub struct ColumnGrid {
 }
 
 impl ColumnGrid {
-    fn sample(noise: &NoiseGenerator, key: LodKey) -> Self {
+    fn sample(noise: &dyn TerrainSource, key: LodKey) -> Self {
         let size = CHUNK_SIZE as i32;
         let cell = key.cell_size();
         let base = key.min_block();
@@ -129,7 +129,7 @@ pub struct ChunkColumns {
 }
 
 impl ChunkColumns {
-    fn sample(noise: &NoiseGenerator, heights: &mut HeightSampler, x: i64, z: i64) -> Self {
+    fn sample(noise: &dyn TerrainSource, heights: &mut HeightSampler, x: i64, z: i64) -> Self {
         let size = CHUNK_SIZE as i64;
         let cells = (size * size) as usize;
         let mut columns = Self {
@@ -246,7 +246,7 @@ impl ColumnCache {
     /// them has yet. Blocks while another thread samples them, so only call from a task.
     pub fn chunk_columns(
         &self,
-        noise: &NoiseGenerator,
+        noise: &dyn TerrainSource,
         heights: &mut HeightSampler,
         x: i64,
         z: i64,
@@ -257,7 +257,7 @@ impl ColumnCache {
 
     /// The grid under `key`, sampling it if no node over the same column has yet. Blocks
     /// while another thread samples it, so only call from a task, never a system.
-    pub fn grid(&self, noise: &NoiseGenerator, key: LodKey) -> Arc<ColumnGrid> {
+    pub fn grid(&self, noise: &dyn TerrainSource, key: LodKey) -> Arc<ColumnGrid> {
         let column = ColumnKey::from(key);
         self.grids.get(column, || {
             let grid = ColumnGrid::sample(noise, key);
@@ -283,6 +283,7 @@ impl ColumnCache {
 
 #[cfg(test)]
 mod tests {
+    use crate::chunks::generate::noise::NoiseGenerator;
     use bevy::math::I64Vec3;
 
     use super::*;
@@ -332,7 +333,9 @@ mod tests {
             assert_eq!(gx.abs() + gz.abs(), columns.gradient(cx, cz));
             assert_eq!(heights.biome(world_x, world_z), columns.biome(cx, cz));
             assert_eq!(
-                regions.noise().temperature(world_x as f64, world_z as f64),
+                regions
+                    .terrain()
+                    .temperature(world_x as f64, world_z as f64),
                 columns.temperature(cx, cz)
             );
             assert!((columns.lowest..=columns.highest).contains(&columns.height(cx, cz)));

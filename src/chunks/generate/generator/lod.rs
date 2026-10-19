@@ -13,8 +13,8 @@ use crate::chunks::generate::biome::{BiomeId, Biomes};
 use crate::chunks::generate::columns::ColumnGrid;
 use crate::chunks::generate::columns::COARSE_CELL;
 use crate::chunks::generate::light::SkyLight;
-use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::terrain_source::{TerrainSample, TerrainSource};
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::Tree;
@@ -57,7 +57,7 @@ pub(super) struct LodBlocks {
 // The ground a coarse node's trees stand on, read from its grid of columns.
 pub(super) struct GridGround<'a> {
     pub(super) grid: &'a ColumnGrid,
-    pub(super) noise: &'a NoiseGenerator,
+    pub(super) noise: &'a dyn TerrainSource,
     pub(super) base: I64Vec2,
     pub(super) cell: i64,
     pub(super) size: i32,
@@ -145,7 +145,7 @@ impl LodBlocks {
         let mut canopy_tops = vec![i64::MIN; padded * padded];
         let mut boxes = Vec::new();
         let grid = regions.column_grid(key);
-        let noise = regions.noise();
+        let noise = regions.terrain();
         let real_trees = cell <= TREE_MAX_CELL;
         let mut forest = if real_trees {
             Vec::new()
@@ -290,7 +290,7 @@ impl LodBlocks {
         let mut tops = vec![0; padded * padded];
         let mut ground_heights = vec![0.0; padded * padded];
         let mut heights = regions.sampler();
-        let noise = regions.noise();
+        let noise = regions.terrain();
         let biomes = noise.biomes();
         let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
@@ -323,7 +323,7 @@ impl LodBlocks {
         let mut trees = Vec::new();
         if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
             let min = I64Vec2::new(base.x, base.z) - cell;
-            trees = trees_near(regions.noise(), &mut heights, min, min + span + cell);
+            trees = trees_near(regions.terrain(), &mut heights, min, min + span + cell);
             for tree in &trees {
                 tree.plant(
                     base,
@@ -560,7 +560,7 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
     let cell_size = key.cell_size();
     // matches `lod_transform`
     let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
-    let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
+    let tint = GrassTint::new(regions.terrain(), origin, cell_size as f32);
     let blocks = LodBlocks::sample(&regions, key);
     let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
     // the padded cells are already in `SkyLight::index` order

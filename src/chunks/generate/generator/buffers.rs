@@ -2,7 +2,7 @@ use crate::block::Tile;
 use crate::block::TILE_COUNT;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::grass_tint;
-use crate::chunks::generate::noise::NoiseGenerator;
+use crate::chunks::generate::terrain_source::TerrainSource;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Vec3;
 use bevy::render::mesh::Indices;
@@ -265,7 +265,7 @@ pub(super) struct GrassTint {
 
 impl GrassTint {
     // `origin` is where the mesh's local origin is in the world, and `scale` how many blocks one local unit is.
-    pub(super) fn new(noise: &NoiseGenerator, origin: Vec3, scale: f32) -> Self {
+    pub(super) fn new(noise: &dyn TerrainSource, origin: Vec3, scale: f32) -> Self {
         let size = CHUNK_SIZE as f32;
         let corners = [(0.0, 0.0), (size, 0.0), (0.0, size), (size, size)].map(|(x, z)| {
             let world = origin + Vec3::new(x - 0.5, 0.0, z - 0.5) * scale;

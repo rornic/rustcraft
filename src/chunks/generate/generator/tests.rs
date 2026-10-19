@@ -140,9 +140,9 @@ fn test_desert_ground_is_sand_and_other_lowland_grass() {
         (-60..60)
             .flat_map(|z| (-60..60).map(move |x| I64Vec2::new(x, z) * 128))
             .find(|p| {
-                let sample = regions.noise().sample(p.x as f64, p.y as f64);
+                let sample = regions.terrain().sample(p.x as f64, p.y as f64);
                 let above_sea = sample.height - WATER_LEVEL as f64;
-                (regions.noise().biomes().name(sample.biome) == Some("desert")) == desert
+                (regions.terrain().biomes().name(sample.biome) == Some("desert")) == desert
                     && (20.0..60.0).contains(&above_sea)
                     && regions.sampler().gradient(p.x, p.y).0.abs() < 0.5
                     && regions.sampler().gradient(p.x, p.y).1.abs() < 0.5
@@ -175,7 +175,7 @@ fn test_trees_across_chunk_borders_are_whole() {
     let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
     let mut heights = regions.sampler();
     let trees = trees_near(
-        regions.noise(),
+        regions.terrain(),
         &mut heights,
         I64Vec2::splat(-800),
         I64Vec2::splat(800),
@@ -877,7 +877,7 @@ fn test_tree_boxes_stay_textured_up_to_eight_wide_cells_with_a_tile_a_block() {
     let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
     let mut heights = regions.sampler();
     let trees = crate::chunks::generate::trees::trees_near(
-        regions.noise(),
+        regions.terrain(),
         &mut heights,
         bevy::math::I64Vec2::splat(-300),
         bevy::math::I64Vec2::splat(300),
@@ -1325,7 +1325,7 @@ fn test_buried_chunk_has_no_geometry() {
         stone.clone(),
         vec![Some(stone); 26],
         ChunkCoordinate(I64Vec3::ZERO),
-        test_regions().noise(),
+        test_regions().terrain(),
         false,
     );
     assert!(!meshes.has_geometry());
@@ -1402,7 +1402,7 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
     let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
     let mut heights = regions.sampler();
     let trees = trees_near(
-        regions.noise(),
+        regions.terrain(),
         &mut heights,
         I64Vec2::splat(-300),
         I64Vec2::splat(300),
@@ -1471,7 +1471,7 @@ fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
     let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
     let mut heights = regions.sampler();
     let trees = trees_near(
-        regions.noise(),
+        regions.terrain(),
         &mut heights,
         I64Vec2::splat(-300),
         I64Vec2::splat(300),
@@ -1529,7 +1529,7 @@ fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
                 key.cell_size(),
             )
         };
-        let tint = super::buffers::GrassTint::new(regions.noise(), Vec3::ZERO, 1.0);
+        let tint = super::buffers::GrassTint::new(regions.terrain(), Vec3::ZERO, 1.0);
         let light = std::cell::LazyCell::new(|| {
             crate::chunks::generate::light::SkyLight::new(
                 IVec3::splat(-1),
@@ -1553,15 +1553,15 @@ fn forest(regions: &RegionStore) -> (I64Vec3, Vec<crate::chunks::generate::trees
     // the search is slow, and every caller's world is seed 5's
     static FOREST: std::sync::OnceLock<(I64Vec3, Vec<crate::chunks::generate::trees::Tree>)> =
         std::sync::OnceLock::new();
-    assert_eq!(5, regions.noise().seed());
+    assert_eq!(5, regions.terrain().seed());
     FOREST
         .get_or_init(|| {
             let mut heights = regions.sampler();
             let corner = (-4..4)
                 .flat_map(|x| (-4..4).map(move |z| I64Vec2::new(x, z) * 1024))
-                .max_by_key(|&c| trees_near(regions.noise(), &mut heights, c, c + 255).len())
+                .max_by_key(|&c| trees_near(regions.terrain(), &mut heights, c, c + 255).len())
                 .unwrap();
-            let trees = trees_near(regions.noise(), &mut heights, corner, corner + 255);
+            let trees = trees_near(regions.terrain(), &mut heights, corner, corner + 255);
             let ground = heights.height(corner.x + 128, corner.y + 128) as i64;
             (I64Vec3::new(corner.x + 128, ground, corner.y + 128), trees)
         })
@@ -1614,7 +1614,7 @@ fn test_far_forests_are_a_few_canopy_boxes_not_a_box_a_tree() {
             .fold(f32::MIN, f32::max);
         let corner = bevy::math::I64Vec2::new(min.x, min.z);
         let node_trees = crate::chunks::generate::trees::trees_near(
-            regions.noise(),
+            regions.terrain(),
             &mut regions.sampler(),
             corner,
             corner + span,
@@ -1755,7 +1755,7 @@ fn test_cells_wider_than_real_trees_tint_forest_instead_of_drawing_leaves() {
     let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
     let mut heights = regions.sampler();
     let trees = trees_near(
-        regions.noise(),
+        regions.terrain(),
         &mut heights,
         I64Vec2::splat(-300),
         I64Vec2::splat(300),
@@ -1793,7 +1793,7 @@ fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Spots, Spots) {
             && (base.z..base.z + size as i64 * cell).contains(&t.base.z)
     };
     let mut heights = regions.sampler();
-    let mut exact: Vec<_> = trees_near(regions.noise(), &mut heights, min, min + span + cell)
+    let mut exact: Vec<_> = trees_near(regions.terrain(), &mut heights, min, min + span + cell)
         .iter()
         .filter(|t| own(t))
         .map(|t| (t.base.x, t.base.z))
@@ -1801,13 +1801,13 @@ fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Spots, Spots) {
     let grid = regions.column_grid(key);
     let mut ground = super::lod::GridGround {
         grid: &grid,
-        noise: regions.noise(),
+        noise: regions.terrain(),
         base: I64Vec2::new(base.x, base.z),
         cell,
         size,
         last: None,
     };
-    let mut coarse: Vec<_> = trees_near(regions.noise(), &mut ground, min, min + span + cell)
+    let mut coarse: Vec<_> = trees_near(regions.terrain(), &mut ground, min, min + span + cell)
         .iter()
         .filter(|t| own(t))
         .map(|t| (t.base.x, t.base.z))
@@ -1825,7 +1825,7 @@ fn test_every_level_grows_the_trees_full_detail_does() {
         // nodes over a forested stretch, found from the full-detail trees
         let mut heights = regions.sampler();
         let trees = crate::chunks::generate::trees::trees_near(
-            regions.noise(),
+            regions.terrain(),
             &mut heights,
             I64Vec2::splat(-500),
             I64Vec2::splat(500),

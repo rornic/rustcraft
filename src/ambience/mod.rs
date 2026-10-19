@@ -135,7 +135,7 @@ fn sense_surroundings(
     *since = 0.0;
 
     let store = &world.region_store;
-    let noise = store.noise();
+    let noise = store.terrain();
     let ground = store
         .get_height(eye.x.floor() as i64, eye.z.floor() as i64)
         .max(WATER_LEVEL as f64) as f32;

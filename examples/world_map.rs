@@ -6,6 +6,7 @@
 //   cargo run --release --example world_map -- --seed 42 --center 3000,-2000 --scale 2
 // Colour lowlands by biome, with grass tinted by climate as it's drawn in game:
 //   cargo run --release --example world_map -- --seed 42 --biomes
+// Every run also writes <out>-water.png and <out>-biome.png beside the height map.
 
 use std::env;
 
@@ -14,7 +15,8 @@ use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
 use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
-use rustcraft::chunks::generate::noise::{NoiseGenerator, TerrainSample, WORLD_SIZE};
+use rustcraft::chunks::generate::noise::{NoiseGenerator, WORLD_SIZE};
+use rustcraft::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
 use rustcraft::chunks::generate::WATER_LEVEL;
 
 struct Args {
@@ -60,7 +62,7 @@ fn parse_args() -> Args {
     args
 }
 
-fn sample_map(noise: &NoiseGenerator, args: &Args) -> Vec<(TerrainSample, Climate)> {
+fn sample_map(noise: &dyn TerrainSource, args: &Args) -> Vec<(TerrainSample, Climate)> {
     let size = args.pixels as usize;
     let half = args.pixels as f64 / 2.0;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -173,6 +175,53 @@ fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) ->
     img
 }
 
+// The water and biome layers, one pixel per sample of the height map.
+fn layers(terrain: &dyn TerrainSource, args: &Args) -> [(&'static str, image::RgbImage); 2] {
+    let size = args.pixels;
+    let half = size as f64 / 2.0;
+    let mut water = image::RgbImage::new(size, size);
+    let mut biome = image::RgbImage::new(size, size);
+    for z in 0..size {
+        for x in 0..size {
+            let wx = args.center.0 + (x as f64 - half) * args.scale;
+            let wz = args.center.1 + (z as f64 - half) * args.scale;
+            let sample = terrain.sample(wx, wz);
+            let w = terrain.water(wx, wz);
+            let depth = (w.depth as f64 / 60.0).clamp(0.0, 1.0);
+            let colour = match w.kind {
+                WaterKind::None => [70, 70, 70],
+                WaterKind::Ocean => [
+                    (30.0 - 25.0 * depth) as u8,
+                    (90.0 - 70.0 * depth) as u8,
+                    200,
+                ],
+                WaterKind::Lake => [60, 200, 230],
+                WaterKind::River => [120, 230, 255],
+            };
+            water.put_pixel(x, z, image::Rgb(colour));
+            // a stable colour per biome id
+            let id = format!("{:?}", sample.biome)
+                .bytes()
+                .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+            let rgb = [
+                (id >> 3) as u8 | 64,
+                (id >> 11) as u8 | 64,
+                (id >> 19) as u8 | 64,
+            ];
+            biome.put_pixel(
+                x,
+                z,
+                image::Rgb(if sample.height < WATER_LEVEL as f64 {
+                    [20, 40, 90]
+                } else {
+                    rgb
+                }),
+            );
+        }
+    }
+    [("water", water), ("biome", biome)]
+}
+
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[((sorted.len() - 1) as f64 * p) as usize]
 }
@@ -230,4 +279,10 @@ fn main() {
         .save(&args.out)
         .expect("failed to save image");
     println!("wrote {}", args.out);
+    let stem = args.out.strip_suffix(".png").unwrap_or(&args.out);
+    for (layer, image) in layers(&noise, &args) {
+        let path = format!("{stem}-{layer}.png");
+        image.save(&path).expect("failed to save image");
+        println!("wrote {path}");
+    }
 }

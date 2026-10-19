@@ -2,8 +2,8 @@ use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3, Vec2, Vec3};
 
 use super::biome::BiomeId;
 use super::generator::column_block;
-use super::noise::NoiseGenerator;
 use super::region_store::{HeightSampler, SLOPE_SPAN};
+use super::terrain_source::TerrainSource;
 use crate::block::BlockType;
 
 /// What trees need to know about the ground to take root, from the full-detail heightmap or
@@ -452,7 +452,7 @@ pub fn grows_into(existing: BlockType, block: BlockType) -> bool {
 
 // Every tree that could reach into the columns `min..=max` (x, z).
 pub fn trees_near(
-    noise: &NoiseGenerator,
+    noise: &dyn TerrainSource,
     heights: &mut impl TreeGround,
     min: I64Vec2,
     max: I64Vec2,
@@ -471,7 +471,7 @@ pub fn trees_near(
 }
 
 fn tree_in_cell(
-    noise: &NoiseGenerator,
+    noise: &dyn TerrainSource,
     heights: &mut impl TreeGround,
     cx: i64,
     cz: i64,
@@ -541,6 +541,7 @@ pub(super) fn hash(seed: u64, a: i64, b: i64) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::chunks::generate::noise::NoiseGenerator;
     use std::sync::Arc;
 
     use super::*;
@@ -706,7 +707,7 @@ mod tests {
         let regions = RegionStore::new(noise.clone());
         let mut heights = regions.sampler();
         let (min, max) = (I64Vec2::new(-600, -600), I64Vec2::new(600, 600));
-        let trees = trees_near(&noise, &mut heights, min, max);
+        let trees = trees_near(&*noise, &mut heights, min, max);
         assert!(!trees.is_empty(), "no trees in {min}..{max}");
         for t in &trees {
             let ground = heights.height(t.base.x, t.base.z).round() as i64;
@@ -714,7 +715,7 @@ mod tests {
         }
         // a smaller window finds the same trees where they overlap
         let some = trees_near(
-            &noise,
+            &*noise,
             &mut heights,
             I64Vec2::new(0, 0),
             I64Vec2::new(40, 40),

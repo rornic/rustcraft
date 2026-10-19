@@ -6,14 +6,15 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use bevy::math::I64Vec3;
-use std::hint::black_box;
 use criterion::{criterion_group, BatchSize, Criterion};
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use rustcraft::chunks::generate::generator::{generate_chunk, generate_lod_mesh};
 use rustcraft::chunks::generate::noise::{NoiseGenerator, WORLD_HALF_SIZE};
 use rustcraft::chunks::generate::region_store::RegionStore;
+use rustcraft::chunks::generate::terrain_source::TerrainSource;
 use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::lod::LodKey;
+use std::hint::black_box;
 
 const SEED: u32 = 1;
 // Distinct chunks of each kind measured for the percentiles.
@@ -28,11 +29,11 @@ enum Kind {
 
 const KINDS: [Kind; 3] = [Kind::Plains, Kind::Mountains, Kind::Coast];
 
-fn terrain() -> Arc<NoiseGenerator> {
+fn terrain() -> Arc<dyn TerrainSource> {
     Arc::new(NoiseGenerator::new(SEED))
 }
 
-fn classify(terrain: &NoiseGenerator, x: i64, z: i64) -> Option<(Kind, f64)> {
+fn classify(terrain: &dyn TerrainSource, x: i64, z: i64) -> Option<(Kind, f64)> {
     let height = |dx: i64, dz: i64| terrain.sample((x + dx) as f64, (z + dz) as f64).height;
     let h = height(0, 0);
     let above = h - WATER_LEVEL as f64;
@@ -49,7 +50,7 @@ fn classify(terrain: &NoiseGenerator, x: i64, z: i64) -> Option<(Kind, f64)> {
 }
 
 // Surface chunks of `kind`, found on a lattice over the world so they come from all over it.
-fn chunks_of(terrain: &NoiseGenerator, kind: Kind, count: usize) -> Vec<ChunkCoordinate> {
+fn chunks_of(terrain: &dyn TerrainSource, kind: Kind, count: usize) -> Vec<ChunkCoordinate> {
     let size = CHUNK_SIZE as i64;
     let mut found = Vec::new();
     let step = 192;
@@ -81,7 +82,7 @@ fn chunk_generation(c: &mut Criterion) {
     let terrain = terrain();
     let mut group = c.benchmark_group("chunk_gen");
     for kind in KINDS {
-        let chunks = chunks_of(&terrain, kind, 32);
+        let chunks = chunks_of(&*terrain, kind, 32);
         let mut next = 0;
         // a store of its own each time: the cost of the first chunk in an area, regions and all
         group.bench_function(format!("{kind:?}/cold"), |b| {
@@ -183,7 +184,7 @@ fn report_percentiles() {
     let terrain = terrain();
     println!("\nchunk generation over {CHUNKS_PER_KIND} chunks of each kind, ms");
     for kind in KINDS {
-        let chunks = chunks_of(&terrain, kind, CHUNKS_PER_KIND);
+        let chunks = chunks_of(&*terrain, kind, CHUNKS_PER_KIND);
         let warm_store = Arc::new(RegionStore::new(terrain.clone()).with_resident_cap(100_000));
         for c in &chunks {
             let size = CHUNK_SIZE as i64;

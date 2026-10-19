@@ -5,8 +5,8 @@ use bevy::math::I64Vec2;
 
 use super::biome::BiomeId;
 use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
-use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
+use super::terrain_source::TerrainSource;
 use super::trees::TreeGround;
 use crate::chunks::lod::LodKey;
 
@@ -62,14 +62,14 @@ impl RegionLru {
 }
 
 pub struct RegionStore {
-    noise: Arc<NoiseGenerator>,
+    noise: Arc<dyn TerrainSource>,
     // which slots exist, held only briefly: never while a region is computed
     lru: RwLock<RegionLru>,
     columns: ColumnCache,
 }
 
 impl RegionStore {
-    pub fn new(noise: Arc<NoiseGenerator>) -> Self {
+    pub fn new(noise: Arc<dyn TerrainSource>) -> Self {
         Self {
             noise,
             lru: RwLock::new(RegionLru::new(RESIDENT_REGION_CAP)),
@@ -77,20 +77,20 @@ impl RegionStore {
         }
     }
 
-    pub fn noise(&self) -> &NoiseGenerator {
-        &self.noise
+    pub fn terrain(&self) -> &dyn TerrainSource {
+        &*self.noise
     }
 
     /// The ground under a coarse LOD node's cells, see `columns::COARSE_CELL`. Blocks
     /// while it's sampled, so only call from a task.
     pub fn column_grid(&self, key: LodKey) -> Arc<ColumnGrid> {
-        self.columns.grid(&self.noise, key)
+        self.columns.grid(&*self.noise, key)
     }
 
     /// What full-detail chunks at chunk `x`, `z` take from each of their columns, shared by all
     /// the chunks stacked there. Blocks while it's sampled, so only call from a task.
     pub fn chunk_columns(&self, heights: &mut HeightSampler, x: i64, z: i64) -> Arc<ChunkColumns> {
-        self.columns.chunk_columns(&self.noise, heights, x, z)
+        self.columns.chunk_columns(&*self.noise, heights, x, z)
     }
 
     /// The lowest and highest ground under a coarse LOD node, if a node over the same
@@ -109,7 +109,7 @@ impl RegionStore {
     // Blocks until the region is computed, here or by another thread, so only call from a task.
     pub fn get_region(&self, coord: RegionCoord) -> Arc<Region> {
         let slot = self.lru.write().unwrap().get_or_insert(coord);
-        slot.get_or_init(|| Arc::new(compute_region(&self.noise, coord)))
+        slot.get_or_init(|| Arc::new(compute_region(&*self.noise, coord)))
             .clone()
     }
 
@@ -207,6 +207,7 @@ impl HeightSampler<'_> {
 
 #[cfg(test)]
 mod tests {
+    use crate::chunks::generate::noise::NoiseGenerator;
     use std::sync::Barrier;
 
     use super::*;

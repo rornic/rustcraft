@@ -1,7 +1,7 @@
 use bevy::math::I64Vec2;
 
 use super::biome::BiomeId;
-use super::noise::NoiseGenerator;
+use super::terrain_source::TerrainSource;
 
 pub const REGION_SIZE: i64 = 256;
 // Regions keep the lowest and highest column in each tile this many blocks across.
@@ -64,7 +64,7 @@ impl Region {
 }
 
 // Samples REGION_SIZE^2 columns of noise, so only call from a task.
-pub fn compute_region(noise: &NoiseGenerator, coord: RegionCoord) -> Region {
+pub fn compute_region(noise: &dyn TerrainSource, coord: RegionCoord) -> Region {
     let origin = coord.origin();
     let mut heights = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
     let mut biomes = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
@@ -92,6 +92,7 @@ pub fn compute_region(noise: &NoiseGenerator, coord: RegionCoord) -> Region {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chunks::generate::noise::NoiseGenerator;
 
     #[test]
     fn test_region_coord_from_world_handles_negative_coordinates() {

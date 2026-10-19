@@ -209,7 +209,11 @@ impl Flight {
     fn ground(&mut self, x: f32, z: f32) -> f32 {
         let world = self.app.world();
         let world = world.resource::<rustcraft::world::World>();
-        let height = world.region_store.noise().sample(x as f64, z as f64).height;
+        let height = world
+            .region_store
+            .terrain()
+            .sample(x as f64, z as f64)
+            .height;
         height.max(rustcraft::chunks::generate::WATER_LEVEL as f64) as f32
     }
 

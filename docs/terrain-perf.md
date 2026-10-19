@@ -26,3 +26,11 @@ by generation speed), so judge it by p99 frame time and by the sprint and high l
 
 Flight (`bench/flight-baseline.txt`): frame p99 3.0 / 5.2 / 5.7 / 4.7 ms for load / walk / sprint / high,
 worst 84.9 ms in the high leg. Sprint and high generate about 13.4k chunks/s.
+
+## Phase 0: `TerrainSource` trait
+
+Chunk generation and LOD read terrain through `Arc<dyn TerrainSource>` only (`RegionStore::terrain()`).
+Vertex counts unchanged (664454 / 352454). Criterion and percentiles within noise of the baseline
+(height sample 1.124 us, cold plains chunk p50 26.3 ms, level 5 node 2.65 ms). Flight
+(`bench/flight-phase0.txt`): frame p99 2.4 / 5.4 / 5.9 / 5.1 ms, high-leg throughput 13.4k chunks/s.
+No regression. The one-off 77-85 ms worst frame in the high leg is in the baseline too.
