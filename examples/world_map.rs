@@ -6,8 +6,8 @@
 //   cargo run --release --example world_map -- --seed 42 --center 3000,-2000 --scale 2
 // Colour lowlands by biome, with grass tinted by climate as it's drawn in game:
 //   cargo run --release --example world_map -- --seed 42 --biomes
-// The generated world map instead (--size and --cell in blocks, defaults from WorldConfig):
-//   cargo run --release --example world_map -- --seed 42 --worldmap
+// A smaller or finer world (--size and --cell in blocks, defaults from WorldConfig):
+//   cargo run --release --example world_map -- --seed 42 --size 16384 --cell 16
 // Every run also writes <out>-water.png and <out>-biome.png beside the height map.
 
 use std::env;
@@ -17,7 +17,6 @@ use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
 use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
-use rustcraft::chunks::generate::noise::NoiseGenerator;
 use rustcraft::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
 use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::worldmap::{WorldConfig, WorldTerrain};
@@ -29,8 +28,6 @@ struct Args {
     pixels: u32,
     out: String,
     biomes: bool,
-    // render the world map instead of the layered noise
-    worldmap: bool,
     size: i64,
     cell: i64,
 }
@@ -43,7 +40,6 @@ fn parse_args() -> Args {
         pixels: 2048,
         out: "world_map.png".to_string(),
         biomes: false,
-        worldmap: false,
         size: WorldConfig::default().size,
         cell: WorldConfig::default().map_cell,
     };
@@ -52,10 +48,6 @@ fn parse_args() -> Args {
     while let Some(flag) = argv.next() {
         if flag == "--biomes" {
             args.biomes = true;
-            continue;
-        }
-        if flag == "--worldmap" {
-            args.worldmap = true;
             continue;
         }
         let value = argv
@@ -320,21 +312,15 @@ fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
 
 fn main() {
     let args = parse_args();
-    let mut world_map = None;
-    let noise: Box<dyn TerrainSource> = if args.worldmap {
-        let config = WorldConfig {
-            size: args.size,
-            map_cell: args.cell,
-        };
-        let start = std::time::Instant::now();
-        let map = rustcraft::worldmap::generate(args.seed, config);
-        println!("generated the world map in {:.1?}", start.elapsed());
-        let map = std::sync::Arc::new(map);
-        world_map = Some(map.clone());
-        Box::new(WorldTerrain::new(map))
-    } else {
-        Box::new(NoiseGenerator::new(args.seed))
+    let config = WorldConfig {
+        size: args.size,
+        map_cell: args.cell,
     };
+    let start = std::time::Instant::now();
+    let map = std::sync::Arc::new(rustcraft::worldmap::generate(args.seed, config));
+    println!("generated the world map in {:.1?}", start.elapsed());
+    let world_map = Some(map.clone());
+    let noise: Box<dyn TerrainSource> = Box::new(WorldTerrain::new(map));
 
     let start = std::time::Instant::now();
     let samples = sample_map(&*noise, &args);

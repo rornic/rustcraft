@@ -207,7 +207,6 @@ impl HeightSampler<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::chunks::generate::noise::NoiseGenerator;
     use std::sync::Barrier;
 
     use super::*;
@@ -221,7 +220,7 @@ mod tests {
 
     #[test]
     fn test_sampler_matches_region_heights_across_region_corners() {
-        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        let store = RegionStore::new(crate::worldmap::test_terrain(1));
         let mut sampler = store.sampler();
         // a block either side of the corner where regions (-1..0, -1..0) meet
         for (x, z) in [(-1, -1), (0, -1), (-1, 0), (0, 0), (255, 300), (-1, -1)] {
@@ -237,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_loaded_height_range_waits_for_every_region_it_touches() {
-        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        let store = RegionStore::new(crate::worldmap::test_terrain(1));
         // spans the corner of regions (0, 0) to (1, 1)
         let (min, max) = (I64Vec2::splat(200), I64Vec2::splat(300));
         assert_eq!(None, store.loaded_height_range(min, max));
@@ -257,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_get_region_caches_repeated_lookups() {
-        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        let store = RegionStore::new(crate::worldmap::test_terrain(1));
         let coord = RegionCoord(I64Vec2::new(0, 0));
 
         let first = store.get_region(coord);
@@ -267,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_concurrent_get_region_computes_once() {
-        let store = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(1))));
+        let store = Arc::new(RegionStore::new(crate::worldmap::test_terrain(1)));
         let coord = RegionCoord(I64Vec2::new(5, 5));
         let thread_count = 8;
         let barrier = Arc::new(Barrier::new(thread_count));

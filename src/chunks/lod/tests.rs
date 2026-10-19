@@ -1,3 +1,4 @@
+use crate::chunks::generate::terrain_source::TerrainSource as _;
 use bevy::{
     asset::Handle,
     ecs::entity::Entity,
@@ -434,13 +435,12 @@ fn test_gaps_spawn_before_detail_swaps_as_far_away() {
 fn test_known_empty_nodes_have_nothing_to_mesh() {
     use crate::chunks::chunk::CHUNK_SIZE;
     use crate::chunks::generate::{
-        generator::generate_lod_mesh, noise::NoiseGenerator, region_store::RegionStore,
-        WATER_LEVEL, WORLD_HEIGHT,
+        generator::generate_lod_mesh, region_store::RegionStore, WATER_LEVEL, WORLD_HEIGHT,
     };
     use bevy::math::I64Vec2;
     use std::sync::Arc;
 
-    let noise = Arc::new(NoiseGenerator::new(42));
+    let noise = crate::worldmap::test_terrain(42);
     // a mountain range and the deep ocean, so terrain and water fill many of the nodes
     let find = |wanted: &dyn Fn(f64) -> bool| {
         (-20..20)

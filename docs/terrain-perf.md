@@ -69,3 +69,23 @@ blended with its rank among the land so every seed has dry and wet ground. A Whi
 of ten biomes per cell. The default world takes 3.5 s. Seed 1 comes out at 18% desert, 14% steppe, 21%
 savanna, 16% jungle, 15% forest, 7% tundra/taiga/glacier, with jungle on windward coasts and desert in
 the lee of ranges.
+
+## Phase 5a: the game runs on the world map
+
+`World::new` loads or generates the map (cached under `worlds/`, or `RC_WORLD_DIR`), `WorldTerrain` is the
+`TerrainSource`, and the layered-noise generator, its biome shaping and the `Fractal` helper are gone. The
+terrain differs (new continents), so LOD vertex counts and spawn-area timings are no longer comparable
+with earlier rows, only the per-sample and per-chunk numbers are.
+
+| bench | before | now |
+|---|---|---|
+| terrain sample, height | 1.12 us | 0.256 us |
+| chunk_gen cold p50, plains / mountains / coast | 26.2 / 27.1 / 19.8 ms | 13.5 / 13.4 / 13.4 ms |
+| chunk_gen cold p99, plains / mountains / coast | 60.2 / 60.3 / 84.1 ms | 52.4 / 40.1 / 39.1 ms |
+| lod_node level 1 / 3 / 5 / 7 | 0.171 / 0.238 / 2.62 / 0.174 ms | 0.226 / 0.827 / 1.27 / 0.182 ms |
+
+Level 1 and 3 nodes are slower because the spawn area is now jungle and forest with far more trees to place
+(tree placement dominates those levels), not because sampling got slower.
+Flight (`bench/flight-phase5a.txt`): frame p99 2.5 / 5.4 / 6.1 / 5.0 ms against 2.4 / 5.4 / 5.9 / 5.1,
+throughput unchanged (it is capped by the loader's per-frame budget, not by generation). Worst frame in the
+high leg was 110 ms, against 77-85 ms in earlier runs; it is a single frame and varies run to run.

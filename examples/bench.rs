@@ -10,9 +10,10 @@ use rustcraft::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use rustcraft::chunks::generate::generator::{
     generate_chunk, generate_chunk_mesh, generate_lod_mesh,
 };
-use rustcraft::chunks::generate::noise::NoiseGenerator;
 use rustcraft::chunks::generate::region_store::RegionStore;
+use rustcraft::chunks::generate::terrain_source::TerrainSource;
 use rustcraft::chunks::lod::LodKey;
+use rustcraft::worldmap::{WorldConfig, WorldTerrain};
 
 // Chunks across the area generated, and how many layers of them up from below the surface.
 const ACROSS: i64 = 20;
@@ -33,7 +34,8 @@ fn main() {
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let noise = Arc::new(NoiseGenerator::new(seed));
+    let map = rustcraft::worldmap::generate(seed, WorldConfig::default());
+    let noise: Arc<dyn TerrainSource> = Arc::new(WorldTerrain::new(Arc::new(map)));
     let (sx, sz, sh) = noise.find_spawn();
     let spawn = ChunkCoordinate::containing(I64Vec3::new(sx, sh as i64, sz)).0;
     let regions = Arc::new(RegionStore::new(noise.clone()));

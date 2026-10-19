@@ -283,7 +283,6 @@ impl ColumnCache {
 
 #[cfg(test)]
 mod tests {
-    use crate::chunks::generate::noise::NoiseGenerator;
     use bevy::math::I64Vec3;
 
     use super::*;
@@ -297,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_grid_matches_the_noise_at_cell_centres() {
-        let noise = NoiseGenerator::new(4);
+        let noise = crate::worldmap::test_terrain(4);
         let key = key(3, 5, 2, -7);
         let grid = ColumnGrid::sample(&noise, key);
         let base = key.min_block();
@@ -318,7 +317,7 @@ mod tests {
     #[test]
     fn test_chunk_columns_match_the_regions_and_are_shared_up_the_stack() {
         let regions =
-            super::super::region_store::RegionStore::new(Arc::new(NoiseGenerator::new(4)));
+            super::super::region_store::RegionStore::new(crate::worldmap::test_terrain(4));
         let (x, z) = (-3, 5);
         let mut heights = regions.sampler();
         let columns = regions.chunk_columns(&mut heights, x, z);
@@ -364,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_stacked_nodes_share_a_grid_and_record_its_range() {
-        let noise = NoiseGenerator::new(4);
+        let noise = crate::worldmap::test_terrain(4);
         let cache = ColumnCache::default();
         assert_eq!(None, cache.height_range(key(2, 1, 0, 1)));
         let low = cache.grid(&noise, key(2, 1, 0, 1));

@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use super::climate::BiomeKind;
+use super::detail::{detail, dunes};
 use super::noise::perlin;
+use super::terrain::smoothstep;
 use super::water::RiverHit;
 use super::WorldMap;
 use crate::chunks::generate::biome::{BiomeId, Biomes, Climate};
-use crate::chunks::generate::terrain_source::{TerrainSample, TerrainSource, Water, WaterKind};
+use crate::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
 use crate::chunks::generate::WATER_LEVEL;
 
 // Cells at least this wide leave a river's channel to the map's own carving.
@@ -20,20 +22,24 @@ fn channel(ground: f32, river: RiverHit) -> f32 {
         let t = river.distance / half;
         return ground.min(river.bed + depth * t * t);
     }
-    let bank = 2.0 + half * 0.5;
-    let t = ((river.distance - half) / bank).clamp(0.0, 1.0);
     if ground <= river.surface {
         return ground;
     }
+    let t = ((river.distance - half) / bank_width(river)).clamp(0.0, 1.0);
     river.surface + (ground - river.surface) * t * t * (3.0 - 2.0 * t)
 }
 
-/// Terrain read from a `WorldMap`.
+fn bank_width(river: RiverHit) -> f32 {
+    2.0 + river.width * 0.25
+}
+
+/// Terrain read from a `WorldMap`, with detail laid over its ground.
 pub struct WorldTerrain {
     map: Arc<WorldMap>,
     biomes: Biomes,
     // the biome each `BiomeKind` is, indexed by kind
     kinds: Vec<BiomeId>,
+    desert: BiomeId,
 }
 
 impl WorldTerrain {
@@ -47,19 +53,12 @@ impl WorldTerrain {
                 })
             })
             .collect();
-        Self { map, biomes, kinds }
-    }
-
-    // The ground at a point, with the channel of any river through it cut in. Cells wider than a
-    // river's banks see only the carving the map itself has.
-    fn ground(&self, x: f64, z: f64, cell: f64) -> f64 {
-        let ground = self.map.height_at(x, z);
-        if cell > RIVER_DETAIL_CELL {
-            return ground as f64;
-        }
-        match self.map.river_at(x, z) {
-            Some(river) => channel(ground, river) as f64,
-            None => ground as f64,
+        let desert = biomes.id("desert").expect("desert in table");
+        Self {
+            map,
+            biomes,
+            kinds,
+            desert,
         }
     }
 
@@ -71,10 +70,10 @@ impl WorldTerrain {
         let jx = perlin(seed ^ 0x51A7, x / 40.0, z / 40.0) * wander;
         let jz = perlin(seed ^ 0xB10E, x / 40.0, z / 40.0) * wander;
         let (u, v) = self.map.to_cell(x + jx, z + jz);
-        let max = self.map.dim() as i64 - 1;
+        let max = (self.map.dim() - 1) as f64;
         let i = self.map.index(
-            u.round().clamp(0.0, max as f64) as usize,
-            v.round().clamp(0.0, max as f64) as usize,
+            u.round().clamp(0.0, max) as usize,
+            v.round().clamp(0.0, max) as usize,
         );
         self.kinds[self.map.biome[i] as usize]
     }
@@ -94,40 +93,56 @@ impl TerrainSource for WorldTerrain {
     }
 
     fn sample_for_cell(&self, x: f64, z: f64, cell: f64) -> TerrainSample {
-        TerrainSample {
-            continentalness: self.map.bilinear(&self.map.continentalness, x, z) as f64,
-            height: self.ground(x, z, cell),
-            biome: self.biome_at(x, z),
-            trees: self.map.bilinear_bytes(&self.map.trees, x, z) as f64 / 255.0,
+        let map = &self.map;
+        let seed = map.seed;
+        let sea = WATER_LEVEL as f64;
+        let biome = self.biome_at(x, z);
+        let base = map.height_at(x, z) as f64;
+        let river = if cell <= RIVER_DETAIL_CELL {
+            map.river_at(x, z)
+        } else {
+            None
+        };
+        let roughness = map.bilinear_bytes(&map.roughness, x, z) as f64 / 255.0;
+        let mut detail = detail(seed, x, z, cell, roughness, base - sea);
+        if biome == self.desert {
+            detail += dunes(seed ^ 0xD05E, x, z, cell, base - sea);
         }
-    }
+        // the channel of a river is smooth, banks and all
+        if let Some(river) = river {
+            let half = river.width as f64 / 2.0;
+            detail *= smoothstep(half, half + bank_width(river) as f64, river.distance as f64);
+        }
+        let mut ground = base + detail;
+        if let Some(river) = river {
+            ground = channel(ground as f32, river) as f64;
+        }
+        let ground = ground.max(0.0);
 
-    fn water(&self, x: f64, z: f64) -> Water {
-        let ground = self.ground(x, z, 1.0);
-        if ground < WATER_LEVEL as f64 {
-            return Water {
-                kind: WaterKind::Ocean,
-                surface: WATER_LEVEL as f32,
-                depth: (WATER_LEVEL as f64 - ground) as f32,
-            };
-        }
-        let ground = ground as f32;
-        if let Some(river) = self.map.river_at(x, z) {
-            if river.distance < river.width / 2.0 && ground < river.surface {
-                return Water {
-                    kind: WaterKind::River,
-                    surface: river.surface,
-                    depth: river.surface - ground,
-                };
-            }
-        }
-        match self.map.lake_at(x, z, ground) {
-            Some(surface) => Water {
-                kind: WaterKind::Lake,
-                surface,
-                depth: surface - ground,
+        let (water_surface, water_kind) = if ground < sea {
+            (WATER_LEVEL as f32, WaterKind::Ocean)
+        } else if let Some(river) =
+            river.filter(|r| r.distance < r.width / 2.0 && ground < r.surface as f64)
+        {
+            (river.surface, WaterKind::River)
+        } else if let Some(surface) = map.lake_at(x, z, ground as f32) {
+            (surface, WaterKind::Lake)
+        } else {
+            (0.0, WaterKind::None)
+        };
+        let wet = water_surface > 0.0;
+        TerrainSample {
+            continentalness: map.bilinear(&map.continentalness, x, z) as f64,
+            height: ground,
+            biome,
+            // nothing grows in water
+            trees: if wet {
+                0.0
+            } else {
+                map.bilinear_bytes(&map.trees, x, z) as f64 / 255.0
             },
-            None => Water::default(),
+            water_surface,
+            water_kind,
         }
     }
 
@@ -157,7 +172,7 @@ impl TerrainSource for WorldTerrain {
                 for (dx, dz) in [(i, -ring), (i, ring), (-ring, i), (ring, i)] {
                     let (cx, cz) = ((mid + dx) as usize, (mid + dz) as usize);
                     let above = map.height[map.index(cx, cz)] as f64 - WATER_LEVEL as f64;
-                    if (4.0..30.0).contains(&above) {
+                    if (4.0..30.0).contains(&above) && map.water_kind[map.index(cx, cz)] == 0 {
                         let x = (cx as i64 * cell + cell / 2) - half;
                         let z = (cz as i64 * cell + cell / 2) - half;
                         return (x, z, self.height(x as f64, z as f64));

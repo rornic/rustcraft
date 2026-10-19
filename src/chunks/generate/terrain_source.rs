@@ -1,5 +1,4 @@
 use super::biome::{BiomeId, Biomes, Climate};
-use super::WATER_LEVEL;
 
 /// What covers a column's ground with water.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
@@ -27,6 +26,9 @@ pub struct TerrainSample {
     pub height: f64,
     pub biome: BiomeId,
     pub trees: f64,
+    /// Where the water's surface is over the column, or 0 if it's dry: sea, lake or river.
+    pub water_surface: f32,
+    pub water_kind: WaterKind,
 }
 
 /// Where the ground, its biomes and its water come from. Chunk generation and LOD read terrain
@@ -59,6 +61,11 @@ pub trait TerrainSource: Send + Sync {
         self.sample_for_cell(x, z, 1.0)
     }
 
+    /// Column height in blocks at a block position.
+    fn get(&self, pos: bevy::math::I64Vec2) -> f64 {
+        self.height(pos.x as f64, pos.y as f64)
+    }
+
     fn height(&self, x: f64, z: f64) -> f64 {
         self.sample(x, z).height
     }
@@ -67,17 +74,47 @@ pub trait TerrainSource: Send + Sync {
         self.sample(x, z).biome
     }
 
-    /// The water over the column at (x, z), the sea where the ground is below it.
+    /// The water over the column at (x, z).
     fn water(&self, x: f64, z: f64) -> Water {
-        let height = self.height(x, z);
-        if height < WATER_LEVEL as f64 {
+        let sample = self.sample(x, z);
+        if sample.water_surface > 0.0 {
             Water {
-                kind: WaterKind::Ocean,
-                surface: WATER_LEVEL as f32,
-                depth: (WATER_LEVEL as f64 - height) as f32,
+                kind: sample.water_kind,
+                surface: sample.water_surface,
+                depth: sample.water_surface - sample.height as f32,
             }
         } else {
             Water::default()
         }
+    }
+}
+
+impl<T: TerrainSource + ?Sized> TerrainSource for std::sync::Arc<T> {
+    fn seed(&self) -> u32 {
+        (**self).seed()
+    }
+
+    fn biomes(&self) -> &Biomes {
+        (**self).biomes()
+    }
+
+    fn sample_for_cell(&self, x: f64, z: f64, cell: f64) -> TerrainSample {
+        (**self).sample_for_cell(x, z, cell)
+    }
+
+    fn climate(&self, x: f64, z: f64) -> Climate {
+        (**self).climate(x, z)
+    }
+
+    fn temperature(&self, x: f64, z: f64) -> f32 {
+        (**self).temperature(x, z)
+    }
+
+    fn find_spawn(&self) -> (i64, i64, f64) {
+        (**self).find_spawn()
+    }
+
+    fn tree_bound(&self, x: f64, z: f64) -> f64 {
+        (**self).tree_bound(x, z)
     }
 }

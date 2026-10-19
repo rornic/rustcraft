@@ -1,3 +1,4 @@
+use crate::chunks::generate::terrain_source::TerrainSource as _;
 use std::sync::Arc;
 
 use bevy::math::Vec3;
@@ -15,7 +16,6 @@ use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
 use super::terrain::{freeze_cell, terrain_block, under_grass, FREEZE_TEMPERATURE};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use crate::chunks::generate::light::SkyLight;
-use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
 use crate::chunks::generate::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
@@ -135,7 +135,7 @@ fn test_neighbouring_water_columns_agree_on_shared_corner_depth() {
 fn test_desert_ground_is_sand_and_other_lowland_grass() {
     use bevy::math::I64Vec2;
 
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(3))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(3)));
     let lowland = |desert: bool| {
         (-60..60)
             .flat_map(|z| (-60..60).map(move |x| I64Vec2::new(x, z) * 128))
@@ -172,13 +172,13 @@ fn test_trees_across_chunk_borders_are_whole() {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
 
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let mut heights = regions.sampler();
     let trees = trees_near(
         regions.terrain(),
         &mut heights,
-        I64Vec2::splat(-800),
-        I64Vec2::splat(800),
+        forest_at(5) - I64Vec2::splat(800),
+        forest_at(5) + I64Vec2::splat(800),
     );
     let chunk_of = |p: I64Vec3| p.div_euclid(I64Vec3::splat(16));
     let tree = trees
@@ -325,7 +325,7 @@ fn test_only_the_top_of_frozen_grass_is_snow() {
 }
 
 fn test_regions() -> Arc<RegionStore> {
-    Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(3))))
+    Arc::new(RegionStore::new(crate::worldmap::test_terrain(3)))
 }
 
 #[test]
@@ -396,7 +396,11 @@ fn mesh_lod(lod: &LodBlocks) -> Mesh {
         super::chunk::sky_above(top, lod.cell),
         opacity,
     ));
-    let tint = GrassTint::new(&NoiseGenerator::new(3), Vec3::ZERO, lod.cell as f32);
+    let tint = GrassTint::new(
+        &*crate::worldmap::test_terrain(3),
+        Vec3::ZERO,
+        lod.cell as f32,
+    );
     super::mesh::mesh_blocks(lod, lod.cell, style(false, false), &tint, &light).opaque
 }
 
@@ -518,7 +522,7 @@ fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
         Arc::new(chunk),
         vec![None; 26],
         coord,
-        &NoiseGenerator::new(3),
+        &*crate::worldmap::test_terrain(3),
         false,
     )
 }
@@ -723,7 +727,7 @@ fn test_faces_pick_their_tile_and_merge_within_a_tile() {
 
 #[test]
 fn test_grass_tint_matches_along_shared_edges() {
-    let noise = NoiseGenerator::new(3);
+    let noise = crate::worldmap::test_terrain(3);
     let chunk_tint =
         |x: i64, z: i64| GrassTint::new(&noise, Vec3::new(x as f32, 0.0, z as f32) * 16.0, 1.0);
     let (here, east, south) = (chunk_tint(5, 5), chunk_tint(6, 5), chunk_tint(5, 6));
@@ -745,6 +749,16 @@ fn test_grass_tint_matches_along_shared_edges() {
     assert!(node
         .at(Vec3::splat(15.5))
         .abs_diff_eq(chunk_tint(7, 7).at(Vec3::splat(15.5)), 1e-5));
+}
+
+// The middle of a forest on the test world with this seed.
+fn forest_at(seed: u32) -> bevy::math::I64Vec2 {
+    crate::worldmap::forest_spot(&crate::worldmap::test_terrain(seed))
+}
+
+// The middle of open country with a few lone trees on the test world with this seed.
+fn sparse_at(seed: u32) -> bevy::math::I64Vec2 {
+    crate::worldmap::tree_spot(&crate::worldmap::test_terrain(seed), 4, 10)
 }
 
 // top-face sky light at each vertex, by position
@@ -807,7 +821,7 @@ fn test_lod_ground_under_open_sky_is_lit_to_its_edges() {
     use bevy::math::I64Vec2;
 
     // a mountainside, where LOD skirts stand in for the solid ground beside the node
-    let noise = Arc::new(NoiseGenerator::new(42));
+    let noise = crate::worldmap::test_terrain(42);
     let p = (-40..40)
         .flat_map(|z| (-40..40).map(move |x| I64Vec2::new(x, z) * 256))
         .find(|p| (150.0..250.0).contains(&(noise.get(*p) - WATER_LEVEL as f64)))
@@ -848,7 +862,7 @@ fn test_chunks_are_textured() {
 fn test_lods_wider_than_four_blocks_are_untextured() {
     use bevy::math::I64Vec2;
 
-    let noise = Arc::new(NoiseGenerator::new(42));
+    let noise = crate::worldmap::test_terrain(42);
     let height = noise.get(I64Vec2::ZERO) as i64;
     let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
     let regions = Arc::new(RegionStore::new(noise));
@@ -874,13 +888,13 @@ fn test_lods_wider_than_four_blocks_are_untextured() {
 
 #[test]
 fn test_tree_boxes_stay_textured_up_to_eight_wide_cells_with_a_tile_a_block() {
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let mut heights = regions.sampler();
     let trees = crate::chunks::generate::trees::trees_near(
         regions.terrain(),
         &mut heights,
-        bevy::math::I64Vec2::splat(-300),
-        bevy::math::I64Vec2::splat(300),
+        forest_at(5) - bevy::math::I64Vec2::splat(300),
+        forest_at(5) + bevy::math::I64Vec2::splat(300),
     );
     let tree = &trees[0];
     let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
@@ -905,7 +919,7 @@ fn test_tree_boxes_stay_textured_up_to_eight_wide_cells_with_a_tile_a_block() {
 fn test_lods_up_to_four_blocks_are_textured_with_the_texture_repeating_over_each_cell() {
     use bevy::math::I64Vec2;
 
-    let noise = Arc::new(NoiseGenerator::new(42));
+    let noise = crate::worldmap::test_terrain(42);
     let height = noise.get(I64Vec2::ZERO) as i64;
     let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
     let regions = Arc::new(RegionStore::new(noise));
@@ -1156,7 +1170,7 @@ fn test_leaves_on_the_chunks_edge_keep_their_faces_with_the_rest() {
         Arc::new(chunk),
         neighbours,
         ChunkCoordinate(I64Vec3::new(0, 40, 0)),
-        &NoiseGenerator::new(3),
+        &*crate::worldmap::test_terrain(3),
         false,
     );
     assert!(meshes.inner_leaves.is_none());
@@ -1170,7 +1184,7 @@ fn test_full_detail_solid_leaves_hide_the_leaves_behind_them() {
         Arc::new(leaf_cube_chunk()),
         vec![None; 26],
         coord,
-        &NoiseGenerator::new(3),
+        &*crate::worldmap::test_terrain(3),
         true,
     );
     assert!(mesh.inner_leaves.is_none());
@@ -1197,7 +1211,7 @@ fn test_lod_border_exposes_surface_cells_as_skirt() {
 fn test_skirt_walls_are_lit_like_the_open_ground_they_hang_from() {
     // flat ground under open sky, cells a block across, and the cells beyond it solid
     let lod = flat_lod(8);
-    let noise = NoiseGenerator::new(1);
+    let noise = crate::worldmap::test_terrain(1);
     let tint = super::buffers::GrassTint::new(&noise, Vec3::ZERO, 1.0);
     let opacity = lod.cells.iter().map(BlockType::light_opacity).collect();
     let light = std::cell::LazyCell::new(|| {
@@ -1254,7 +1268,7 @@ fn test_lod_skirt_hangs_from_the_nodes_own_ground_not_its_neighbours() {
 
 #[test]
 fn test_lod_water_surface_cells_over_shallow_ground_are_water() {
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(102))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(102)));
     let mut checked = 0;
     for level in [3u8, 4, 5] {
         for x in -6..6i64 {
@@ -1399,13 +1413,13 @@ fn test_canopy_shade_leaves_bare_columns_and_other_lods_alone() {
 fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let mut heights = regions.sampler();
     let trees = trees_near(
         regions.terrain(),
         &mut heights,
-        I64Vec2::splat(-300),
-        I64Vec2::splat(300),
+        sparse_at(5) - I64Vec2::splat(300),
+        sparse_at(5) + I64Vec2::splat(300),
     );
     let near = |a: &crate::chunks::generate::trees::Tree,
                 b: &crate::chunks::generate::trees::Tree| {
@@ -1468,13 +1482,13 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_thirty_two_wide() {
 fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let mut heights = regions.sampler();
     let trees = trees_near(
         regions.terrain(),
         &mut heights,
-        I64Vec2::splat(-300),
-        I64Vec2::splat(300),
+        sparse_at(5) - I64Vec2::splat(300),
+        sparse_at(5) + I64Vec2::splat(300),
     );
     let near = |a: &crate::chunks::generate::trees::Tree,
                 b: &crate::chunks::generate::trees::Tree| {
@@ -1570,7 +1584,7 @@ fn forest(regions: &RegionStore) -> (I64Vec3, Vec<crate::chunks::generate::trees
 
 #[test]
 fn test_far_forests_are_a_few_canopy_boxes_not_a_box_a_tree() {
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let (middle, trees) = forest(&regions);
     assert!(
         trees.len() > 300,
@@ -1634,7 +1648,7 @@ fn test_far_forests_are_a_few_canopy_boxes_not_a_box_a_tree() {
 
 #[test]
 fn test_canopy_is_no_bigger_than_the_crowns_under_it() {
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let (middle, _) = forest(&regions);
     for level in [4u8, 5] {
         let key = LodKey::containing(
@@ -1672,7 +1686,7 @@ fn test_canopy_is_no_bigger_than_the_crowns_under_it() {
 #[test]
 fn test_trees_vary_in_colour_the_same_at_every_level() {
     use crate::chunks::generate::trees::TreeTints;
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let (_, trees) = forest(&regions);
     let tints: Vec<Vec3> = trees.iter().map(|t| t.tint()).collect();
     let brightness = |t: &Vec3| t.x + t.y + t.z;
@@ -1705,7 +1719,7 @@ fn test_trees_vary_in_colour_the_same_at_every_level() {
 #[test]
 fn test_leaves_of_differently_tinted_trees_dont_merge() {
     let mut chunk = leaf_cube_chunk();
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let (_, trees) = forest(&regions);
     // two trees, one each side of the cube, so it's split down the middle
     let thin: Vec<_> = trees.iter().filter(|t| t.width() == 1).copied().collect();
@@ -1752,13 +1766,13 @@ fn test_forest_tints_the_ground_darker_the_more_of_it_trees_cover() {
 fn test_cells_wider_than_real_trees_tint_forest_instead_of_drawing_leaves() {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let mut heights = regions.sampler();
     let trees = trees_near(
         regions.terrain(),
         &mut heights,
-        I64Vec2::splat(-300),
-        I64Vec2::splat(300),
+        forest_at(5) - I64Vec2::splat(300),
+        forest_at(5) + I64Vec2::splat(300),
     );
     let tree = trees.first().expect("no trees");
     let key = LodKey::containing(ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))), 6);
@@ -1820,15 +1834,15 @@ fn tree_spots(regions: &Arc<RegionStore>, key: LodKey) -> (Spots, Spots) {
 #[test]
 fn test_every_level_grows_the_trees_full_detail_does() {
     use bevy::math::I64Vec2;
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     for level in [2u8, 3, 4, 5] {
         // nodes over a forested stretch, found from the full-detail trees
         let mut heights = regions.sampler();
         let trees = crate::chunks::generate::trees::trees_near(
             regions.terrain(),
             &mut heights,
-            I64Vec2::splat(-500),
-            I64Vec2::splat(500),
+            forest_at(5) - I64Vec2::splat(500),
+            forest_at(5) + I64Vec2::splat(500),
         );
         let mut checked = 0;
         for tree in trees.iter().step_by(trees.len() / 8 + 1) {
@@ -1932,7 +1946,7 @@ fn seam_leaks(regions: &Arc<RegionStore>, fine: LodKey, coarse: LodKey) -> (usiz
 
 #[test]
 fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(5))));
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
     let mut sampler = regions.sampler();
     // stretches of land a few thousand blocks apart, with a fine node beside a coarser one
     let spots: Vec<(i64, i64)> = (0..8)
@@ -1941,6 +1955,13 @@ fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
                 -3000 + (i % 4) * 1900 + (i * 137) % 400,
                 -3000 + (i / 4) * 1900 + (i * 211) % 400,
             )
+        })
+        // moved east, off the sea, to land a few blocks above it
+        .map(|(x, z)| {
+            (0..400)
+                .map(|step| x + step * 64)
+                .find(|&x| sampler.height(x, z) >= WATER_LEVEL as f64 + 3.0)
+                .map_or((x, z), |x| (x, z))
         })
         .collect();
     for fine_level in 1..=4u8 {
@@ -1965,35 +1986,6 @@ fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
             fine_level + 1
         );
     }
-}
-
-#[test]
-fn test_ground_a_block_lower_than_a_surface_cell_above_is_still_lidded() {
-    // here full detail has the ground a block under the level 1 cell the node above draws it in
-    let regions = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(2775841323))));
-    let key = LodKey {
-        level: 1,
-        coord: I64Vec3::new(6, 13, 4),
-    };
-    let meshes = super::lod::generate_lod_mesh(regions, key).unwrap();
-    let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * 2.0 - 0.5);
-    let Some(bevy::render::mesh::VertexAttributeValues::Float32x3(pos)) =
-        meshes.opaque.attribute(Mesh::ATTRIBUTE_POSITION)
-    else {
-        panic!()
-    };
-    let Some(Indices::U32(idx)) = meshes.opaque.indices() else {
-        panic!()
-    };
-    let (px, pz) = (198.7f32, 127.7f32);
-    let lidded = idx.chunks(3).any(|t| {
-        let q = [0, 1, 2].map(|j| origin + Vec3::from(pos[t[j] as usize]) * 2.0);
-        let e = |a: Vec3, b: Vec3| (px - b.x) * (a.z - b.z) - (a.x - b.x) * (pz - b.z);
-        let d = [e(q[0], q[1]), e(q[1], q[2]), e(q[2], q[0])];
-        q.iter().all(|v| v.y == 447.5)
-            && !(d.iter().any(|&x| x < 0.0) && d.iter().any(|&x| x > 0.0))
-    });
-    assert!(lidded);
 }
 
 #[test]

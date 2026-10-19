@@ -1,4 +1,4 @@
-use super::{BaseColumn, Biome};
+use super::Biome;
 
 /// A biome that only sets how thickly trees grow: a world map picks it, and the ground keeps
 /// the base terrain's blocks.
@@ -16,10 +16,6 @@ impl Plain {
 impl Biome for Plain {
     fn name(&self) -> &'static str {
         self.name
-    }
-
-    fn strength(&self, _column: &BaseColumn) -> f64 {
-        0.0
     }
 
     fn tree_density(&self) -> Option<f64> {

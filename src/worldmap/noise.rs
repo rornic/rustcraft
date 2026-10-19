@@ -66,6 +66,46 @@ pub fn fbm(seed: u32, x: f64, z: f64, wavelength: f64, octaves: u32) -> f64 {
     total / norm
 }
 
+/// How much of a feature `wavelength` blocks across survives in cells `cell` blocks wide, 0..1:
+/// what averaging a wave over a cell leaves of it, and nothing once the cell is as wide as the
+/// wave. Single blocks see everything, with no `sin` call, so full detail stays portable.
+pub fn resolved(wavelength: f64, cell: f64) -> f64 {
+    if cell <= 1.0 {
+        return 1.0;
+    }
+    let ratio = cell / wavelength;
+    if ratio >= 1.0 {
+        return 0.0;
+    }
+    let angle = std::f64::consts::PI * ratio;
+    angle.sin() / angle
+}
+
+/// `fbm`, with each octave faded by `resolved` for cells `cell` blocks wide, so wide cells see
+/// the mean of what they cover rather than aliasing fine features into bumps that differ from
+/// one LOD level to the next. The same as `fbm` for single blocks.
+pub fn fbm_filtered(seed: u32, x: f64, z: f64, wavelength: f64, octaves: u32, cell: f64) -> f64 {
+    let (mut frequency, mut amplitude, mut total, mut norm) = (1.0 / wavelength, 1.0, 0.0, 0.0);
+    let mut octave_wavelength = wavelength;
+    for octave in 0..octaves {
+        let offset = octave as f64 * 17.31;
+        let seen = resolved(octave_wavelength, cell);
+        if seen > 0.0 {
+            total += perlin(
+                seed.wrapping_add(octave.wrapping_mul(0x9E37_79B9)),
+                x * frequency + offset,
+                z * frequency - offset,
+            ) * amplitude
+                * seen;
+        }
+        norm += amplitude;
+        amplitude *= 0.5;
+        frequency *= 2.0;
+        octave_wavelength *= 0.5;
+    }
+    total / norm
+}
+
 /// Ridged multifractal, 0..1: sharp crests where the noise crosses zero, each octave weighted by
 /// the last so fine detail gathers on the ridges.
 pub fn ridged(seed: u32, x: f64, z: f64, wavelength: f64, octaves: u32) -> f64 {
@@ -109,6 +149,23 @@ mod tests {
         // pinned, as a change to the hash or the maths would change every world
         assert_eq!(1_640_221_175, hash(1, 2, 3));
         assert_eq!(-0.2166502339539473, perlin(7, 1.3, 2.7));
+    }
+
+    #[test]
+    fn test_filtered_fbm_matches_fbm_at_full_detail_and_calms_in_wide_cells() {
+        for i in 0..50 {
+            let (x, z) = (i as f64 * 91.7, i as f64 * -33.1);
+            assert_eq!(
+                fbm(5, x, z, 120.0, 6).to_bits(),
+                fbm_filtered(5, x, z, 120.0, 6, 1.0).to_bits()
+            );
+        }
+        let spread = |cell: f64| {
+            (0..400)
+                .map(|i| fbm_filtered(5, i as f64 * 13.0, i as f64 * 7.0, 120.0, 6, cell).abs())
+                .sum::<f64>()
+        };
+        assert!(spread(64.0) < spread(1.0) * 0.6);
     }
 
     #[test]

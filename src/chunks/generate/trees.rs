@@ -541,8 +541,6 @@ pub(super) fn hash(seed: u64, a: i64, b: i64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::chunks::generate::noise::NoiseGenerator;
-    use std::sync::Arc;
 
     use super::*;
     use crate::chunks::generate::region_store::RegionStore;
@@ -703,10 +701,11 @@ mod tests {
 
     #[test]
     fn test_trees_stand_on_grass_and_agree_between_lookups() {
-        let noise = Arc::new(NoiseGenerator::new(5));
+        let noise = crate::worldmap::test_terrain(5);
         let regions = RegionStore::new(noise.clone());
         let mut heights = regions.sampler();
-        let (min, max) = (I64Vec2::new(-600, -600), I64Vec2::new(600, 600));
+        let centre = crate::worldmap::forest_spot(&noise);
+        let (min, max) = (centre - I64Vec2::splat(600), centre + I64Vec2::splat(600));
         let trees = trees_near(&*noise, &mut heights, min, max);
         assert!(!trees.is_empty(), "no trees in {min}..{max}");
         for t in &trees {
@@ -714,12 +713,7 @@ mod tests {
             assert_eq!(ground, t.base.y);
         }
         // a smaller window finds the same trees where they overlap
-        let some = trees_near(
-            &*noise,
-            &mut heights,
-            I64Vec2::new(0, 0),
-            I64Vec2::new(40, 40),
-        );
+        let some = trees_near(&*noise, &mut heights, centre, centre + I64Vec2::splat(40));
         for t in &some {
             assert!(trees
                 .iter()

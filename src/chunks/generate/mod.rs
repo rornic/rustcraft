@@ -1,9 +1,7 @@
 pub mod biome;
 pub mod columns;
-pub mod fractal;
 pub mod generator;
 pub mod light;
-pub mod noise;
 pub mod region;
 pub mod region_store;
 pub mod terrain_source;

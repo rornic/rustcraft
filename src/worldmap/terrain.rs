@@ -26,8 +26,11 @@ const RIDGE_HEIGHT: f64 = 230.0;
 const HILL_WAVELENGTH: f64 = 900.0;
 const HILLINESS_WAVELENGTH: f64 = 2500.0;
 const HILL_HEIGHT: f64 = 45.0;
-// The ocean ring around the world starts and ends at this fraction of the half size.
-const EDGE_FALLOFF: (f64, f64) = (0.8, 0.97);
+// The ocean ring around the world starts and ends at this fraction of the half size, measured
+// along a rounded square, so no stretch of coast runs straight along the world's edge.
+const EDGE_FALLOFF: (f64, f64) = (0.66, 0.92);
+// How far, in blocks, the wander of the edge takes to change.
+const EDGE_WANDER: f64 = 4500.0;
 
 const MAX_HEIGHT: f64 = WORLD_HEIGHT as f64 - 16.0;
 const PEAK_EASE_START: f64 = MAX_HEIGHT - 96.0;
@@ -83,13 +86,13 @@ fn ease_peaks(height: f64) -> f64 {
     MAX_HEIGHT - room * (-(height - PEAK_EASE_START) / room).exp()
 }
 
-// 0 inside the world, rising to 1 in the ocean ring at its edge.
-fn edge_falloff(x: f64, z: f64, half: f64) -> f64 {
-    smoothstep(EDGE_FALLOFF.0, EDGE_FALLOFF.1, x.abs() / half).max(smoothstep(
-        EDGE_FALLOFF.0,
-        EDGE_FALLOFF.1,
-        z.abs() / half,
-    ))
+// 0 inside the world, rising to 1 in the ocean ring at its edge. The ring follows a rounded square
+// whose radius wanders with noise, so the coast is not a straight line along the world's edge.
+fn edge_falloff(seed: u32, x: f64, z: f64, half: f64) -> f64 {
+    let (nx, nz) = (x.abs() / half, z.abs() / half);
+    let rounded = (nx.powf(2.4) + nz.powf(2.4)).powf(1.0 / 2.4);
+    let wander = fbm(seed.wrapping_add(11 * SEED_STRIDE), x, z, EDGE_WANDER, 4) * 0.2;
+    smoothstep(EDGE_FALLOFF.0, EDGE_FALLOFF.1, rounded + wander)
 }
 
 /// Ground height in blocks and continentalness at a point.
@@ -99,7 +102,7 @@ pub(super) fn column(seed: u32, x: f64, z: f64, half: f64) -> (f64, f64) {
     let warp_z = fbm(field(1), x, z, WARP_WAVELENGTH, 3) * WARP_STRENGTH;
     let (wx, wz) = (x + warp_x, z + warp_z);
 
-    let edge = edge_falloff(wx, wz, half);
+    let edge = edge_falloff(seed, wx, wz, half);
     let continentalness =
         (fbm(field(2), wx, wz, CONTINENT_WAVELENGTH, 6) * CONTINENT_CONTRAST).clamp(-1.0, 1.0);
     let continentalness = lerp(continentalness, -1.0, edge);

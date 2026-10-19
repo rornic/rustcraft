@@ -5,6 +5,7 @@
 //! and share it with the rest: nothing downstream depends on the float maths that made it.
 
 pub mod climate;
+pub mod detail;
 pub mod erosion;
 pub mod hydrology;
 pub mod io;
@@ -112,6 +113,8 @@ pub struct WorldMap {
     pub biome: Vec<u8>,
     /// How thickly trees grow at each cell, 0..1 as 0..=255.
     pub trees: Vec<u8>,
+    /// How rough the ground is, 0..1 as 0..=255: the amplitude of the detail laid over it.
+    pub roughness: Vec<u8>,
 }
 
 /// The eight cells around one, as (dx, dz), in the order `WorldMap::down` indexes them.
@@ -148,6 +151,7 @@ impl WorldMap {
             moisture: vec![0.0; cells],
             biome: vec![0; cells],
             trees: vec![0; cells],
+            roughness: vec![0; cells],
         }
     }
 
@@ -245,6 +249,63 @@ fn catmull_rom(p: [f32; 4], t: f32) -> f32 {
         + (3.0 * (p[1] - p[2]) + p[3] - p[0]) * t * t * t)
 }
 
+/// A small world to run tests on, made once per seed.
+#[cfg(test)]
+pub fn test_terrain(seed: u32) -> Arc<WorldTerrain> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static MAPS: Mutex<Option<HashMap<u32, Arc<WorldTerrain>>>> = Mutex::new(None);
+    let mut maps = MAPS.lock().unwrap();
+    maps.get_or_insert_default()
+        .entry(seed)
+        .or_insert_with(|| {
+            let config = WorldConfig {
+                size: 16_384,
+                map_cell: 32,
+            };
+            Arc::new(WorldTerrain::new(Arc::new(generate(seed, config))))
+        })
+        .clone()
+}
+
+/// The middle of a thick, gentle forest on a test world, nearest its centre, for tests that need
+/// trees to stand among.
+#[cfg(test)]
+pub fn forest_spot(terrain: &WorldTerrain) -> bevy::math::I64Vec2 {
+    tree_spot(terrain, 90, 255)
+}
+
+/// The middle of dry land nearest the test world's centre where trees grow this thickly, as
+/// `WorldMap::trees` has them, everywhere round it.
+#[cfg(test)]
+pub fn tree_spot(terrain: &WorldTerrain, least: u8, most: u8) -> bevy::math::I64Vec2 {
+    let map = terrain.map();
+    let dim = map.dim() as i64;
+    let mut best: Option<(i64, bevy::math::I64Vec2)> = None;
+    for cz in 12..dim - 12 {
+        for cx in 12..dim - 12 {
+            let near = |dx: i64, dz: i64| map.index((cx + dx) as usize, (cz + dz) as usize);
+            let forested = (-10..=10).step_by(5).all(|dz| {
+                (-10..=10).step_by(5).all(|dx| {
+                    let i = near(dx, dz);
+                    (least..=most).contains(&map.trees[i])
+                        && map.water_kind[i] == 0
+                        && (map.height[i] - crate::chunks::generate::WATER_LEVEL as f32) > 6.0
+                })
+            });
+            if !forested {
+                continue;
+            }
+            let (x, z) = map.cell_centre(cx as usize, cz as usize);
+            let distance = (x.abs() + z.abs()) as i64;
+            if best.is_none_or(|(d, _)| distance < d) {
+                best = Some((distance, bevy::math::I64Vec2::new(x as i64, z as i64)));
+            }
+        }
+    }
+    best.expect("no forest on the test world").1
+}
+
 /// Runs `f(row, cells)` over each row of a `dim`-wide layer on all cores.
 pub(crate) fn par_rows<T: Send>(dim: usize, layer: &mut [T], f: impl Fn(usize, &mut [T]) + Sync) {
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
@@ -271,6 +332,7 @@ pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     erosion::run(&mut map);
     hydrology::run(&mut map, true);
     climate::run(&mut map);
+    detail::roughness_layer(&mut map);
     map
 }
 

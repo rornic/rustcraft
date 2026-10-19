@@ -16,6 +16,7 @@ use rustcraft::chunks::material::{ChunkMaterial, TerrainMaterials, WaterMaterial
 use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
 use rustcraft::horizon::render_distance_at;
 use rustcraft::settings::{DebugSettings, RendererSettings, Settings};
+use rustcraft::worldmap::WorldConfig;
 
 const FRAME: f32 = 1.0 / 60.0;
 const WALK_SPEED: f32 = 20.0;
@@ -27,7 +28,7 @@ const FLY_HEIGHT: f32 = 900.0;
 struct FlightCamera;
 
 #[derive(Resource)]
-struct Renderer(RendererSettings);
+struct Renderer(RendererSettings, WorldConfig);
 
 fn setup(
     mut commands: Commands,
@@ -35,8 +36,10 @@ fn setup(
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
+    let world_config = renderer.1;
     let renderer = &renderer.0;
-    let world = rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32);
+    let world =
+        rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32, world_config);
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);
@@ -253,16 +256,15 @@ fn main() {
     let out = arg("--out");
     std::env::set_var("RC_SEED", &seed);
 
-    let renderer = Settings::read("assets/settings.toml")
-        .expect("failed to read settings")
-        .renderer;
+    let settings = Settings::read("assets/settings.toml").expect("failed to read settings");
+    let (renderer, world) = (settings.renderer, settings.world);
     let mut app = App::new();
     app.add_plugins((
         MinimalPlugins.set(task_pool_plugin()),
         AssetPlugin::default(),
         TerrainPlugin,
     ))
-    .insert_resource(Renderer(renderer))
+    .insert_resource(Renderer(renderer, world))
     .init_asset::<Mesh>()
     .init_asset::<Image>()
     .init_asset::<ChunkMaterial>()

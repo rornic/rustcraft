@@ -49,7 +49,7 @@ fn setup_scene(
         layout.max_level
     );
 
-    let game_world = rustcraft::world::World::new(layout.region_reach() as u32);
+    let game_world = rustcraft::world::World::new(layout.region_reach() as u32, settings.world);
     let world_height = game_world.height;
     info!("world seed is {}", game_world.seed());
     let spawn = game_world.spawn();

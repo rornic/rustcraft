@@ -9,7 +9,6 @@ use bevy::math::I64Vec3;
 use criterion::{criterion_group, BatchSize, Criterion};
 use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
 use rustcraft::chunks::generate::generator::{generate_chunk, generate_lod_mesh};
-use rustcraft::chunks::generate::noise::{NoiseGenerator, WORLD_HALF_SIZE};
 use rustcraft::chunks::generate::region_store::RegionStore;
 use rustcraft::chunks::generate::terrain_source::TerrainSource;
 use rustcraft::chunks::generate::WATER_LEVEL;
@@ -30,8 +29,14 @@ enum Kind {
 
 const KINDS: [Kind; 3] = [Kind::Plains, Kind::Mountains, Kind::Coast];
 
+const WORLD_HALF_SIZE: i64 = 32_768;
+
 fn terrain() -> Arc<dyn TerrainSource> {
-    Arc::new(NoiseGenerator::new(SEED))
+    static MAP: std::sync::OnceLock<Arc<rustcraft::worldmap::WorldMap>> =
+        std::sync::OnceLock::new();
+    let map =
+        MAP.get_or_init(|| Arc::new(rustcraft::worldmap::generate(SEED, WorldConfig::default())));
+    Arc::new(WorldTerrain::new(map.clone()))
 }
 
 fn classify(terrain: &dyn TerrainSource, x: i64, z: i64) -> Option<(Kind, f64)> {

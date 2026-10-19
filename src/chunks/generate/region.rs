@@ -92,7 +92,6 @@ pub fn compute_region(noise: &dyn TerrainSource, coord: RegionCoord) -> Region {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunks::generate::noise::NoiseGenerator;
 
     #[test]
     fn test_region_coord_from_world_handles_negative_coordinates() {
@@ -112,7 +111,10 @@ mod tests {
 
     #[test]
     fn test_height_range_covers_every_column_in_range() {
-        let region = &compute_region(&NoiseGenerator::new(1), RegionCoord::from_world(0, 0));
+        let region = &compute_region(
+            &*crate::worldmap::test_terrain(1),
+            RegionCoord::from_world(0, 0),
+        );
         for (min, max) in [(0, 0), (5, 40), (17, 31), (0, REGION_SIZE - 1)] {
             let (min, max) = (I64Vec2::splat(min), I64Vec2::splat(max));
             let (lowest, highest) = region.height_range(min, max);

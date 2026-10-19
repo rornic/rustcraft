@@ -16,7 +16,7 @@ use rustcraft::chunks::chunk_loader::{
 };
 use rustcraft::chunks::fade::FULLY_VISIBLE;
 use rustcraft::chunks::generate::columns::COARSE_CELL;
-use rustcraft::chunks::generate::noise::NoiseGenerator;
+use rustcraft::chunks::generate::terrain_source::TerrainSource;
 use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk};
 use rustcraft::chunks::lod::{LodKey, LodLayout, LodLoader, LodNode};
@@ -24,12 +24,13 @@ use rustcraft::chunks::material::{ChunkMaterial, TerrainMaterials, WaterMaterial
 use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
 use rustcraft::horizon::render_distance_at;
 use rustcraft::settings::{DebugSettings, RendererSettings, Settings};
+use rustcraft::worldmap::WorldConfig;
 
 #[derive(Component)]
 struct SimCamera;
 
 #[derive(Resource)]
-struct Renderer(RendererSettings);
+struct Renderer(RendererSettings, WorldConfig);
 
 fn setup(
     mut commands: Commands,
@@ -37,8 +38,10 @@ fn setup(
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
 ) {
+    let world_config = renderer.1;
     let renderer = &renderer.0;
-    let world = rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32);
+    let world =
+        rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32, world_config);
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);
@@ -117,8 +120,8 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
         .collect();
     let chunk_vis = |c: &ChunkCoordinate| group_vis.get(&LodKey::containing(*c, 1)).copied();
     let game_world = world.resource::<rustcraft::world::World>();
-    // sampled straight from the noise, so reporting never computes regions for the game
-    let noise = NoiseGenerator::new(game_world.seed());
+    // sampled straight from the terrain, so reporting never computes regions for the game
+    let noise = game_world.region_store.terrain();
     let anchor = ChunkCoordinate::containing(pos.floor().as_i64vec3());
     let full = layout.full_detail_distance;
     let far = layout.render_distance().min(120.0);
@@ -145,7 +148,7 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
                     shown(LodKey::containing(c, l))
                         // coarse cells draw the ground at their cell's average height, which can
                         // be in the node above or below the one this sample's height is in
-                        || coarse_ground(&noise, cx, cz, l).is_some_and(|ground| shown(LodKey::containing(ground, l)))
+                        || coarse_ground(noise, cx, cz, l).is_some_and(|ground| shown(LodKey::containing(ground, l)))
                 });
             if !drawn {
                 let band = if d < full {
@@ -220,7 +223,12 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
 
 // The chunk holding the ground a coarse LOD level draws over chunk column (`cx`, `cz`): the
 // height of the cell around the chunk's centre, as the level's column grid samples it.
-fn coarse_ground(noise: &NoiseGenerator, cx: i64, cz: i64, level: u8) -> Option<ChunkCoordinate> {
+fn coarse_ground(
+    noise: &dyn TerrainSource,
+    cx: i64,
+    cz: i64,
+    level: u8,
+) -> Option<ChunkCoordinate> {
     let cell = 1i64 << level;
     if cell < COARSE_CELL {
         return None;
@@ -241,7 +249,7 @@ fn coarse_ground(noise: &NoiseGenerator, cx: i64, cz: i64, level: u8) -> Option<
 // The surface chunks within `radius` chunks of `pos`, found once so checking them is cheap.
 fn surface_chunks(app: &App, pos: Vec3, radius: i64) -> Vec<ChunkCoordinate> {
     let game_world = app.world().resource::<rustcraft::world::World>();
-    let noise = NoiseGenerator::new(game_world.seed());
+    let noise = game_world.region_store.terrain();
     let anchor = ChunkCoordinate::containing(pos.floor().as_i64vec3());
     let size = CHUNK_SIZE as i64;
     let mut chunks = Vec::new();
@@ -350,9 +358,8 @@ fn camera_pos(app: &mut App) -> Vec3 {
 }
 
 fn main() {
-    let renderer = Settings::read("assets/settings.toml")
-        .expect("failed to read settings")
-        .renderer;
+    let settings = Settings::read("assets/settings.toml").expect("failed to read settings");
+    let (renderer, world) = (settings.renderer, settings.world);
     let layout = renderer.lod_layout();
     let mut app = App::new();
     app.add_plugins((
@@ -360,7 +367,7 @@ fn main() {
         AssetPlugin::default(),
         TerrainPlugin,
     ))
-    .insert_resource(Renderer(renderer))
+    .insert_resource(Renderer(renderer, world))
     .init_asset::<Mesh>()
     .init_asset::<Image>()
     .init_asset::<ChunkMaterial>()

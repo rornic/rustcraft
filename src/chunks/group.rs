@@ -307,7 +307,6 @@ mod tests {
     use crate::chunks::chunk::{ChunkCoordinate, ChunkData};
     use crate::chunks::generate::generator::INNER_LEAVES_REACH;
     use crate::chunks::generate::generator::{generate_chunk_mesh, ChunkMeshes};
-    use crate::chunks::generate::noise::NoiseGenerator;
     use crate::chunks::lod::LodKey;
 
     fn block_mesh(at: U16Vec3) -> ChunkMeshes {
@@ -317,7 +316,7 @@ mod tests {
             Arc::new(chunk),
             vec![None; 26],
             ChunkCoordinate(I64Vec3::ZERO),
-            &NoiseGenerator::new(1),
+            &*crate::worldmap::test_terrain(1),
             false,
         )
     }
@@ -380,7 +379,7 @@ mod tests {
             Arc::new(chunk),
             vec![None; 26],
             ChunkCoordinate(I64Vec3::ZERO),
-            &NoiseGenerator::new(1),
+            &*crate::worldmap::test_terrain(1),
             false,
         );
         let inner = meshes.inner_leaves.as_ref().unwrap().count_vertices();
