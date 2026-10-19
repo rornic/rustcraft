@@ -60,7 +60,7 @@ pub const TREE_HEIGHT: i64 = 27;
 // Trees growing where it is cooler than this, at their height, are pines: cold lowlands, and
 // the slopes of any range higher up, where the air has cooled.
 const PINE_TEMPERATURE: f32 = 0.46;
-// Higher than this above the sea, trees are pines whatever the climate below.
+// Higher than this above the sea, a mountain's trees are pines whatever the climate below.
 const ALPINE_PINES_ABOVE: i64 = 120;
 // Ground steeper than this (see `terrain_block`) is too steep to take root on.
 const MAX_GRADIENT: f64 = 1.5;
@@ -455,6 +455,21 @@ pub fn grows_into(existing: BlockType, block: BlockType) -> bool {
     existing == BlockType::Air || (existing == BlockType::Leaves && block == BlockType::Log)
 }
 
+/// Which tree grows on ground `above_sea` blocks up in the biome called `biome`, where the air is
+/// `warmth` warm up there. Pines in the cold, and on a mountain's upper slopes even in the tropics;
+/// the hot biomes keep their broadleaf trees however high the ground or cool the water's edge, so no
+/// savanna has pines in it.
+pub fn tree_kind(biome: Option<&str>, above_sea: i64, warmth: f32) -> TreeKind {
+    let hot = matches!(biome, Some("savanna" | "jungle" | "desert"));
+    let cold = matches!(biome, Some("taiga" | "tundra" | "glacier"));
+    let alpine = above_sea >= ALPINE_PINES_ABOVE && biome == Some("mountain");
+    if !hot && (cold || alpine || warmth < PINE_TEMPERATURE) {
+        TreeKind::Pine
+    } else {
+        TreeKind::Broadleaf
+    }
+}
+
 // Every tree that could reach into the columns `min..=max` (x, z).
 pub fn trees_near(
     noise: &dyn TerrainSource,
@@ -531,9 +546,8 @@ fn tree_in_cell(
     let growth = ((seed >> 32) % 1000) as f64 / 1000.0;
     // how warm it is up where the tree stands, which falls with height
     let warmth = noise.climate(x as f64, z as f64).temperature;
-    // pines in the cold, and on any range's upper slopes, even in the tropics
-    let alpine = height - WATER_LEVEL >= ALPINE_PINES_ABOVE;
-    let (kind, trunk, spread) = if warmth < PINE_TEMPERATURE || alpine {
+    let kind_here = tree_kind(noise.biomes().name(biome), height - WATER_LEVEL, warmth);
+    let (kind, trunk, spread) = if kind_here == TreeKind::Pine {
         (
             TreeKind::Pine,
             16 + (growth * 9.0) as i64,
@@ -714,6 +728,37 @@ mod tests {
             |_, block| wide.push(block),
         );
         assert!(wide.contains(&BlockType::Leaves) && !wide.contains(&BlockType::Log));
+    }
+
+    #[test]
+    fn test_pines_grow_in_the_cold_and_up_mountains_but_never_in_the_hot_biomes() {
+        // savanna and jungle, however high or cool: broadleaf
+        for biome in ["savanna", "jungle", "desert"] {
+            for (above, warmth) in [(0, 0.8), (200, 0.3), (300, 0.1), (150, 0.44)] {
+                assert_eq!(
+                    TreeKind::Broadleaf,
+                    tree_kind(Some(biome), above, warmth),
+                    "{biome} {above} {warmth}"
+                );
+            }
+        }
+        // cold biomes, cool forest and grassland, and the upper slopes of a mountain: pines
+        for (biome, above, warmth) in [
+            (Some("taiga"), 10, 0.9),
+            (Some("tundra"), 10, 0.9),
+            (None, 10, 0.4),
+            (Some("forest"), 100, 0.4),
+            (Some("mountain"), 150, 0.9),
+        ] {
+            assert_eq!(
+                TreeKind::Pine,
+                tree_kind(biome, above, warmth),
+                "{biome:?} {above} {warmth}"
+            );
+        }
+        // warm forest and a mountain's foot are broadleaf
+        assert_eq!(TreeKind::Broadleaf, tree_kind(Some("forest"), 20, 0.7));
+        assert_eq!(TreeKind::Broadleaf, tree_kind(Some("mountain"), 60, 0.7));
     }
 
     #[test]

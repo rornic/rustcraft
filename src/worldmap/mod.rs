@@ -23,7 +23,7 @@ pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 10;
+pub const GENERATOR_VERSION: u32 = 11;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]

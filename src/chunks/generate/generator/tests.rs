@@ -2527,3 +2527,58 @@ fn test_pines_grow_on_a_mountains_lower_slopes() {
         trees.len()
     );
 }
+
+#[test]
+fn test_no_pines_stand_in_savanna_jungle_or_desert() {
+    use crate::chunks::generate::terrain_source::TerrainSource;
+    use crate::chunks::generate::trees::{trees_near, TreeKind};
+    use crate::worldmap::climate::BiomeKind;
+    let terrain = crate::worldmap::WorldTerrain::new(std::sync::Arc::new(
+        crate::worldmap::generate(1, crate::worldmap::WorldConfig::default()),
+    ));
+    let map = terrain.map().clone();
+    let dim = map.dim();
+    let regions = RegionStore::new(std::sync::Arc::new(terrain));
+    let mut heights = regions.sampler();
+    let (mut hot_trees, mut high_hot_trees, mut places) = (0, 0, 0);
+    for kind in [BiomeKind::Savanna, BiomeKind::Jungle] {
+        // stretches of this biome on ground well over the sea, where the air is cooler, and the
+        // windows round them take in the edges, where other biomes meet it
+        let spots = (30..dim - 30)
+            .step_by(7)
+            .flat_map(|z| (30..dim - 30).step_by(7).map(move |x| (x, z)))
+            .filter(|&(x, z)| {
+                let i = map.index(x, z);
+                BiomeKind::from_u8(map.biome[i]) == kind
+                    && (110.0..260.0).contains(&(map.height[i] - WATER_LEVEL as f32))
+                    && map.water_kind[i] == 0
+            });
+        for (cx, cz) in spots.step_by(5).take(12) {
+            let (x, z) = map.cell_centre(cx, cz);
+            let min = bevy::math::I64Vec2::new(x as i64 - 200, z as i64 - 200);
+            let trees = trees_near(regions.terrain(), &mut heights, min, min + 400);
+            places += 1;
+            for tree in &trees {
+                let name = regions
+                    .terrain()
+                    .biomes()
+                    .name(heights.biome(tree.base.x, tree.base.z));
+                if matches!(name, Some("savanna" | "jungle" | "desert")) {
+                    hot_trees += 1;
+                    high_hot_trees += (tree.base.y - WATER_LEVEL >= 110) as usize;
+                    assert_ne!(
+                        TreeKind::Pine,
+                        tree.kind,
+                        "a pine in {name:?} at {} ({} over the sea)",
+                        tree.base,
+                        tree.base.y - WATER_LEVEL
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        places >= 6 && hot_trees > 50 && high_hot_trees > 10,
+        "{places} places, {hot_trees} hot trees, {high_hot_trees} high"
+    );
+}
