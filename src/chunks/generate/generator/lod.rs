@@ -227,7 +227,9 @@ impl LodBlocks {
                         .as_ref()
                         .is_some_and(|c| c.covers(tree, base, cell, size))
                 };
-                for tree in trees.iter().filter(|t| !in_canopy(t)) {
+                // past the canopy's cells a lone crown is under a pixel, and the ground is tinted for it
+                let lone_trees = cell <= CANOPY_CELL;
+                for tree in trees.iter().filter(|t| lone_trees && !in_canopy(t)) {
                     // each tree's boxes are drawn by the one node its base is in
                     let at = (tree.base - base).div_euclid(I64Vec3::splat(cell));
                     if at.cmpge(I64Vec3::ZERO).all() && at.cmplt(I64Vec3::splat(size as i64)).all()
