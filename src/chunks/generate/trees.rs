@@ -2,8 +2,9 @@ use bevy::math::{DVec3, I64Vec2, I64Vec3, IVec3, Vec2, Vec3};
 
 use super::biome::BiomeId;
 use super::generator::column_block;
-use super::noise::NoiseGenerator;
 use super::region_store::{HeightSampler, SLOPE_SPAN};
+use super::terrain_source::TerrainSource;
+use super::WATER_LEVEL;
 use crate::block::BlockType;
 
 /// What trees need to know about the ground to take root, from the full-detail heightmap or
@@ -56,7 +57,11 @@ pub const TREE_REACH: i64 = 10;
 /// How far above its ground any tree reaches.
 pub const TREE_HEIGHT: i64 = 27;
 // Colder than this, trees are pines.
-const PINE_TEMPERATURE: f32 = 0.38;
+// Trees growing where it is cooler than this, at their height, are pines: cold lowlands, and
+// the slopes of any range higher up, where the air has cooled.
+const PINE_TEMPERATURE: f32 = 0.46;
+// Higher than this above the sea, a mountain's trees are pines whatever the climate below.
+const ALPINE_PINES_ABOVE: i64 = 120;
 // Ground steeper than this (see `terrain_block`) is too steep to take root on.
 const MAX_GRADIENT: f64 = 1.5;
 // Broadleaf crowns are a big round crown with smaller lobes hanging off it on branches.
@@ -192,6 +197,11 @@ impl Tree {
         self.base.y as f64 + top + 1.0
     }
 
+    /// The bottom of the crown, in blocks.
+    pub fn crown_bottom(&self) -> f64 {
+        (self.base.y + self.leaf_bounds().0.y.max(0)) as f64
+    }
+
     pub fn width(&self) -> i64 {
         if self.trunk >= THICK_TRUNK {
             2
@@ -267,6 +277,17 @@ impl Tree {
     /// or tiers instead of being one cuboid.
     pub fn crown_boxes(&self, layers: i64) -> Vec<(DVec3, DVec3)> {
         let (low, high) = self.leaf_bounds();
+        // one box is the bounds themselves, and a scan for the leaves' tighter ones is the dearest part of far LODs
+        if layers == 1 {
+            let (low, high) = (
+                low.max(I64Vec3::new(-TREE_REACH, 0, -TREE_REACH)),
+                high.min(I64Vec3::new(TREE_REACH, TREE_HEIGHT, TREE_REACH)),
+            );
+            return vec![(
+                (self.base + low).as_dvec3(),
+                (self.base + high + I64Vec3::ONE).as_dvec3(),
+            )];
+        }
         // only each row's first and last leaf, found from its ends, bear on the layers' bounds
         let mut leaves = Vec::new();
         let xs = low.x.max(-TREE_REACH)..=high.x.min(TREE_REACH);
@@ -450,9 +471,24 @@ pub fn grows_into(existing: BlockType, block: BlockType) -> bool {
     existing == BlockType::Air || (existing == BlockType::Leaves && block == BlockType::Log)
 }
 
+/// Which tree grows on ground `above_sea` blocks up in the biome called `biome`, where the air is
+/// `warmth` warm up there. Pines in the cold, and on a mountain's upper slopes even in the tropics;
+/// the hot biomes keep their broadleaf trees however high the ground or cool the water's edge, so no
+/// savanna has pines in it.
+pub fn tree_kind(biome: Option<&str>, above_sea: i64, warmth: f32) -> TreeKind {
+    let hot = matches!(biome, Some("savanna" | "jungle" | "desert"));
+    let cold = matches!(biome, Some("taiga" | "tundra" | "glacier"));
+    let alpine = above_sea >= ALPINE_PINES_ABOVE && biome == Some("mountain");
+    if !hot && (cold || alpine || warmth < PINE_TEMPERATURE) {
+        TreeKind::Pine
+    } else {
+        TreeKind::Broadleaf
+    }
+}
+
 // Every tree that could reach into the columns `min..=max` (x, z).
 pub fn trees_near(
-    noise: &NoiseGenerator,
+    noise: &dyn TerrainSource,
     heights: &mut impl TreeGround,
     min: I64Vec2,
     max: I64Vec2,
@@ -471,7 +507,7 @@ pub fn trees_near(
 }
 
 fn tree_in_cell(
-    noise: &NoiseGenerator,
+    noise: &dyn TerrainSource,
     heights: &mut impl TreeGround,
     cx: i64,
     cz: i64,
@@ -486,9 +522,25 @@ fn tree_in_cell(
 
     // the biome before the slope, which samples elsewhere, while the ground here is to hand
     let height = heights.height(x, z).round() as i64;
+    // a trunk is more than a column wide, and stands on ground level with its foot: not across a
+    // step or a cliff's edge, where its far side would be buried or hang in the air
+    for (dx, dz) in [(1, 0), (0, 1), (1, 1)] {
+        let beside = heights.height(x + dx, z + dz).round() as i64;
+        if !(height - 1..=height).contains(&beside) {
+            return None;
+        }
+    }
     let biome = heights.biome(x, z);
     let (gradient_x, gradient_z) = heights.gradient(x, z);
-    let gradient = gradient_x.abs() + gradient_z.abs();
+    // meadow clings to a mountain's faces, and trees stand on it
+    let gradient = super::generator::block_gradient(
+        noise.biomes(),
+        biome,
+        noise.seed(),
+        x,
+        z,
+        gradient_x.abs() + gradient_z.abs(),
+    );
     if gradient > MAX_GRADIENT {
         return None;
     }
@@ -500,6 +552,7 @@ fn tree_in_cell(
         height,
         gradient,
         temperature,
+        WATER_LEVEL,
     );
     if ground != BlockType::Grass {
         return None;
@@ -507,7 +560,10 @@ fn tree_in_cell(
 
     // 0..1, how big this one grew
     let growth = ((seed >> 32) % 1000) as f64 / 1000.0;
-    let (kind, trunk, spread) = if temperature < PINE_TEMPERATURE {
+    // how warm it is up where the tree stands, which falls with height
+    let warmth = noise.climate(x as f64, z as f64).temperature;
+    let kind_here = tree_kind(noise.biomes().name(biome), height - WATER_LEVEL, warmth);
+    let (kind, trunk, spread) = if kind_here == TreeKind::Pine {
         (
             TreeKind::Pine,
             16 + (growth * 9.0) as i64,
@@ -541,7 +597,6 @@ pub(super) fn hash(seed: u64, a: i64, b: i64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
     use crate::chunks::generate::region_store::RegionStore;
@@ -692,6 +747,37 @@ mod tests {
     }
 
     #[test]
+    fn test_pines_grow_in_the_cold_and_up_mountains_but_never_in_the_hot_biomes() {
+        // savanna and jungle, however high or cool: broadleaf
+        for biome in ["savanna", "jungle", "desert"] {
+            for (above, warmth) in [(0, 0.8), (200, 0.3), (300, 0.1), (150, 0.44)] {
+                assert_eq!(
+                    TreeKind::Broadleaf,
+                    tree_kind(Some(biome), above, warmth),
+                    "{biome} {above} {warmth}"
+                );
+            }
+        }
+        // cold biomes, cool forest and grassland, and the upper slopes of a mountain: pines
+        for (biome, above, warmth) in [
+            (Some("taiga"), 10, 0.9),
+            (Some("tundra"), 10, 0.9),
+            (None, 10, 0.4),
+            (Some("forest"), 100, 0.4),
+            (Some("mountain"), 150, 0.9),
+        ] {
+            assert_eq!(
+                TreeKind::Pine,
+                tree_kind(biome, above, warmth),
+                "{biome:?} {above} {warmth}"
+            );
+        }
+        // warm forest and a mountain's foot are broadleaf
+        assert_eq!(TreeKind::Broadleaf, tree_kind(Some("forest"), 20, 0.7));
+        assert_eq!(TreeKind::Broadleaf, tree_kind(Some("mountain"), 60, 0.7));
+    }
+
+    #[test]
     fn test_logs_grow_through_leaves_but_nothing_into_ground() {
         assert!(grows_into(BlockType::Air, BlockType::Leaves));
         assert!(grows_into(BlockType::Leaves, BlockType::Log));
@@ -702,23 +788,19 @@ mod tests {
 
     #[test]
     fn test_trees_stand_on_grass_and_agree_between_lookups() {
-        let noise = Arc::new(NoiseGenerator::new(5));
+        let noise = crate::worldmap::test_terrain(5);
         let regions = RegionStore::new(noise.clone());
         let mut heights = regions.sampler();
-        let (min, max) = (I64Vec2::new(-600, -600), I64Vec2::new(600, 600));
-        let trees = trees_near(&noise, &mut heights, min, max);
+        let centre = crate::worldmap::forest_spot(&noise);
+        let (min, max) = (centre - I64Vec2::splat(600), centre + I64Vec2::splat(600));
+        let trees = trees_near(&*noise, &mut heights, min, max);
         assert!(!trees.is_empty(), "no trees in {min}..{max}");
         for t in &trees {
             let ground = heights.height(t.base.x, t.base.z).round() as i64;
             assert_eq!(ground, t.base.y);
         }
         // a smaller window finds the same trees where they overlap
-        let some = trees_near(
-            &noise,
-            &mut heights,
-            I64Vec2::new(0, 0),
-            I64Vec2::new(40, 40),
-        );
+        let some = trees_near(&*noise, &mut heights, centre, centre + I64Vec2::splat(40));
         for t in &some {
             assert!(trees
                 .iter()

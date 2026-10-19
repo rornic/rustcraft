@@ -10,9 +10,10 @@ use rustcraft::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 use rustcraft::chunks::generate::generator::{
     generate_chunk, generate_chunk_mesh, generate_lod_mesh,
 };
-use rustcraft::chunks::generate::noise::NoiseGenerator;
 use rustcraft::chunks::generate::region_store::RegionStore;
+use rustcraft::chunks::generate::terrain_source::TerrainSource;
 use rustcraft::chunks::lod::LodKey;
+use rustcraft::worldmap::{WorldConfig, WorldTerrain};
 
 // Chunks across the area generated, and how many layers of them up from below the surface.
 const ACROSS: i64 = 20;
@@ -33,8 +34,31 @@ fn main() {
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let noise = Arc::new(NoiseGenerator::new(seed));
-    let (sx, sz, sh) = noise.find_spawn();
+    let map = rustcraft::worldmap::generate(seed, WorldConfig::default());
+    let map_copy = Arc::new(map);
+    let noise: Arc<dyn TerrainSource> = Arc::new(WorldTerrain::new(map_copy.clone()));
+    let (sx, sz, sh) = if std::env::var("BENCH_MOUNTAIN").is_ok() {
+        // the middle of a stretch of mountain, over the sea by 150 blocks or more
+        let map = map_copy.as_ref();
+        let dim = map.dim();
+        let found = (20..dim - 20)
+            .step_by(3)
+            .flat_map(|z| (20..dim - 20).step_by(3).map(move |x| (x, z)))
+            .find(|&(x, z)| {
+                (-6..=6).step_by(3).all(|d| {
+                    let i = map.index((x as i64 + d) as usize, (z as i64 + d) as usize);
+                    rustcraft::worldmap::climate::BiomeKind::from_u8(map.biome[i])
+                        == rustcraft::worldmap::climate::BiomeKind::Mountain
+                        && map.height[i] > rustcraft::chunks::generate::WATER_LEVEL as f32 + 150.0
+                })
+            })
+            .expect("no mountain");
+        let (x, z) = map.cell_centre(found.0, found.1);
+        let h = noise.sample(x, z).height;
+        (x as i64, z as i64, h)
+    } else {
+        noise.find_spawn()
+    };
     let spawn = ChunkCoordinate::containing(I64Vec3::new(sx, sh as i64, sz)).0;
     let regions = Arc::new(RegionStore::new(noise.clone()));
     if std::env::args().nth(2).as_deref() != Some("lod") {
@@ -82,7 +106,7 @@ fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3) {
                 .map(|n| data.get(n).cloned())
                 .collect();
             let meshes =
-                generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.noise(), false);
+                generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.terrain(), false);
             vertices += meshes.opaque.count_vertices();
         }
         best = best.min(start.elapsed());
@@ -126,7 +150,12 @@ fn lods(regions: &Arc<RegionStore>, spawn: I64Vec3) {
             best = best.min(start.elapsed());
         }
         total += best;
-        println!("{:>16}: {best:>8.1?}", format!("lod level {level}"));
+        println!(
+            "{:>16}: {best:>8.1?}  {} vertices over {} nodes",
+            format!("lod level {level}"),
+            mesh(level),
+            keys(level).count()
+        );
     }
     println!(
         "{:>16}: {total:>8.1?}, {} vertices",

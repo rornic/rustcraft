@@ -134,13 +134,16 @@ pub(super) fn mesh_blocks(
         };
         let faces = match tree_box.faces {
             BoxFaces::All => &CUBE[..],
-            BoxFaces::NoBottom => &CUBE[..5],
             BoxFaces::Sides => &CUBE[..4],
         };
         for face in faces {
             let tile = tree_box.block.tile(Face::of_normal_y(face[0].normal[1]));
             let positions = std::array::from_fn(|j| {
-                (centre + Vec3::from(face[j].position) * extent).to_array()
+                let mut corner = Vec3::from(face[j].position);
+                if corner.y > 0.0 {
+                    corner *= Vec3::new(1.0 - tree_box.taper, 1.0, 1.0 - tree_box.taper);
+                }
+                (centre + corner * extent).to_array()
             });
             let uvs = tiled_uvs(
                 &positions,

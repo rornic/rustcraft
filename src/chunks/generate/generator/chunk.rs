@@ -2,32 +2,39 @@ use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle};
 use super::flora::flora_at;
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
-use super::terrain::{column_block, ground_top, under_grass};
+use super::terrain::{block_gradient, column_block, cut_cliff, ground_top, under_grass};
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
-use crate::chunks::generate::noise::NoiseGenerator;
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::terrain_source::TerrainSource;
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::TreeTints;
 use crate::chunks::generate::trees::TREE_HEIGHT;
 use crate::chunks::generate::WATER_LEVEL;
+use crate::worldmap::detail::{cliff_density, cliff_reach};
 use bevy::math::I64Vec2;
 use bevy::math::IVec3;
 use std::cell::LazyCell;
 use std::sync::Arc;
 
+// Blocks above the sea desert ground must be before it has cliffs: below it the steep ground is
+// dunes.
+const DESERT_CLIFFS_ABOVE: i64 = 90;
+
 pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> ChunkData {
     let mut heights = regions.sampler();
-    let biomes = regions.noise().biomes();
+    let biomes = regions.terrain().biomes();
     // the same for every chunk stacked over these columns, so worked out once for them all
     let columns = regions.chunk_columns(&mut heights, chunk_pos.0.x, chunk_pos.0.z);
     let (lowest, highest) = (columns.lowest, columns.highest);
     let size = CHUNK_SIZE as i64;
+    let seed = regions.terrain().seed();
+    let desert = biomes.id("desert");
     let world_y = chunk_pos.0.y * size;
     // cells in `ChunkData::from_cells` order, which is the order they're worked out in here
     let mut cells = Vec::with_capacity((size * size * size) as usize);
@@ -35,23 +42,63 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     for x in 0..size {
         for z in 0..size {
             let column_height = columns.height(x, z);
-            // above the ground and the sea, the column is air here whatever its climate
-            if world_y >= ground_top(column_height).max(WATER_LEVEL) {
+            let water_top = columns.water_top(x, z);
+            let gradient = columns.gradient(x, z);
+            // how far the surface here is cut or built up into cliffs, on steep ground
+            // dunes' steep faces are not cliffs: desert has them only up in its mountains
+            let dunes = Some(columns.biome(x, z)) == desert
+                && column_height - WATER_LEVEL < DESERT_CLIFFS_ABOVE;
+            let cliff = if dunes { 0.0 } else { cliff_reach(gradient) };
+            let bulge = cliff.ceil() as i64;
+            // above the ground and the water, the column is air here whatever its climate
+            if world_y >= (ground_top(column_height) + bulge).max(water_top) {
                 cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
                 continue;
             }
-            let (gradient, biome, temperature) = (
-                columns.gradient(x, z),
-                columns.biome(x, z),
-                columns.temperature(x, z),
+            let (biome, temperature) = (columns.biome(x, z), columns.temperature(x, z));
+            // the gradient the blocks are chosen by: meadow on a mountain takes grass up its faces
+            let slope = block_gradient(
+                biomes,
+                biome,
+                seed,
+                chunk_pos.0.x * size + x,
+                chunk_pos.0.z * size + z,
+                gradient,
             );
+            // snow lies deep, in full blocks, with the packed stone only beneath it
+            let snowy = column_block(
+                biomes,
+                biome,
+                column_height - 1,
+                column_height,
+                slope,
+                temperature,
+                water_top,
+            ) == BlockType::Snow;
+            let (world_x, world_z) = (chunk_pos.0.x * size + x, chunk_pos.0.z * size + z);
             cells.extend((world_y..world_y + size).map(|y| {
-                under_grass(
-                    column_block(biomes, biome, y, column_height, gradient, temperature),
+                let block = under_grass(
+                    column_block(
+                        biomes,
+                        biome,
+                        y,
+                        column_height,
+                        gradient,
+                        temperature,
+                        water_top,
+                    ),
                     y,
                     column_height,
                     1,
-                )
+                    snowy,
+                );
+                // cliffs are cut from the ground before the water fills what they open
+                if cliff == 0.0 || (y - column_height).abs() > bulge {
+                    return block;
+                }
+                let density = (column_height - y) as f64 - 0.5
+                    + cliff * cliff_density(seed, world_x, y, world_z);
+                cut_cliff(block, density > 0.0, y, temperature, water_top)
             }));
         }
     }
@@ -62,7 +109,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     let mut trees = Vec::new();
     if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
         let min = I64Vec2::new(origin.x, origin.z);
-        trees = trees_near(regions.noise(), &mut heights, min, min + size - 1);
+        trees = trees_near(regions.terrain(), &mut heights, min, min + size - 1);
         for tree in &trees {
             tree.plant(
                 origin,
@@ -80,18 +127,25 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     }
 
     // plants on the grass, in the air just over it, after the trees, so trunks keep their place
-    let seed = regions.noise().seed();
     for x in 0..size {
         for z in 0..size {
             let column_height = columns.height(x, z);
             let local_y = column_height - world_y;
-            if !(0..size).contains(&local_y) {
+            if !(0..size).contains(&local_y) || cliff_reach(columns.gradient(x, z)) > 0.0 {
                 continue;
             }
             let (gradient, biome, temperature) = (
                 columns.gradient(x, z),
                 columns.biome(x, z),
                 columns.temperature(x, z),
+            );
+            let gradient = block_gradient(
+                biomes,
+                biome,
+                seed,
+                chunk_pos.0.x * size + x,
+                chunk_pos.0.z * size + z,
+                gradient,
             );
             let ground = column_block(
                 biomes,
@@ -100,6 +154,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                 column_height,
                 gradient,
                 temperature,
+                columns.water_top(x, z),
             );
             let coord = bevy::math::U16Vec3::new(x as u16, local_y as u16, z as u16);
             if ground != BlockType::Grass || chunk_data.get_block_at(coord) != BlockType::Air {
@@ -131,7 +186,7 @@ pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
     coord: ChunkCoordinate,
-    noise: &NoiseGenerator,
+    noise: &dyn TerrainSource,
     solid_leaves: bool,
 ) -> ChunkMeshes {
     let source = ChunkNeighbourhood::new(&chunk, &adjacent_chunks);

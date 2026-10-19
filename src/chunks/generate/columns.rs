@@ -3,8 +3,9 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::biome::BiomeId;
-use super::noise::NoiseGenerator;
 use super::region_store::HeightSampler;
+use super::terrain_source::{TerrainSource, WaterKind};
+use super::WATER_LEVEL;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;
 
@@ -52,13 +53,15 @@ pub struct ColumnGrid {
     heights: Vec<f32>,
     biomes: Vec<BiomeId>,
     trees: Vec<f32>,
-    /// The lowest and highest ground under the node's cells, and the cell beyond each edge.
+    // the height of the water over each cell, 0 where there is none
+    water: Vec<f32>,
+    /// The lowest ground and highest ground or inland water under the node's cells, and the cell beyond each edge.
     pub lowest: f32,
     pub highest: f32,
 }
 
 impl ColumnGrid {
-    fn sample(noise: &NoiseGenerator, key: LodKey) -> Self {
+    fn sample(noise: &dyn TerrainSource, key: LodKey) -> Self {
         let size = CHUNK_SIZE as i32;
         let cell = key.cell_size();
         let base = key.min_block();
@@ -68,6 +71,7 @@ impl ColumnGrid {
             heights: Vec::with_capacity(span * span),
             biomes: Vec::with_capacity(span * span),
             trees: Vec::with_capacity(span * span),
+            water: Vec::with_capacity(span * span),
             lowest: f32::MAX,
             highest: f32::MIN,
         };
@@ -79,9 +83,16 @@ impl ColumnGrid {
                 grid.heights.push(sample.height as f32);
                 grid.biomes.push(sample.biome);
                 grid.trees.push(sample.trees as f32);
+                grid.water.push(sample.water_surface);
                 if (-1..=size).contains(&cx) && (-1..=size).contains(&cz) {
                     grid.lowest = grid.lowest.min(sample.height as f32);
-                    grid.highest = grid.highest.max(sample.height as f32);
+                    // the sea is left out: nodes under it are known to be water
+                    let inland = if sample.water_kind == WaterKind::Ocean {
+                        0.0
+                    } else {
+                        sample.water_surface
+                    };
+                    grid.highest = grid.highest.max((sample.height as f32).max(inland));
                 }
             }
         }
@@ -114,6 +125,14 @@ impl ColumnGrid {
     pub fn trees(&self, cx: i32, cz: i32) -> f64 {
         self.trees[Self::index(cx, cz)] as f64
     }
+
+    /// The height of the water's surface over the cell in whole blocks, or the sea's where it's dry.
+    pub fn water_top(&self, cx: i32, cz: i32) -> i64 {
+        match self.water[Self::index(cx, cz)] {
+            surface if surface > 0.0 => surface.round() as i64,
+            _ => WATER_LEVEL,
+        }
+    }
 }
 
 /// What generating a full-detail chunk takes from each of its columns, the same for every chunk
@@ -123,13 +142,14 @@ pub struct ChunkColumns {
     gradients: Vec<f64>,
     biomes: Vec<BiomeId>,
     temperatures: Vec<f32>,
+    water_tops: Vec<i64>,
     /// The lowest and highest ground under the chunks.
     pub lowest: i64,
     pub highest: i64,
 }
 
 impl ChunkColumns {
-    fn sample(noise: &NoiseGenerator, heights: &mut HeightSampler, x: i64, z: i64) -> Self {
+    fn sample(noise: &dyn TerrainSource, heights: &mut HeightSampler, x: i64, z: i64) -> Self {
         let size = CHUNK_SIZE as i64;
         let cells = (size * size) as usize;
         let mut columns = Self {
@@ -137,6 +157,7 @@ impl ChunkColumns {
             gradients: Vec::with_capacity(cells),
             biomes: Vec::with_capacity(cells),
             temperatures: Vec::with_capacity(cells),
+            water_tops: Vec::with_capacity(cells),
             lowest: i64::MAX,
             highest: i64::MIN,
         };
@@ -148,6 +169,7 @@ impl ChunkColumns {
                 columns.heights.push(height);
                 columns.gradients.push(gradient_x.abs() + gradient_z.abs());
                 columns.biomes.push(heights.biome(world_x, world_z));
+                columns.water_tops.push(heights.water_top(world_x, world_z));
                 columns
                     .temperatures
                     .push(noise.temperature(world_x as f64, world_z as f64));
@@ -178,6 +200,11 @@ impl ChunkColumns {
 
     pub fn temperature(&self, cx: i64, cz: i64) -> f32 {
         self.temperatures[Self::index(cx, cz)]
+    }
+
+    /// The height of the water's surface over the column, or the sea's where it's dry.
+    pub fn water_top(&self, cx: i64, cz: i64) -> i64 {
+        self.water_tops[Self::index(cx, cz)]
     }
 }
 
@@ -246,7 +273,7 @@ impl ColumnCache {
     /// them has yet. Blocks while another thread samples them, so only call from a task.
     pub fn chunk_columns(
         &self,
-        noise: &NoiseGenerator,
+        noise: &dyn TerrainSource,
         heights: &mut HeightSampler,
         x: i64,
         z: i64,
@@ -257,7 +284,7 @@ impl ColumnCache {
 
     /// The grid under `key`, sampling it if no node over the same column has yet. Blocks
     /// while another thread samples it, so only call from a task, never a system.
-    pub fn grid(&self, noise: &NoiseGenerator, key: LodKey) -> Arc<ColumnGrid> {
+    pub fn grid(&self, noise: &dyn TerrainSource, key: LodKey) -> Arc<ColumnGrid> {
         let column = ColumnKey::from(key);
         self.grids.get(column, || {
             let grid = ColumnGrid::sample(noise, key);
@@ -296,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_grid_matches_the_noise_at_cell_centres() {
-        let noise = NoiseGenerator::new(4);
+        let noise = crate::worldmap::test_terrain(4);
         let key = key(3, 5, 2, -7);
         let grid = ColumnGrid::sample(&noise, key);
         let base = key.min_block();
@@ -317,7 +344,7 @@ mod tests {
     #[test]
     fn test_chunk_columns_match_the_regions_and_are_shared_up_the_stack() {
         let regions =
-            super::super::region_store::RegionStore::new(Arc::new(NoiseGenerator::new(4)));
+            super::super::region_store::RegionStore::new(crate::worldmap::test_terrain(4));
         let (x, z) = (-3, 5);
         let mut heights = regions.sampler();
         let columns = regions.chunk_columns(&mut heights, x, z);
@@ -332,7 +359,9 @@ mod tests {
             assert_eq!(gx.abs() + gz.abs(), columns.gradient(cx, cz));
             assert_eq!(heights.biome(world_x, world_z), columns.biome(cx, cz));
             assert_eq!(
-                regions.noise().temperature(world_x as f64, world_z as f64),
+                regions
+                    .terrain()
+                    .temperature(world_x as f64, world_z as f64),
                 columns.temperature(cx, cz)
             );
             assert!((columns.lowest..=columns.highest).contains(&columns.height(cx, cz)));
@@ -361,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_stacked_nodes_share_a_grid_and_record_its_range() {
-        let noise = NoiseGenerator::new(4);
+        let noise = crate::worldmap::test_terrain(4);
         let cache = ColumnCache::default();
         assert_eq!(None, cache.height_range(key(2, 1, 0, 1)));
         let low = cache.grid(&noise, key(2, 1, 0, 1));

@@ -5,9 +5,10 @@ use bevy::math::I64Vec2;
 
 use super::biome::BiomeId;
 use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
-use super::noise::NoiseGenerator;
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
+use super::terrain_source::TerrainSource;
 use super::trees::TreeGround;
+use super::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
 
 // The fewest regions kept, about 400KB each.
@@ -62,14 +63,14 @@ impl RegionLru {
 }
 
 pub struct RegionStore {
-    noise: Arc<NoiseGenerator>,
+    noise: Arc<dyn TerrainSource>,
     // which slots exist, held only briefly: never while a region is computed
     lru: RwLock<RegionLru>,
     columns: ColumnCache,
 }
 
 impl RegionStore {
-    pub fn new(noise: Arc<NoiseGenerator>) -> Self {
+    pub fn new(noise: Arc<dyn TerrainSource>) -> Self {
         Self {
             noise,
             lru: RwLock::new(RegionLru::new(RESIDENT_REGION_CAP)),
@@ -77,20 +78,20 @@ impl RegionStore {
         }
     }
 
-    pub fn noise(&self) -> &NoiseGenerator {
-        &self.noise
+    pub fn terrain(&self) -> &dyn TerrainSource {
+        &*self.noise
     }
 
     /// The ground under a coarse LOD node's cells, see `columns::COARSE_CELL`. Blocks
     /// while it's sampled, so only call from a task.
     pub fn column_grid(&self, key: LodKey) -> Arc<ColumnGrid> {
-        self.columns.grid(&self.noise, key)
+        self.columns.grid(&*self.noise, key)
     }
 
     /// What full-detail chunks at chunk `x`, `z` take from each of their columns, shared by all
     /// the chunks stacked there. Blocks while it's sampled, so only call from a task.
     pub fn chunk_columns(&self, heights: &mut HeightSampler, x: i64, z: i64) -> Arc<ChunkColumns> {
-        self.columns.chunk_columns(&self.noise, heights, x, z)
+        self.columns.chunk_columns(&*self.noise, heights, x, z)
     }
 
     /// The lowest and highest ground under a coarse LOD node, if a node over the same
@@ -109,7 +110,7 @@ impl RegionStore {
     // Blocks until the region is computed, here or by another thread, so only call from a task.
     pub fn get_region(&self, coord: RegionCoord) -> Arc<Region> {
         let slot = self.lru.write().unwrap().get_or_insert(coord);
-        slot.get_or_init(|| Arc::new(compute_region(&self.noise, coord)))
+        slot.get_or_init(|| Arc::new(compute_region(&*self.noise, coord)))
             .clone()
     }
 
@@ -174,6 +175,21 @@ impl HeightSampler<'_> {
             .biome_at(world_x - origin.x, world_z - origin.y)
     }
 
+    /// The height of the water's surface over the column, in whole blocks, or the sea's where the
+    /// column is dry, which is what ground over it is measured from.
+    pub fn water_top(&mut self, world_x: i64, world_z: i64) -> i64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        let surface = self
+            .region(coord)
+            .water_at(world_x - origin.x, world_z - origin.y);
+        if surface > 0.0 {
+            surface.round() as i64
+        } else {
+            WATER_LEVEL
+        }
+    }
+
     pub fn trees(&mut self, world_x: i64, world_z: i64) -> f64 {
         let coord = RegionCoord::from_world(world_x, world_z);
         let origin = coord.origin();
@@ -220,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_sampler_matches_region_heights_across_region_corners() {
-        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        let store = RegionStore::new(crate::worldmap::test_terrain(1));
         let mut sampler = store.sampler();
         // a block either side of the corner where regions (-1..0, -1..0) meet
         for (x, z) in [(-1, -1), (0, -1), (-1, 0), (0, 0), (255, 300), (-1, -1)] {
@@ -236,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_loaded_height_range_waits_for_every_region_it_touches() {
-        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        let store = RegionStore::new(crate::worldmap::test_terrain(1));
         // spans the corner of regions (0, 0) to (1, 1)
         let (min, max) = (I64Vec2::splat(200), I64Vec2::splat(300));
         assert_eq!(None, store.loaded_height_range(min, max));
@@ -256,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_get_region_caches_repeated_lookups() {
-        let store = RegionStore::new(Arc::new(NoiseGenerator::new(1)));
+        let store = RegionStore::new(crate::worldmap::test_terrain(1));
         let coord = RegionCoord(I64Vec2::new(0, 0));
 
         let first = store.get_region(coord);
@@ -266,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_concurrent_get_region_computes_once() {
-        let store = Arc::new(RegionStore::new(Arc::new(NoiseGenerator::new(1))));
+        let store = Arc::new(RegionStore::new(crate::worldmap::test_terrain(1)));
         let coord = RegionCoord(I64Vec2::new(5, 5));
         let thread_count = 8;
         let barrier = Arc::new(Barrier::new(thread_count));

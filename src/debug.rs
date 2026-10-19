@@ -164,7 +164,7 @@ fn update_overlay(
 
     if let (Some(world), Ok(player)) = (&world, player.single()) {
         let pos = player.translation();
-        let noise = world.region_store.noise();
+        let noise = world.region_store.terrain();
         let (x, z) = (pos.x as f64, pos.z as f64);
         let biome = noise
             .biomes()

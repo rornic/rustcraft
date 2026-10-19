@@ -561,7 +561,7 @@ fn strike_lightning(
     // would stall the frame the bolt strikes on
     let ground = world
         .region_store
-        .noise()
+        .terrain()
         .sample(foot.x.floor() as f64, foot.z.floor() as f64)
         .height
         .max(crate::chunks::generate::WATER_LEVEL as f64) as f32;

@@ -11,12 +11,12 @@ pub(super) fn underwater(
     block: BlockType,
     bottom: i64,
     cell: i64,
-    column_height: i64,
+    (column_height, water_top): (i64, i64),
 ) -> BlockType {
     if is_solid(block)
-        && bottom < WATER_LEVEL
-        && WATER_LEVEL <= bottom + cell
-        && ground_top(column_height) < WATER_LEVEL
+        && bottom < water_top
+        && water_top <= bottom + cell
+        && ground_top(column_height) < water_top
     {
         BlockType::Water
     } else {
@@ -36,6 +36,9 @@ pub(super) const SNOW_LINE_PER_DEGREE: f64 = 800.0;
 
 // At or above this temperature it's too hot for snow, and the heights are bare rock.
 pub(super) const SNOW_MAX_TEMPERATURE: f32 = 0.62;
+
+// Above this height over the sea the ground is snow-capped in any climate, in the tropics too.
+pub(super) const SNOWCAP_ABOVE: i64 = 360;
 
 // Below this temperature even the grass is under a layer of snow.
 pub(super) const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
@@ -63,9 +66,9 @@ pub(super) fn freeze_cell(
     block: BlockType,
     temperature: f32,
     cell_top: i64,
-    cell: i64,
+    (cell, water_top): (i64, i64),
 ) -> BlockType {
-    if cell > 1 && block == BlockType::Water && cell_top > WATER_LEVEL - ice_depth(temperature) {
+    if cell > 1 && block == BlockType::Water && cell_top > water_top - ice_depth(temperature) {
         BlockType::Ice
     } else {
         block
@@ -95,19 +98,31 @@ pub(super) fn terrain_block(
     column_height: i64,
     combined_gradient: f64,
     temperature: f32,
+    water_top: i64,
 ) -> BlockType {
     if world_y < ground_top(column_height) {
+        // under water the ground is sand, whatever it would be dry
+        if ground_top(column_height) < water_top {
+            return BlockType::Sand;
+        }
         let above_sea = world_y - WATER_LEVEL;
-        let line = snow_line(temperature);
-        let snows = temperature < SNOW_MAX_TEMPERATURE;
+        let above_water = world_y - water_top;
+        // the tallest ground wears snow whatever the climate, the line lowering to meet the cap
+        let capped = above_sea >= SNOWCAP_ABOVE;
+        let line = if capped {
+            snow_line(temperature).min(SNOWCAP_ABOVE)
+        } else {
+            snow_line(temperature)
+        };
+        let snows = temperature < SNOW_MAX_TEMPERATURE || capped;
         if snows && above_sea >= line && combined_gradient <= snow_holding_slope(above_sea, line) {
             BlockType::Snow
         } else if !snows && above_sea >= SNOW_LINE
             || above_sea >= 120 && combined_gradient >= 2.0
-            || (above_sea >= 2 && combined_gradient >= 3.5)
+            || (above_water >= 2 && combined_gradient >= 3.5)
         {
             BlockType::Stone
-        } else if above_sea >= 2 {
+        } else if above_water >= 2 {
             if temperature < SNOWY_GRASS_TEMPERATURE && world_y == column_height - 1 {
                 BlockType::Snow
             } else {
@@ -116,8 +131,8 @@ pub(super) fn terrain_block(
         } else {
             BlockType::Sand
         }
-    } else if world_y < WATER_LEVEL {
-        if world_y >= WATER_LEVEL - ice_depth(temperature) {
+    } else if world_y < water_top {
+        if world_y >= water_top - ice_depth(temperature) {
             BlockType::Ice
         } else {
             BlockType::Water
@@ -127,20 +142,95 @@ pub(super) fn terrain_block(
     }
 }
 
-// Grass is only the top layer of the ground, over dirt, and glacier ice over snow. Wider LOD cells are sampled mid-cell, which would turn their tops dirt.
+// Blocks of soil, sand or snow under the surface block before stone, and how far under the
+// ground's surface the stone is packed hard, which only explosives break.
+pub(super) const SOIL_DEPTH: i64 = 4;
+pub(super) const COMPACTED_DEPTH: i64 = 6;
+// Under snow the cover is thick, full blocks of it, and the packed stone begins only beneath.
+pub(super) const SNOW_DEPTH: i64 = 14;
+pub(super) const SNOW_COMPACTED_DEPTH: i64 = 16;
+
+// The ground in layers: grass is only the top block, over dirt, glacier ice over snow, then the
+// soil gives way to stone and the stone to compacted stone a fixed depth under this column's own
+// surface. Wider LOD cells are sampled mid-cell, which would turn their tops into dirt, and they
+// don't show the layers. `snowy` is whether the column's surface is snow, which lies deep.
 pub(super) fn under_grass(
     block: BlockType,
     world_y: i64,
     column_height: i64,
     cell: i64,
+    snowy: bool,
 ) -> BlockType {
-    if cell != 1 || world_y >= column_height - 1 {
+    let depth = column_height - 1 - world_y;
+    if cell != 1 || depth <= 0 {
         return block;
     }
-    match block {
+    let block = match block {
         BlockType::Grass => BlockType::Dirt,
         BlockType::Ice => BlockType::Snow,
         other => other,
+    };
+    let soil = matches!(
+        block,
+        BlockType::Dirt | BlockType::Sand | BlockType::Gravel | BlockType::Snow
+    );
+    let (soil_depth, compacted_depth) = if snowy {
+        (SNOW_DEPTH, SNOW_COMPACTED_DEPTH)
+    } else {
+        (SOIL_DEPTH, COMPACTED_DEPTH)
+    };
+    match block {
+        _ if depth >= compacted_depth && is_solid(block) => BlockType::CompactedStone,
+        _ if depth >= soil_depth && soil => BlockType::Stone,
+        other => other,
+    }
+}
+
+// A block after cliffs are cut, where the noise says the ground is `solid` here: rock builds up
+// where it wasn't, and ground cut away is open air above the water but floods below it, ice
+// and all, so caves in a sea cliff fill with the sea.
+pub(super) fn cut_cliff(
+    block: BlockType,
+    solid: bool,
+    y: i64,
+    temperature: f32,
+    water_top: i64,
+) -> BlockType {
+    match (solid, is_solid(block)) {
+        (true, false) => BlockType::Stone,
+        (false, true) => {
+            if y < water_top {
+                // well above the world's floor, so `terrain_block` sees only the water here
+                terrain_block(y, 0, 0.0, temperature, water_top)
+            } else {
+                BlockType::Air
+            }
+        }
+        _ => block,
+    }
+}
+
+// The steepest ground a patch of meadow still takes grass on: past it even meadow is rock.
+const MEADOW_GRADIENT: f64 = 0.9;
+
+// The gradient to choose a column's blocks by: on a mountain, in a patch of meadow, as gentle as
+// MEADOW_GRADIENT at most, so grass and the trees and flora on it cling to the face where the
+// rest of the slope is bare rock.
+pub(in crate::chunks::generate) fn block_gradient(
+    biomes: &Biomes,
+    biome: BiomeId,
+    seed: u32,
+    x: i64,
+    z: i64,
+    gradient: f64,
+) -> f64 {
+    if gradient > MEADOW_GRADIENT
+        && biomes.name(biome) == Some("mountain")
+        && crate::worldmap::detail::meadow_patch(seed, x as f64, z as f64)
+    {
+        MEADOW_GRADIENT
+    } else {
+        gradient
     }
 }
 
@@ -152,7 +242,14 @@ pub(in crate::chunks::generate) fn column_block(
     column_height: i64,
     combined_gradient: f64,
     temperature: f32,
+    water_top: i64,
 ) -> BlockType {
-    let base = terrain_block(world_y, column_height, combined_gradient, temperature);
+    let base = terrain_block(
+        world_y,
+        column_height,
+        combined_gradient,
+        temperature,
+        water_top,
+    );
     biomes.block(biome, base, world_y - WATER_LEVEL, combined_gradient)
 }

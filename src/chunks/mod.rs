@@ -5,6 +5,7 @@ pub mod generate;
 pub mod group;
 pub mod lod;
 pub mod material;
+pub mod pack;
 
 use bevy::{
     app::{App, Plugin, Update},

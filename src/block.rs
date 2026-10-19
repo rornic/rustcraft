@@ -21,6 +21,8 @@ pub enum BlockType {
     Dandelion,
     ShortGrass,
     SeedGrass,
+    // stone packed hard under the ground, which only explosives break
+    CompactedStone,
 }
 
 impl BlockType {
@@ -105,6 +107,7 @@ pub enum Tile {
     SandstoneSide,
     SandstoneTop,
     SnowSide,
+    CompactedStone,
     TallGrass,
     Fern,
     Poppy,
@@ -113,7 +116,7 @@ pub enum Tile {
     SeedGrass,
 }
 
-pub const TILE_COUNT: usize = 21;
+pub const TILE_COUNT: usize = 22;
 
 impl Tile {
     // What meshes carry in vertex alpha for `block_texture.wesl`.
@@ -144,12 +147,12 @@ impl BlockType {
         match (self, face) {
             (BlockType::Air, _) => Tile::Stone, // never drawn
             (BlockType::Stone, _) => Tile::Stone,
+            (BlockType::CompactedStone, _) => Tile::CompactedStone,
             (BlockType::Grass, Face::Top) => Tile::GrassTop,
             (BlockType::Grass, Face::Side) => Tile::GrassSide,
             (BlockType::Grass, Face::Bottom) => Tile::Dirt,
             (BlockType::Sand, _) => Tile::Sand,
             (BlockType::Water, _) => Tile::Water,
-            (BlockType::Snow, Face::Side) => Tile::SnowSide,
             (BlockType::Snow, _) => Tile::Snow,
             (BlockType::Log, Face::Side) => Tile::LogBark,
             (BlockType::Log, _) => Tile::LogEnd,
@@ -195,6 +198,14 @@ mod tests {
         assert_eq!(Tile::LogBark, BlockType::Log.tile(Face::Side));
         assert_eq!(Tile::GrassTop, BlockType::Grass.lod_tile());
         assert_eq!(Tile::LogBark, BlockType::Log.lod_tile());
+    }
+
+    #[test]
+    fn test_snow_is_full_snow_on_every_face_not_snow_over_dirt() {
+        for face in [Face::Top, Face::Side, Face::Bottom] {
+            assert_eq!(Tile::Snow, BlockType::Snow.tile(face));
+        }
+        assert_eq!(Tile::Snow, BlockType::Snow.lod_tile());
     }
 
     #[test]

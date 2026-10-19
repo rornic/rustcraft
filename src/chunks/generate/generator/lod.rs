@@ -6,19 +6,22 @@ use super::canopy::{
 use super::chunk::{sky_above, trees_may_reach};
 use super::mesh::mesh_blocks;
 use super::source::{water_depth, BlockSource, BoxFaces, TreeBox};
-use super::terrain::{column_block, freeze_cell, ground_top, is_solid, under_grass, underwater};
+use super::terrain::{
+    block_gradient, column_block, freeze_cell, ground_top, is_solid, under_grass, underwater,
+};
 use crate::block::BlockType;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::{BiomeId, Biomes};
 use crate::chunks::generate::columns::ColumnGrid;
 use crate::chunks::generate::columns::COARSE_CELL;
 use crate::chunks::generate::light::SkyLight;
-use crate::chunks::generate::noise::{NoiseGenerator, TerrainSample};
 use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::terrain_source::{TerrainSample, TerrainSource};
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::Tree;
 use crate::chunks::generate::trees::TreeGround;
+use crate::chunks::generate::trees::TreeKind;
 use crate::chunks::generate::trees::TreeTints;
 use crate::chunks::generate::trees::THIN_TRUNK_CELL;
 use crate::chunks::generate::WATER_LEVEL;
@@ -32,11 +35,17 @@ use std::sync::Arc;
 
 pub(super) const SKIRT_CELLS: i32 = 2;
 
+// How far the tops of crown boxes are drawn in: a ball's, and a pine's nearer a cone's.
+const CROWN_TAPER: f32 = 0.5;
+const PINE_TAPER: f32 = 0.8;
+
 pub(super) struct LodBlocks {
     pub(super) size: i32,
     pub(super) cells: Vec<BlockType>,
     // the ground's height in blocks under each padded column, ground being below it
     pub(super) tops: Vec<i64>,
+    // the height of the water over each padded column, empty when the sea's everywhere
+    pub(super) water_tops: Vec<i64>,
     // the node's lowest block and cell size, to place `tops` among the cells
     pub(super) base_y: i64,
     pub(super) cell: i64,
@@ -57,7 +66,7 @@ pub(super) struct LodBlocks {
 // The ground a coarse node's trees stand on, read from its grid of columns.
 pub(super) struct GridGround<'a> {
     pub(super) grid: &'a ColumnGrid,
-    pub(super) noise: &'a NoiseGenerator,
+    pub(super) noise: &'a dyn TerrainSource,
     pub(super) base: I64Vec2,
     pub(super) cell: i64,
     pub(super) size: i32,
@@ -106,8 +115,7 @@ impl TreeGround for GridGround<'_> {
     // From the climate alone, far cheaper than the whole terrain `trees` takes. The density is
     // stored as a byte, which can round it up by half a step.
     fn rules_out(&mut self, x: i64, z: i64, chance: f64) -> bool {
-        let climate = self.noise.climate(x as f64, z as f64);
-        chance >= self.noise.biomes().tree_bound(climate) + 1.0 / 255.0
+        chance >= self.noise.tree_bound(x as f64, z as f64) + 1.0 / 255.0
     }
 
     fn base_height(&mut self, x: i64, z: i64) -> i64 {
@@ -141,11 +149,12 @@ impl LodBlocks {
         let base = key.min_block();
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
+        let mut water_tops = vec![WATER_LEVEL; padded * padded];
         let mut ground_heights = vec![0.0; padded * padded];
         let mut canopy_tops = vec![i64::MIN; padded * padded];
         let mut boxes = Vec::new();
         let grid = regions.column_grid(key);
-        let noise = regions.noise();
+        let noise = regions.terrain();
         let real_trees = cell <= TREE_MAX_CELL;
         let mut forest = if real_trees {
             Vec::new()
@@ -164,7 +173,17 @@ impl LodBlocks {
                 let biome = grid.biome(cx, cz);
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
+                let gradient = block_gradient(
+                    noise.biomes(),
+                    biome,
+                    noise.seed(),
+                    world_x,
+                    world_z,
+                    gradient,
+                );
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
+                let water_top = grid.water_top(cx, cz);
+                water_tops[Self::column(size, cx, cz)] = water_top;
                 let ground = column_block(
                     noise.biomes(),
                     biome,
@@ -172,6 +191,7 @@ impl LodBlocks {
                     height,
                     gradient,
                     temperature,
+                    water_top,
                 );
                 tops[Self::column(size, cx, cz)] = ground_top(height);
                 if !real_trees && ground == BlockType::Grass {
@@ -184,7 +204,7 @@ impl LodBlocks {
                     (base, cell),
                     (cx, cz),
                     biome,
-                    (height, gradient, temperature),
+                    (height, gradient, temperature, water_top),
                 );
             }
         }
@@ -212,7 +232,9 @@ impl LodBlocks {
                         .as_ref()
                         .is_some_and(|c| c.covers(tree, base, cell, size))
                 };
-                for tree in trees.iter().filter(|t| !in_canopy(t)) {
+                // past the canopy's cells a lone crown is under a pixel, and the ground is tinted for it
+                let lone_trees = cell < CANOPY_CELL;
+                for tree in trees.iter().filter(|t| lone_trees && !in_canopy(t)) {
                     // each tree's boxes are drawn by the one node its base is in
                     let at = (tree.base - base).div_euclid(I64Vec3::splat(cell));
                     if at.cmpge(I64Vec3::ZERO).all() && at.cmplt(I64Vec3::splat(size as i64)).all()
@@ -230,6 +252,7 @@ impl LodBlocks {
                                 block: BlockType::Log,
                                 tint: Vec3::ONE,
                                 faces: BoxFaces::Sides,
+                                taper: 0.0,
                             });
                         }
                         if cell >= BOX_CROWN_CELL {
@@ -240,6 +263,10 @@ impl LodBlocks {
                                     block: BlockType::Leaves,
                                     tint: tree.tint(),
                                     faces: BoxFaces::All,
+                                    taper: match tree.kind {
+                                        TreeKind::Broadleaf => CROWN_TAPER,
+                                        TreeKind::Pine => PINE_TAPER,
+                                    },
                                 });
                             }
                         }
@@ -273,6 +300,7 @@ impl LodBlocks {
         }
         Self {
             ground_heights,
+            water_tops,
             canopy_tops,
             forest,
             boxes,
@@ -289,8 +317,9 @@ impl LodBlocks {
         let mut cells = vec![BlockType::Air; padded * padded * padded];
         let mut tops = vec![0; padded * padded];
         let mut ground_heights = vec![0.0; padded * padded];
+        let mut water_tops = vec![WATER_LEVEL; padded * padded];
         let mut heights = regions.sampler();
-        let noise = regions.noise();
+        let noise = regions.terrain();
         let biomes = noise.biomes();
         let (mut lowest, mut highest) = (i64::MAX, i64::MIN);
 
@@ -305,7 +334,17 @@ impl LodBlocks {
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
                 let biome = heights.biome(world_x, world_z);
+                let combined_gradient = block_gradient(
+                    biomes,
+                    biome,
+                    noise.seed(),
+                    world_x,
+                    world_z,
+                    combined_gradient,
+                );
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
+                let water_top = heights.water_top(world_x, world_z);
+                water_tops[Self::column(size, cx, cz)] = water_top;
 
                 tops[Self::column(size, cx, cz)] = ground_top(column_height);
                 fill_column(
@@ -314,7 +353,7 @@ impl LodBlocks {
                     (base, cell),
                     (cx, cz),
                     biome,
-                    (column_height, combined_gradient, temperature),
+                    (column_height, combined_gradient, temperature, water_top),
                 );
             }
         }
@@ -323,7 +362,7 @@ impl LodBlocks {
         let mut trees = Vec::new();
         if trees_may_reach(base.y - cell, base.y + span, lowest, highest) {
             let min = I64Vec2::new(base.x, base.z) - cell;
-            trees = trees_near(regions.noise(), &mut heights, min, min + span + cell);
+            trees = trees_near(regions.terrain(), &mut heights, min, min + span + cell);
             for tree in &trees {
                 tree.plant(
                     base,
@@ -341,6 +380,7 @@ impl LodBlocks {
 
         Self {
             ground_heights,
+            water_tops,
             trees: TreeTints::new(&trees, base, cell),
             ..Self::new(size, cells, tops, base.y, cell)
         }
@@ -357,6 +397,7 @@ impl LodBlocks {
             size,
             cells,
             tops,
+            water_tops: Vec::new(),
             base_y,
             cell,
             surface_tops: Vec::new(),
@@ -472,7 +513,8 @@ impl BlockSource for LodBlocks {
             .get(column)
             .copied()
             .unwrap_or(self.tops[column] as f32);
-        (WATER_LEVEL as f32 - ground).max(1.0)
+        let top = self.water_tops.get(column).copied().unwrap_or(WATER_LEVEL);
+        (top as f32 - ground).max(1.0)
     }
 
     fn forest_shade(&self, position: Vec3) -> f32 {
@@ -560,7 +602,7 @@ pub fn generate_lod_mesh(regions: Arc<RegionStore>, key: LodKey) -> Option<Chunk
     let cell_size = key.cell_size();
     // matches `lod_transform`
     let origin = key.min_block().as_vec3() + Vec3::splat(0.5 * cell_size as f32 - 0.5);
-    let tint = GrassTint::new(regions.noise(), origin, cell_size as f32);
+    let tint = GrassTint::new(regions.terrain(), origin, cell_size as f32);
     let blocks = LodBlocks::sample(&regions, key);
     let top = key.min_block().y + (blocks.size as i64 + 1) * cell_size;
     // the padded cells are already in `SkyLight::index` order
@@ -599,20 +641,20 @@ fn fill_column(
     (base, cell): (I64Vec3, i64),
     (cx, cz): (i32, i32),
     biome: BiomeId,
-    (height, gradient, temperature): (i64, f64, f32),
+    (height, gradient, temperature, water_top): (i64, f64, f32, i64),
 ) {
     let size = CHUNK_SIZE as i32;
-    let block_at = |y| column_block(biomes, biome, y, height, gradient, temperature);
+    let block_at = |y| column_block(biomes, biome, y, height, gradient, temperature, water_top);
     let top = ground_top(height);
     for cy in -1..=size {
         let bottom = base.y + cy as i64 * cell;
         let middle = bottom + cell / 2;
-        let mut block = under_grass(block_at(middle), middle, height, cell);
-        block = freeze_cell(block, temperature, middle + cell / 2, cell);
+        let mut block = under_grass(block_at(middle), middle, height, cell, false);
+        block = freeze_cell(block, temperature, middle + cell / 2, (cell, water_top));
         if block == BlockType::Air && bottom < top {
             block = block_at(top - 1);
         }
         cells[LodBlocks::index(size, IVec3::new(cx, cy, cz))] =
-            underwater(block, bottom, cell, height);
+            underwater(block, bottom, cell, (height, water_top));
     }
 }

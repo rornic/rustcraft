@@ -67,14 +67,14 @@ pub(super) struct TreeBox {
     // over the grass's tint, see `Tree::tint`
     pub(super) tint: Vec3,
     pub(super) faces: BoxFaces,
+    // how much of its width the top is drawn in by, 0 for a box, so a crown isn't a cube
+    pub(super) taper: f32,
 }
 
 // Which of a tree box's faces can be seen.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(super) enum BoxFaces {
     All,
-    // a box standing on the ground
-    NoBottom,
     // a trunk, standing on the ground with its top in the crown
     Sides,
 }

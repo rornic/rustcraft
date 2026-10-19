@@ -9,6 +9,7 @@ use crate::chunks::fade::Fade;
 use crate::chunks::fade::SolidWater;
 use crate::chunks::group::BuiltGroup;
 use crate::chunks::group::ChunkGroup;
+use crate::chunks::pack::pack;
 use bevy::asset::Assets;
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::entity::Entity;
@@ -53,7 +54,7 @@ pub fn load_lods(
             // open sea is all water, with no opaque faces to upload
             if chunk_meshes.opaque.count_vertices() > 0 {
                 commands.entity(entity).insert((
-                    Mesh3d(meshes.add(chunk_meshes.opaque)),
+                    Mesh3d(meshes.add(pack(chunk_meshes.opaque))),
                     MeshMaterial3d(lods.material.clone()),
                 ));
             }
@@ -67,7 +68,7 @@ pub fn load_lods(
                 .clone();
                 commands.entity(entity).with_children(|parent| {
                     let mut water = parent.spawn((
-                        Mesh3d(meshes.add(water_mesh)),
+                        Mesh3d(meshes.add(pack(water_mesh))),
                         MeshMaterial3d(water_material),
                         Transform::default(),
                         lod_aabb(),

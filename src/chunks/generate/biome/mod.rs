@@ -1,18 +1,20 @@
 mod desert;
-mod foothills;
 mod forest;
 mod glacier;
+mod mountain;
+mod plain;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::Vec3;
 
 use crate::block::BlockType;
 pub use desert::Desert;
-pub use foothills::Foothills;
 pub use forest::Forest;
 pub use glacier::Glacier;
+pub use mountain::Mountain;
+pub use plain::Plain;
 
-// How hot and how wet a column is, each 0..1. See `NoiseGenerator::climate`.
+// How hot and how wet a column is, each 0..1. See `TerrainSource::climate`.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Climate {
     pub temperature: f32,
@@ -28,47 +30,15 @@ impl Default for Climate {
     }
 }
 
-// A column of the base terrain, before any biome has changed it.
-#[derive(Debug, Copy, Clone)]
-pub struct BaseColumn {
-    pub x: f64,
-    pub z: f64,
-    // how wide the cell this column stands for is, in blocks: 1 at full detail, wider for
-    // coarse LOD cells, which leave out what's too fine to show, see `fractal::resolved`
-    pub cell: f64,
-    pub height: f64,
-    // how far inland, negative out to sea
-    pub continentalness: f64,
-    // where mountain ranges rise: they start at 0 and grow with it
-    pub ruggedness: f64,
-    pub climate: Climate,
-}
-
-// A biome takes over from the base terrain where the climate or lie of the land suits it:
-// it can reshape the ground and swap the blocks the base terrain would have used.
+// What a biome changes about the ground and what grows on it: the blocks it uses in place of
+// the base terrain's, and how thickly trees grow.
 pub trait Biome: Send + Sync {
     fn name(&self) -> &'static str;
-
-    // How strongly this biome holds on a column, 0..1. The ground it shapes blends in
-    // with this strength, and it owns the column's blocks where it's over 0.5.
-    fn strength(&self, column: &BaseColumn) -> f64;
-
-    // The column's height, given the base terrain's.
-    fn height(&self, column: &BaseColumn) -> f64 {
-        column.height
-    }
 
     // The chance, 0..1, of a tree on each spot one could grow, or None to leave the base
     // terrain's. Trees only grow on grass.
     fn tree_density(&self) -> Option<f64> {
         None
-    }
-
-    // The most this biome can raise a column's tree density in this climate, over the base
-    // terrain's, before strength: all of its density, unless it knows its strength from the climate.
-    fn tree_gain(&self, _climate: Climate) -> f64 {
-        self.tree_density()
-            .map_or(0.0, |density| (density - BASE_TREE_DENSITY).max(0.0))
     }
 
     // The block to use where the base terrain would put `base`, `above_sea` blocks up, on
@@ -78,7 +48,7 @@ pub trait Biome: Send + Sync {
     }
 }
 
-// Which biome owns a column, as an index into `Biomes`, or the base terrain.
+// Which biome a column is, as an index into `Biomes`, or the base terrain.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct BiomeId(u8);
 
@@ -89,19 +59,23 @@ impl BiomeId {
 // The base terrain's scattering of lone trees, see `Biome::tree_density`.
 pub(super) const BASE_TREE_DENSITY: f64 = 0.02;
 
-// Every biome that can take over from the base terrain.
+// Every biome a world map can name.
 pub struct Biomes {
     biomes: Vec<Box<dyn Biome>>,
 }
 
 impl Biomes {
-    pub fn new(seed: u32) -> Self {
-        // earlier biomes win ties for a column
+    pub fn new(_seed: u32) -> Self {
         Self::with(vec![
             Box::new(Glacier),
-            Box::new(Desert::new(seed)),
+            Box::new(Desert),
             Box::new(Forest),
-            Box::new(Foothills::new(seed)),
+            Box::new(Plain::new("tundra", 0.01)),
+            Box::new(Plain::new("taiga", 0.3)),
+            Box::new(Plain::new("steppe", 0.004)),
+            Box::new(Plain::new("savanna", 0.03)),
+            Box::new(Plain::new("jungle", 0.4)),
+            Box::new(Mountain),
         ])
     }
 
@@ -110,31 +84,22 @@ impl Biomes {
         Self { biomes }
     }
 
-    // The column's height, the biome owning it and its tree density, starting from the base terrain.
-    pub fn shape(&self, column: &BaseColumn) -> (f64, BiomeId, f64) {
-        let mut height = column.height;
-        let mut trees = BASE_TREE_DENSITY;
-        let (mut owner, mut strongest) = (BiomeId::BASE, 0.5);
-        for (i, biome) in self.biomes.iter().enumerate() {
-            let strength = biome.strength(column);
-            if strength <= 0.0 {
-                continue;
-            }
-            height += (biome.height(column) - column.height) * strength;
-            if let Some(density) = biome.tree_density() {
-                trees += (density - BASE_TREE_DENSITY) * strength;
-            }
-            if strength > strongest {
-                (owner, strongest) = (BiomeId(i as u8 + 1), strength);
-            }
-        }
-        (height, owner, trees.clamp(0.0, 1.0))
+    /// The biome called `name`.
+    pub fn id(&self, name: &str) -> Option<BiomeId> {
+        self.biomes
+            .iter()
+            .position(|b| b.name() == name)
+            .map(|i| BiomeId(i as u8 + 1))
     }
 
-    /// The most tree density a column in this climate can have, without sampling its terrain.
-    pub fn tree_bound(&self, climate: Climate) -> f64 {
-        let gain: f64 = self.biomes.iter().map(|b| b.tree_gain(climate)).sum();
-        (BASE_TREE_DENSITY + gain).min(1.0)
+    /// How thickly trees grow in `biome`, 0..1.
+    pub fn tree_density(&self, biome: BiomeId) -> f64 {
+        match biome.0.checked_sub(1) {
+            None => BASE_TREE_DENSITY,
+            Some(i) => self.biomes[i as usize]
+                .tree_density()
+                .unwrap_or(BASE_TREE_DENSITY),
+        }
     }
 
     // The biome's name, or None for the base terrain.
@@ -158,13 +123,6 @@ impl Biomes {
             i => self.biomes[i as usize - 1].block(base, above_sea, gradient),
         }
     }
-}
-
-// 0 at `edge0`, rising smoothly to 1 at `edge1`; `edge1` may be below `edge0` to fall instead.
-#[inline]
-pub(super) fn smoothstep(edge0: f64, edge1: f64, x: f64) -> f64 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 // Grass at the four corners of the climate square, in sRGB: hot and dry is parched
@@ -206,81 +164,29 @@ pub fn grass_tint(climate: Climate) -> Vec3 {
 mod tests {
     use super::*;
 
-    struct Raise(f64);
-
-    impl Biome for Raise {
-        fn name(&self) -> &'static str {
-            "raise"
-        }
-
-        fn strength(&self, column: &BaseColumn) -> f64 {
-            column.climate.temperature as f64
-        }
-
-        fn height(&self, column: &BaseColumn) -> f64 {
-            column.height + self.0
-        }
-
-        fn block(&self, _base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
-            BlockType::Snow
-        }
-    }
-
-    fn column(temperature: f32) -> BaseColumn {
-        BaseColumn {
-            x: 0.0,
-            z: 0.0,
-            cell: 1.0,
-            height: 500.0,
-            continentalness: 0.3,
-            ruggedness: -1.0,
-            climate: Climate {
-                temperature,
-                humidity: 0.5,
-            },
-        }
+    #[test]
+    fn test_biomes_are_found_by_name_and_know_their_trees() {
+        let biomes = Biomes::new(1);
+        let forest = biomes.id("forest").unwrap();
+        assert_eq!(Some("forest"), biomes.name(forest));
+        assert_eq!(None, biomes.name(BiomeId::BASE));
+        assert!(biomes.tree_density(forest) > biomes.tree_density(BiomeId::BASE) * 10.0);
+        assert_eq!(0.0, biomes.tree_density(biomes.id("desert").unwrap()));
+        assert!(biomes.id("atlantis").is_none());
     }
 
     #[test]
-    fn test_biome_height_blends_in_with_strength() {
-        let biomes = Biomes::with(vec![Box::new(Raise(10.0))]);
+    fn test_a_biome_owns_the_blocks_it_swaps() {
+        let biomes = Biomes::new(1);
+        let desert = biomes.id("desert").unwrap();
         assert_eq!(
-            (500.0, BiomeId::BASE, BASE_TREE_DENSITY),
-            biomes.shape(&column(0.0))
+            BlockType::Sand,
+            biomes.block(desert, BlockType::Grass, 10, 0.0)
         );
-        assert_eq!(502.5, biomes.shape(&column(0.25)).0);
-        assert_eq!(510.0, biomes.shape(&column(1.0)).0);
-    }
-
-    #[test]
-    fn test_biome_owns_blocks_where_it_holds_over_half() {
-        let biomes = Biomes::with(vec![Box::new(Raise(10.0))]);
-        let owner = |t| biomes.shape(&column(t)).1;
         assert_eq!(
             BlockType::Grass,
-            biomes.block(owner(0.4), BlockType::Grass, 10, 0.0)
+            biomes.block(BiomeId::BASE, BlockType::Grass, 10, 0.0)
         );
-        assert_eq!(
-            BlockType::Snow,
-            biomes.block(owner(0.6), BlockType::Grass, 10, 0.0)
-        );
-    }
-
-    #[test]
-    fn test_strongest_biome_owns_the_column() {
-        let biomes = Biomes::with(vec![Box::new(Raise(10.0)), Box::new(Desert::new(1))]);
-        let hot_dry = BaseColumn {
-            climate: Climate {
-                temperature: 1.0,
-                humidity: 0.0,
-            },
-            ..column(1.0)
-        };
-        let (_, owner, _) = biomes.shape(&hot_dry);
-        // both hold fully, so the first listed keeps it
-        assert_eq!(BiomeId(1), owner);
-        assert_eq!(Some("raise"), biomes.name(owner));
-        assert_eq!(None, biomes.name(BiomeId::BASE));
     }
 
     fn climate(temperature: f32, humidity: f32) -> Climate {
