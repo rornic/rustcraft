@@ -14,6 +14,7 @@ use rustcraft::chunks::generate::region_store::RegionStore;
 use rustcraft::chunks::generate::terrain_source::TerrainSource;
 use rustcraft::chunks::generate::WATER_LEVEL;
 use rustcraft::chunks::lod::LodKey;
+use rustcraft::worldmap::{WorldConfig, WorldTerrain};
 use std::hint::black_box;
 
 const SEED: u32 = 1;
@@ -143,6 +144,66 @@ fn terrain_samples(c: &mut Criterion) {
     group.finish();
 }
 
+fn world_map_samples(c: &mut Criterion) {
+    let map = Arc::new(rustcraft::worldmap::generate(1, WorldConfig::default()));
+    let terrain = WorldTerrain::new(map.clone());
+    let half = map.config.half_size() as f64;
+    let at = |i: u64| {
+        let h = i.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        (
+            (h >> 40) as f64 / (1u64 << 24) as f64 * half * 1.8 - half * 0.9,
+            (h & 0xff_ffff) as f64 / (1u64 << 24) as f64 * half * 1.8 - half * 0.9,
+        )
+    };
+    let mut group = c.benchmark_group("worldmap_sample");
+    let mut i = 0;
+    group.bench_function("bicubic_height", |b| {
+        b.iter(|| {
+            i += 1;
+            let (x, z) = at(i);
+            black_box(map.height_at(x, z))
+        })
+    });
+    group.bench_function("bilinear", |b| {
+        b.iter(|| {
+            i += 1;
+            let (x, z) = at(i);
+            black_box(map.bilinear(&map.height, x, z))
+        })
+    });
+    group.bench_function("terrain_height", |b| {
+        b.iter(|| {
+            i += 1;
+            let (x, z) = at(i);
+            black_box(TerrainSource::height(&terrain, x, z))
+        })
+    });
+    group.bench_function("terrain_biome", |b| {
+        b.iter(|| {
+            i += 1;
+            let (x, z) = at(i);
+            black_box(TerrainSource::biome(&terrain, x, z))
+        })
+    });
+    group.bench_function("terrain_water", |b| {
+        b.iter(|| {
+            i += 1;
+            let (x, z) = at(i);
+            black_box(TerrainSource::water(&terrain, x, z))
+        })
+    });
+    group.finish();
+}
+
+fn world_generation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("worldmap_generate");
+    group.sample_size(10);
+    group.bench_function("default_world", |b| {
+        b.iter(|| black_box(rustcraft::worldmap::generate(1, WorldConfig::default())))
+    });
+    group.finish();
+}
+
 fn lod_nodes(c: &mut Criterion) {
     let terrain = terrain();
     let (sx, sz, sh) = terrain.find_spawn();
@@ -216,7 +277,14 @@ fn report_percentiles() {
     }
 }
 
-criterion_group!(benches, chunk_generation, terrain_samples, lod_nodes);
+criterion_group!(
+    benches,
+    chunk_generation,
+    terrain_samples,
+    world_map_samples,
+    world_generation,
+    lod_nodes
+);
 
 fn main() {
     benches();

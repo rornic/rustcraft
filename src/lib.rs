@@ -16,3 +16,4 @@ pub mod tonemap;
 pub mod weather;
 pub mod wings;
 pub mod world;
+pub mod worldmap;

@@ -4,12 +4,15 @@ use bevy::ecs::component::Component;
 use serde::Deserialize;
 
 use crate::chunks::lod::LodLayout;
+use crate::worldmap::WorldConfig;
 
 #[derive(Default, Deserialize, Clone, Copy, Component)]
 pub struct Settings {
     pub renderer: RendererSettings,
     #[serde(default)]
     pub debug: DebugSettings,
+    #[serde(default)]
+    pub world: WorldConfig,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -78,6 +81,7 @@ impl Default for RendererSettings {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+    use crate::worldmap::WorldConfig;
 
     #[test]
     fn test_missing_renderer_settings_use_defaults() {
@@ -85,6 +89,14 @@ mod tests {
         assert_eq!(64, settings.renderer.render_distance);
         assert_eq!(32, settings.renderer.full_detail_distance);
         assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);
+        assert_eq!(WorldConfig::default(), settings.world);
+    }
+
+    #[test]
+    fn test_world_size_is_config() {
+        let settings: Settings =
+            toml::from_str("[renderer]\n[world]\nsize = 16384\nmap_cell = 16").unwrap();
+        assert_eq!(1024, settings.world.dim());
     }
 
     #[test]

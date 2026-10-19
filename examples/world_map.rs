@@ -6,6 +6,8 @@
 //   cargo run --release --example world_map -- --seed 42 --center 3000,-2000 --scale 2
 // Colour lowlands by biome, with grass tinted by climate as it's drawn in game:
 //   cargo run --release --example world_map -- --seed 42 --biomes
+// The generated world map instead (--size and --cell in blocks, defaults from WorldConfig):
+//   cargo run --release --example world_map -- --seed 42 --worldmap
 // Every run also writes <out>-water.png and <out>-biome.png beside the height map.
 
 use std::env;
@@ -15,9 +17,10 @@ use bevy::math::DVec3;
 
 use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
 use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
-use rustcraft::chunks::generate::noise::{NoiseGenerator, WORLD_SIZE};
+use rustcraft::chunks::generate::noise::NoiseGenerator;
 use rustcraft::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
 use rustcraft::chunks::generate::WATER_LEVEL;
+use rustcraft::worldmap::{WorldConfig, WorldTerrain};
 
 struct Args {
     seed: u32,
@@ -26,22 +29,33 @@ struct Args {
     pixels: u32,
     out: String,
     biomes: bool,
+    // render the world map instead of the layered noise
+    worldmap: bool,
+    size: i64,
+    cell: i64,
 }
 
 fn parse_args() -> Args {
     let mut args = Args {
         seed: 42,
         center: (0.0, 0.0),
-        scale: (WORLD_SIZE as f64 * 1.1 / 2048.0).ceil(),
+        scale: (WorldConfig::default().size as f64 * 1.1 / 2048.0).ceil(),
         pixels: 2048,
         out: "world_map.png".to_string(),
         biomes: false,
+        worldmap: false,
+        size: WorldConfig::default().size,
+        cell: WorldConfig::default().map_cell,
     };
 
     let mut argv = env::args().skip(1);
     while let Some(flag) = argv.next() {
         if flag == "--biomes" {
             args.biomes = true;
+            continue;
+        }
+        if flag == "--worldmap" {
+            args.worldmap = true;
             continue;
         }
         let value = argv
@@ -56,6 +70,8 @@ fn parse_args() -> Args {
             "--scale" => args.scale = value.parse().expect("--scale must be a number"),
             "--pixels" => args.pixels = value.parse().expect("--pixels must be a u32"),
             "--out" => args.out = value,
+            "--size" => args.size = value.parse().expect("--size must be a number"),
+            "--cell" => args.cell = value.parse().expect("--cell must be a number"),
             other => panic!("unknown flag {other}"),
         }
     }
@@ -260,10 +276,21 @@ fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
 
 fn main() {
     let args = parse_args();
-    let noise = NoiseGenerator::new(args.seed);
+    let noise: Box<dyn TerrainSource> = if args.worldmap {
+        let config = WorldConfig {
+            size: args.size,
+            map_cell: args.cell,
+        };
+        let start = std::time::Instant::now();
+        let map = rustcraft::worldmap::generate(args.seed, config);
+        println!("generated the world map in {:.1?}", start.elapsed());
+        Box::new(WorldTerrain::new(std::sync::Arc::new(map)))
+    } else {
+        Box::new(NoiseGenerator::new(args.seed))
+    };
 
     let start = std::time::Instant::now();
-    let samples = sample_map(&noise, &args);
+    let samples = sample_map(&*noise, &args);
     println!(
         "sampled {}x{} in {:.1?}",
         args.pixels,
@@ -280,7 +307,7 @@ fn main() {
         .expect("failed to save image");
     println!("wrote {}", args.out);
     let stem = args.out.strip_suffix(".png").unwrap_or(&args.out);
-    for (layer, image) in layers(&noise, &args) {
+    for (layer, image) in layers(&*noise, &args) {
         let path = format!("{stem}-{layer}.png");
         image.save(&path).expect("failed to save image");
         println!("wrote {path}");

@@ -34,3 +34,10 @@ Vertex counts unchanged (664454 / 352454). Criterion and percentiles within nois
 (height sample 1.124 us, cold plains chunk p50 26.3 ms, level 5 node 2.65 ms). Flight
 (`bench/flight-phase0.txt`): frame p99 2.4 / 5.4 / 5.9 / 5.1 ms, high-leg throughput 13.4k chunks/s.
 No regression. The one-off 77-85 ms worst frame in the high leg is in the baseline too.
+
+## Phase 1: world map (not yet used by the game)
+
+`worldmap::generate` makes the default 65,536 m world at 32 m/cell (2048 x 2048) in 92 ms on 16 cores.
+Samples: bicubic height 47.5 ns, bilinear 16.9 ns, `WorldTerrain` height 71.9 ns, biome 72.2 ns,
+water 82.7 ns, against 1.12 us for a layered-noise sample. The game still runs on the noise generator
+until phase 5, so the flight numbers are unchanged.
