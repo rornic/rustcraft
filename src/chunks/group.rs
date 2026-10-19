@@ -25,6 +25,7 @@ use super::{
     lod::LodKey,
 };
 use crate::chunks::chunk::CHUNK_SIZE;
+use crate::chunks::pack::pack;
 
 /// A level-1 node's worth of full-detail chunks drawn as one mesh. Level 1 is where terrain
 /// swaps between full detail and LODs, so a group is always wholly shown or wholly hidden.
@@ -162,7 +163,7 @@ pub fn load_groups(
             commands.entity(entity).insert((BuiltGroup, group_aabb()));
             if merged.opaque.count_vertices() > 0 {
                 commands.entity(entity).insert((
-                    Mesh3d(meshes.add(merged.opaque)),
+                    Mesh3d(meshes.add(pack(merged.opaque))),
                     MeshMaterial3d(loader.material.clone()),
                 ));
             }
@@ -170,7 +171,7 @@ pub fn load_groups(
                 let water_material = loader.water_material.clone();
                 commands.entity(entity).with_children(|parent| {
                     parent.spawn((
-                        Mesh3d(meshes.add(water)),
+                        Mesh3d(meshes.add(pack(water))),
                         MeshMaterial3d(water_material),
                         Transform::default(),
                         group_aabb(),
@@ -182,7 +183,7 @@ pub fn load_groups(
                 commands.entity(entity).with_children(|parent| {
                     parent.spawn((
                         InnerLeafFaces,
-                        Mesh3d(meshes.add(inner_leaves)),
+                        Mesh3d(meshes.add(pack(inner_leaves))),
                         MeshMaterial3d(material),
                         Transform::default(),
                         group_aabb(),
@@ -258,7 +259,9 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
     }
     let mut merged = Mesh::new(
         PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
+        // both worlds, as the lod meshes are: a packed mesh is not drawn if its main copy, which
+        // keeps the bounds its positions are packed against, is dropped once it is uploaded
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)

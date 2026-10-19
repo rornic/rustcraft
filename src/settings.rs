@@ -40,6 +40,9 @@ pub struct RendererSettings {
     pub mesh_slab_mb: u64,
     /// How much bigger a mesh buffer is made each time it fills, over 1.
     pub mesh_slab_growth: f64,
+    /// Pack terrain meshes' vertices into about half the bytes, see `chunks::pack`. On unless a
+    /// test of the two needs it off.
+    pub pack_meshes: bool,
 }
 
 /// Switches for testing what the renderer spends its time on, all off by default.
@@ -92,6 +95,7 @@ impl Default for RendererSettings {
             shadow_cascades: 3,
             mesh_slab_mb: 64,
             mesh_slab_growth: 1.25,
+            pack_meshes: true,
         }
     }
 }

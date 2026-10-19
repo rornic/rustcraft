@@ -182,6 +182,7 @@ fn main() {
     let renderer = Settings::read("assets/settings.toml")
         .expect("Failed to read settings.toml")
         .renderer;
+    rustcraft::chunks::pack::set_packed(renderer.pack_meshes);
     let mut app = App::new();
     app.add_plugins((
         DefaultPlugins
