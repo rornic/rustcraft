@@ -10,7 +10,10 @@ use crate::block::BlockType;
 use crate::chunks::generate::region_store::{resident_cap_for, RegionStore};
 use crate::chunks::generate::terrain_source::TerrainSource;
 use crate::chunks::generate::WORLD_HEIGHT;
-use crate::worldmap::{io::load_or_generate, WorldConfig, WorldTerrain};
+use crate::worldmap::{gameplay::validate, io::load_or_generate, WorldConfig, WorldTerrain};
+
+// How many random seeds are tried for a playable world before taking the last.
+const MAX_SEED_ATTEMPTS: u32 = 8;
 
 use super::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 
@@ -32,13 +35,28 @@ impl World {
     /// `worlds`), where it's saved the first time a seed is played.
     pub fn new(region_distance: u32, config: WorldConfig) -> Self {
         // RC_SEED repeats a world, for chasing bugs that depend on its terrain
-        let seed = std::env::var("RC_SEED")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_else(rand::random);
+        let fixed: Option<u32> = std::env::var("RC_SEED").ok().and_then(|s| s.parse().ok());
         let dir = std::env::var("RC_WORLD_DIR").unwrap_or_else(|_| "worlds".into());
         let start = std::time::Instant::now();
-        let map = load_or_generate(std::path::Path::new(&dir), seed, config);
+        // a random seed whose map can't be made playable is dropped for another; a chosen one is
+        // kept, with what's wrong with it logged
+        let mut seed = fixed.unwrap_or_else(rand::random);
+        let mut map = None;
+        for attempt in 0..MAX_SEED_ATTEMPTS {
+            let candidate = load_or_generate(std::path::Path::new(&dir), seed, config);
+            let problems = validate(&candidate);
+            if problems.is_empty() {
+                map = Some(candidate);
+                break;
+            }
+            tracing::warn!("seed {seed} is not playable: {}", problems.join("; "));
+            if fixed.is_some() || attempt + 1 == MAX_SEED_ATTEMPTS {
+                map = Some(candidate);
+                break;
+            }
+            seed = rand::random();
+        }
+        let map = map.expect("a map was made");
         tracing::info!("world map for seed {seed} ready in {:.1?}", start.elapsed());
         Self::with_terrain(
             seed,

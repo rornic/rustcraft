@@ -58,6 +58,20 @@ impl Reader<'_> {
         Ok(self.take(len)?.to_vec())
     }
 
+    fn features(&mut self) -> io::Result<Vec<super::Feature>> {
+        let count = u64::from_le_bytes(self.take(8)?.try_into().unwrap()) as usize;
+        let mut features = Vec::new();
+        for _ in 0..count {
+            let kind = super::FeatureKind::from_u8(self.take(1)?[0])
+                .ok_or_else(|| bad("unknown feature"))?;
+            let x = i32::from_le_bytes(self.take(4)?.try_into().unwrap());
+            let z = i32::from_le_bytes(self.take(4)?.try_into().unwrap());
+            let value = f32::from_le_bytes(self.take(4)?.try_into().unwrap());
+            features.push(super::Feature { kind, x, z, value });
+        }
+        Ok(features)
+    }
+
     fn layer(&mut self, expected: usize) -> io::Result<Vec<f32>> {
         let len = u64::from_le_bytes(self.take(8)?.try_into().unwrap()) as usize;
         if len != expected {
@@ -91,6 +105,14 @@ impl WorldMap {
         put_bytes(&mut out, &self.biome);
         put_bytes(&mut out, &self.trees);
         put_bytes(&mut out, &self.roughness);
+        put_bytes(&mut out, &self.ford);
+        out.extend((self.features.len() as u64).to_le_bytes());
+        for f in &self.features {
+            out.push(f.kind as u8);
+            out.extend(f.x.to_le_bytes());
+            out.extend(f.z.to_le_bytes());
+            out.extend(f.value.to_le_bytes());
+        }
         let sum = checksum(&out);
         out.extend(sum.to_le_bytes());
         out
@@ -139,6 +161,8 @@ impl WorldMap {
             biome: r.bytes(cells)?,
             trees: r.bytes(cells)?,
             roughness: r.bytes(cells)?,
+            ford: r.bytes(cells)?,
+            features: r.features()?,
         })
     }
 

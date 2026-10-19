@@ -297,7 +297,11 @@ pub fn run(map: &mut WorldMap, carve: bool) {
                 surface[i] = bed + depth;
                 width[i] = river_width(flow[i] * cell_area);
                 if carve {
-                    map.height[i] = bed;
+                    // the cell dips only as far as the river fills it: a stream a few blocks
+                    // wide is cut at block scale, see `worldmap::source`, and digging all of its
+                    // 32 m cell down to the bed would leave a dry crevice beside the water
+                    let filled = (width[i] / map.config.map_cell as f32).min(1.0);
+                    map.height[i] = bed + depth * (1.0 - filled);
                 }
             }
             _ => {}
@@ -372,13 +376,15 @@ mod tests {
 
     #[test]
     fn test_rivers_widen_downstream_and_reach_water() {
-        let map = crate::worldmap::generate(
-            7,
-            WorldConfig {
-                size: 32_768,
-                map_cell: 32,
-            },
-        );
+        // the hydrology stage on its own: rivers that dry up in deserts, see `climate`, are
+        // another stage's business
+        let config = WorldConfig {
+            size: 32_768,
+            map_cell: 32,
+        };
+        let mut map = crate::worldmap::terrain::base_terrain(7, config);
+        run(&mut map, false);
+        run(&mut map, true);
         let dim = map.dim();
         let mut rivers = 0;
         for start in 0..map.height.len() {

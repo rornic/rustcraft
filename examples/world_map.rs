@@ -247,6 +247,50 @@ fn overlay_water(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMa
     }
 }
 
+// Marks each feature: passes white, fords cyan, bridge sites orange, spawn regions green rings,
+// iron brown, coal black, clay terracotta, salt pink, caves blue, hotspots red.
+fn draw_labels(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMap, args: &Args) {
+    use rustcraft::worldmap::FeatureKind::*;
+    let half = args.pixels as f64 / 2.0;
+    // marks stay a readable size however far the map is zoomed out
+    let size = (3.0f64).max(120.0 / args.scale);
+    for f in &map.features {
+        let (colour, ring) = match f.kind {
+            Pass => ([255, 255, 255], false),
+            Ford => ([0, 230, 255], false),
+            BridgeSite => ([255, 140, 0], false),
+            Spawn => ([40, 255, 60], true),
+            Iron => ([140, 80, 40], false),
+            Coal => ([10, 10, 10], false),
+            Clay => ([210, 110, 80], false),
+            Salt => ([255, 150, 200], false),
+            Cave => ([60, 80, 255], false),
+            Hotspot => ([255, 0, 0], false),
+        };
+        let cx = (f.x as f64 - args.center.0) / args.scale + half;
+        let cz = (f.z as f64 - args.center.1) / args.scale + half;
+        let radius = if ring { size * 2.0 } else { size };
+        let r = radius.ceil() as i64;
+        for dz in -r..=r {
+            for dx in -r..=r {
+                let d = ((dx * dx + dz * dz) as f64).sqrt();
+                let inside = if ring {
+                    d <= radius && d >= radius - 2.0
+                } else {
+                    d <= radius
+                };
+                let (x, z) = (cx.round() as i64 + dx, cz.round() as i64 + dz);
+                if inside
+                    && (0..args.pixels as i64).contains(&x)
+                    && (0..args.pixels as i64).contains(&z)
+                {
+                    image.put_pixel(x as u32, z as u32, image::Rgb(colour));
+                }
+            }
+        }
+    }
+}
+
 // The water and biome layers, one pixel per sample of the height map.
 fn layers(terrain: &dyn TerrainSource, args: &Args) -> [(&'static str, image::RgbImage); 2] {
     let size = args.pixels;
@@ -375,6 +419,26 @@ fn main() {
     image.save(&args.out).expect("failed to save image");
     println!("wrote {}", args.out);
     let stem = args.out.strip_suffix(".png").unwrap_or(&args.out);
+    if let Some(map) = &world_map {
+        let mut labels = image.clone();
+        draw_labels(&mut labels, map, &args);
+        let path = format!("{stem}-labels.png");
+        labels.save(&path).expect("failed to save image");
+        println!("wrote {path}");
+        for kind in rustcraft::worldmap::FeatureKind::ALL {
+            let count = map.features.iter().filter(|f| f.kind == kind).count();
+            println!("{:>12}: {count}", kind.name());
+        }
+        let problems = rustcraft::worldmap::gameplay::validate(map);
+        println!(
+            "validation: {}",
+            if problems.is_empty() {
+                "playable".to_string()
+            } else {
+                problems.join("; ")
+            }
+        );
+    }
     for (layer, image) in layers(&*noise, &args) {
         let path = format!("{stem}-{layer}.png");
         image.save(&path).expect("failed to save image");

@@ -77,7 +77,13 @@ impl WorldMap {
                         distance,
                         width,
                         surface,
-                        bed: surface - depth_for_width(width),
+                        // a ford is shallow however wide the river is there
+                        bed: surface
+                            - if self.ford[i] == 1 {
+                                0.9
+                            } else {
+                                depth_for_width(width)
+                            },
                     };
                     best = Some((margin, hit));
                 }

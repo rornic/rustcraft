@@ -2269,3 +2269,43 @@ fn test_cliffs_are_cut_before_the_water_fills_what_they_open() {
         cut_cliff(BlockType::Water, false, sea - 2, 0.5, sea)
     );
 }
+
+#[test]
+fn test_rivers_leave_no_dry_crevice_beside_their_water() {
+    use crate::chunks::generate::terrain_source::{TerrainSource, WaterKind};
+    let terrain = crate::worldmap::test_terrain(5);
+    let columns = wet_columns(WaterKind::River);
+    assert!(
+        !columns.is_empty(),
+        "no river above the sea on the test world"
+    );
+    let mut checked = 0;
+    for (x, z) in columns {
+        let here = terrain.sample(x as f64, z as f64);
+        // across the river each way: dry ground beside the water is never lower than the water
+        for (dx, dz) in [(1i64, 0i64), (0, 1)] {
+            for step in 1..=24 {
+                for sign in [-1i64, 1] {
+                    let (px, pz) = (x + sign * dx * step, z + sign * dz * step);
+                    let s = terrain.sample(px as f64, pz as f64);
+                    if s.water_surface == 0.0 && s.height < here.water_surface as f64 - 1.5 {
+                        // lower than this river's water: only fine if it has fallen away
+                        // downhill, out of the river's banks, which is more than a bank wide
+                        let near_water = (1..=3).any(|k| {
+                            let q = terrain
+                                .sample((px - sign * dx * k) as f64, (pz - sign * dz * k) as f64);
+                            q.water_surface > 0.0 && s.height < q.water_surface as f64 - 1.5
+                        });
+                        assert!(
+                            !near_water,
+                            "dry ground {:.1} lower than water {:.1} right beside it at ({px}, {pz})",
+                            s.height, here.water_surface
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 100);
+}

@@ -3,6 +3,7 @@
 //! Whittaker-style table turns warmth and moisture into biomes.
 
 use super::noise::fbm;
+use super::terrain::smoothstep;
 use super::{par_rows, WaterCell, WorldMap};
 use crate::chunks::generate::biome::Biomes;
 use crate::chunks::generate::WATER_LEVEL;
@@ -22,6 +23,22 @@ const RECYCLED: f32 = 0.6;
 const WETTEST_PERCENTILE: f64 = 0.9;
 // Moisture is blurred across the wind this many cells each way, so rows of sweeps don't streak.
 const BLUR: usize = 10;
+// Warmth and moisture are blurred this many cells each way before biomes are picked from them.
+const FIELD_BLUR: usize = 4;
+// Cells round a river or lake that it wets and cools, and by how much at the water's edge.
+const RIPARIAN_REACH: u8 = 10;
+// River widths, in blocks, that count for a little, a lot and everything of that reach, and the
+// moisture between which streams dry up, and the width a river must have to survive the driest.
+const RIPARIAN_WIDTHS: (f32, f32, f32) = (20.0, 38.0, 65.0);
+const DRY_BELOW: (f64, f64) = (0.2, 0.45);
+const DRY_RIVER_WIDTH: f32 = 22.0;
+const RIPARIAN_MOISTURE: f32 = 0.7;
+const RIPARIAN_COOLING: f32 = 0.14;
+// A cell takes the most common biome within this many cells, MODE_PASSES times, and a patch of
+// fewer cells than MIN_BIOME_CELLS joins a neighbour.
+const MODE_RADIUS: usize = 2;
+const MODE_PASSES: usize = 2;
+const MIN_BIOME_CELLS: usize = 150;
 
 /// What grows on a stretch of land, stored in `WorldMap::biome`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -178,11 +195,8 @@ pub fn run(map: &mut WorldMap) {
 
     let biomes = Biomes::new(seed);
     let mut moisture = vec![1.0f32; dim * dim];
-    let mut kinds = vec![BiomeKind::Sea as u8; dim * dim];
-    let mut trees = vec![0u8; dim * dim];
     for i in 0..dim * dim {
-        let h = map.height[i];
-        if h < sea {
+        if map.height[i] < sea {
             continue;
         }
         // part how much rain fell, part how it ranks among the land, so every world has its
@@ -192,20 +206,239 @@ pub fn run(map: &mut WorldMap) {
         let (x, z) = map.cell_centre(i % dim, i / dim);
         let drift = fbm(seed.wrapping_add(10 * 101), x, z, 6000.0, 3) as f32 * 0.12;
         moisture[i] = (0.6 * rank + 0.4 * wet + drift).clamp(0.0, 1.0);
+    }
+    // smooth over a few cells each way, so a biome doesn't flip back and forth along the edge
+    // where its warmth or moisture hovers at a threshold
+    let mut moisture = blur_box(&moisture, dim, FIELD_BLUR);
+    let mut temperature = blur_box(&temperature, dim, FIELD_BLUR);
+    // streams dry up in dry country: the drier the ground, the wider a river has to be to carry
+    // on across it, so a stream that wanders into a desert vanishes and only a river fed from
+    // somewhere wetter crosses it. The channel stays, dry, where the water was.
+    for i in 0..dim * dim {
+        if map.water_kind[i] != WaterCell::River as u8 || map.height[i] < sea {
+            continue;
+        }
+        let dryness = smoothstep(DRY_BELOW.1, DRY_BELOW.0, moisture[i] as f64) as f32;
+        if map.river_width[i] < DRY_RIVER_WIDTH * dryness {
+            map.water_kind[i] = WaterCell::None as u8;
+            map.water_surface[i] = 0.0;
+            map.river_width[i] = 0.0;
+        }
+    }
+    // only big water changes the ground round it: a wide river or a lake cools and wets its
+    // banks, so a green belt follows one through a desert, and a stream does nothing of the kind
+    let near_water = fresh_water_closeness(map);
+    for i in 0..dim * dim {
+        if map.height[i] >= sea {
+            moisture[i] = (moisture[i] + RIPARIAN_MOISTURE * near_water[i]).min(1.0);
+            temperature[i] = (temperature[i] - RIPARIAN_COOLING * near_water[i]).max(0.0);
+        }
+    }
+
+    let mut kinds = vec![BiomeKind::Sea as u8; dim * dim];
+    for i in 0..dim * dim {
+        let h = map.height[i];
+        if h < sea {
+            continue;
+        }
         // what a cell grows depends on how warm it is at its height
         let warmth = (temperature[i] - (h - sea) * LAPSE_PER_BLOCK).max(0.0);
-        let kind = classify(warmth, moisture[i]);
-        kinds[i] = kind as u8;
-        // lakes and rivers wet their banks, and nothing grows in them
+        kinds[i] = classify(warmth, moisture[i]) as u8;
+    }
+    let kinds = tidy_biomes(&kinds, dim);
+
+    let mut trees = vec![0u8; dim * dim];
+    for i in 0..dim * dim {
+        if map.height[i] < sea {
+            continue;
+        }
+        // lakes and rivers, and nothing grows in them
         let wet = map.water_kind[i] == WaterCell::Lake as u8
             || map.water_kind[i] == WaterCell::River as u8;
-        let density = tree_density(kind, &biomes) * if wet { 0.0 } else { 1.0 };
+        let density =
+            tree_density(BiomeKind::from_u8(kinds[i]), &biomes) * if wet { 0.0 } else { 1.0 };
         trees[i] = (density.clamp(0.0, 1.0) * 255.0).round() as u8;
     }
     map.temperature = temperature;
     map.moisture = moisture;
     map.biome = kinds;
     map.trees = trees;
+}
+
+// How strongly water near each cell wets and cools it, 0..1: a lake or a very wide river counts
+// in full, a wide river by less, a narrow stream not at all, falling to 0 at RIPARIAN_REACH cells
+// away and squared so the green hugs the bank.
+fn fresh_water_closeness(map: &WorldMap) -> Vec<f32> {
+    let tiers: [(f32, f32); 3] = [
+        (RIPARIAN_WIDTHS.0, 0.45),
+        (RIPARIAN_WIDTHS.1, 0.8),
+        (RIPARIAN_WIDTHS.2, 1.0),
+    ];
+    let mut out = vec![0.0f32; map.height.len()];
+    for (index, (width, strength)) in tiers.into_iter().enumerate() {
+        let near = closeness(map, |i| {
+            let river = map.water_kind[i] == WaterCell::River as u8 && map.river_width[i] >= width;
+            // lakes are the top tier
+            river || (index == tiers.len() - 1 && map.water_kind[i] == WaterCell::Lake as u8)
+        });
+        for (o, n) in out.iter_mut().zip(near) {
+            *o = o.max(n * strength);
+        }
+    }
+    out
+}
+
+// 1 on the cells `source` picks, falling to 0 at RIPARIAN_REACH cells from them, squared.
+fn closeness(map: &WorldMap, source: impl Fn(usize) -> bool) -> Vec<f32> {
+    let dim = map.dim();
+    let reach = RIPARIAN_REACH;
+    let mut dist = vec![u8::MAX; dim * dim];
+    let mut frontier: Vec<usize> = Vec::new();
+    for i in 0..dim * dim {
+        if source(i) {
+            dist[i] = 0;
+            frontier.push(i);
+        }
+    }
+    let mut next = Vec::new();
+    for d in 1..=reach {
+        for &i in &frontier {
+            let (x, z) = ((i % dim) as i64, (i / dim) as i64);
+            for (dx, dz) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, nz) = (x + dx, z + dz);
+                if nx < 0 || nz < 0 || nx >= dim as i64 || nz >= dim as i64 {
+                    continue;
+                }
+                let n = nz as usize * dim + nx as usize;
+                if dist[n] == u8::MAX {
+                    dist[n] = d;
+                    next.push(n);
+                }
+            }
+        }
+        std::mem::swap(&mut frontier, &mut next);
+        next.clear();
+    }
+    dist.iter()
+        .map(|&d| {
+            if d == u8::MAX {
+                0.0
+            } else {
+                let t = 1.0 - d as f32 / (reach as f32 + 1.0);
+                t * t
+            }
+        })
+        .collect()
+}
+
+// A box blur of `radius` cells each way along both axes.
+fn blur_box(layer: &[f32], dim: usize, radius: usize) -> Vec<f32> {
+    let along_x = {
+        let mut out = vec![0.0f32; layer.len()];
+        par_rows(dim, &mut out, |row, cells| {
+            for (col, cell) in cells.iter_mut().enumerate() {
+                let (lo, hi) = (col.saturating_sub(radius), (col + radius).min(dim - 1));
+                let sum: f32 = (lo..=hi).map(|x| layer[row * dim + x]).sum();
+                *cell = sum / (hi - lo + 1) as f32;
+            }
+        });
+        out
+    };
+    let mut out = vec![0.0f32; layer.len()];
+    par_rows(dim, &mut out, |row, cells| {
+        let (lo, hi) = (row.saturating_sub(radius), (row + radius).min(dim - 1));
+        for (col, cell) in cells.iter_mut().enumerate() {
+            let sum: f32 = (lo..=hi).map(|z| along_x[z * dim + col]).sum();
+            *cell = sum / (hi - lo + 1) as f32;
+        }
+    });
+    out
+}
+
+// Biomes with ragged edges and specks tidied: each land cell takes the most common biome in the
+// cells round it, then any patch left smaller than MIN_BIOME_CELLS is given to the biome it
+// borders most. The sea is left alone.
+fn tidy_biomes(kinds: &[u8], dim: usize) -> Vec<u8> {
+    let sea = BiomeKind::Sea as u8;
+    let mut kinds = kinds.to_vec();
+    for _ in 0..MODE_PASSES {
+        let mut out = vec![0u8; kinds.len()];
+        par_rows(dim, &mut out, |row, cells| {
+            for (col, cell) in cells.iter_mut().enumerate() {
+                let here = kinds[row * dim + col];
+                if here == sea {
+                    *cell = sea;
+                    continue;
+                }
+                let mut counts = [0u16; BiomeKind::ALL.len()];
+                for z in row.saturating_sub(MODE_RADIUS)..=(row + MODE_RADIUS).min(dim - 1) {
+                    for x in col.saturating_sub(MODE_RADIUS)..=(col + MODE_RADIUS).min(dim - 1) {
+                        counts[kinds[z * dim + x] as usize] += 1;
+                    }
+                }
+                counts[sea as usize] = 0;
+                // ties keep the cell's own biome
+                let best = (0..counts.len())
+                    .max_by_key(|&k| (counts[k], k as u8 == here))
+                    .unwrap();
+                *cell = best as u8;
+            }
+        });
+        kinds = out;
+    }
+    // a patch of one biome too small to be worth its own: merged into the neighbour it shares
+    // the longest edge with
+    let mut small_passes = 0;
+    loop {
+        let mut changed = false;
+        let mut comp = vec![u32::MAX; kinds.len()];
+        let mut stack = Vec::new();
+        for start in 0..kinds.len() {
+            if comp[start] != u32::MAX || kinds[start] == sea {
+                continue;
+            }
+            let id = start as u32;
+            let mut cells = Vec::new();
+            let mut border = [0u32; BiomeKind::ALL.len()];
+            comp[start] = id;
+            stack.push(start);
+            while let Some(i) = stack.pop() {
+                cells.push(i);
+                let (x, z) = ((i % dim) as i64, (i / dim) as i64);
+                for (dx, dz) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                    let (nx, nz) = (x + dx, z + dz);
+                    if nx < 0 || nz < 0 || nx >= dim as i64 || nz >= dim as i64 {
+                        continue;
+                    }
+                    let n = nz as usize * dim + nx as usize;
+                    if kinds[n] == kinds[start] {
+                        if comp[n] == u32::MAX {
+                            comp[n] = id;
+                            stack.push(n);
+                        }
+                    } else if kinds[n] != sea {
+                        border[kinds[n] as usize] += 1;
+                    }
+                }
+            }
+            if cells.len() < MIN_BIOME_CELLS {
+                if let Some(best) = (0..border.len())
+                    .filter(|&k| border[k] > 0)
+                    .max_by_key(|&k| border[k])
+                {
+                    for &i in &cells {
+                        kinds[i] = best as u8;
+                    }
+                    changed = true;
+                }
+            }
+        }
+        small_passes += 1;
+        if !changed || small_passes >= 3 {
+            break;
+        }
+    }
+    kinds
 }
 
 // A box blur across the wind, along z.
@@ -279,6 +512,136 @@ mod tests {
         let kind = |x: usize| BiomeKind::from_u8(map.biome[row * dim + x]);
         assert_ne!(BiomeKind::Glacier, kind(60));
         assert_eq!(BiomeKind::Glacier, kind(119));
+    }
+
+    // A river along `row` over `x` cells, `width` blocks wide.
+    fn with_river(width: f32, x: std::ops::Range<usize>) -> WorldMap {
+        let mut map = ridge_world();
+        let row = map.dim() / 2;
+        for x in x {
+            let i = map.index(x, row);
+            map.water_kind[i] = WaterCell::River as u8;
+            map.river_width[i] = width;
+            map.water_surface[i] = 460.0;
+        }
+        map
+    }
+
+    #[test]
+    fn test_a_big_river_wets_and_cools_the_dry_ground_round_it() {
+        let mut map = with_river(70.0, 165..215);
+        let (dim, row) = (map.dim(), map.dim() / 2);
+        run(&mut map);
+        let at = |x: usize, z: usize| map.moisture[z * dim + x];
+        let t = |x: usize, z: usize| map.temperature[z * dim + x];
+        assert_eq!(
+            WaterCell::River as u8,
+            map.water_kind[row * dim + 190],
+            "a big river crosses the desert"
+        );
+        // beside the river, against the same dry plain well away from it
+        assert!(
+            at(190, row + 2) > at(190, row + 40) + 0.3,
+            "{} vs {}",
+            at(190, row + 2),
+            at(190, row + 40)
+        );
+        // (warmth falls with latitude, so the dry ground to compare with is along the same row)
+        assert!(t(190, row + 2) < t(235, row + 2) - 0.05);
+        // and wet enough for trees where it would otherwise be steppe or desert
+        let dry = BiomeKind::from_u8(map.biome[(row + 40) * dim + 190]);
+        let bank = BiomeKind::from_u8(map.biome[(row + 2) * dim + 190]);
+        assert_ne!(dry, bank);
+        assert!(map.trees[(row + 2) * dim + 190] >= map.trees[(row + 40) * dim + 190]);
+    }
+
+    #[test]
+    fn test_a_narrow_stream_dries_up_in_a_desert_but_not_where_it_is_wet() {
+        let mut map = with_river(7.0, 90..215);
+        let (dim, row) = (map.dim(), map.dim() / 2);
+        run(&mut map);
+        let wet_side = map.water_kind[row * dim + 100];
+        let dry_side = map.water_kind[row * dim + 190];
+        assert_eq!(
+            WaterCell::River as u8,
+            wet_side,
+            "a stream on the windward slope keeps running"
+        );
+        assert_eq!(
+            WaterCell::None as u8,
+            dry_side,
+            "the same stream is gone in the rain shadow"
+        );
+        assert_eq!(0.0, map.river_width[row * dim + 190]);
+        // and it leaves the ground as dry as the desert round it, not a green belt
+        let (at, far) = (
+            map.moisture[(row + 2) * dim + 190],
+            map.moisture[(row + 40) * dim + 190],
+        );
+        assert!((at - far).abs() < 0.25, "{at} vs {far}");
+    }
+
+    #[test]
+    fn test_a_narrow_stream_leaves_the_biome_round_it_alone() {
+        let (mut with, mut without) = (with_river(12.0, 90..120), ridge_world());
+        let (dim, row) = (with.dim(), with.dim() / 2);
+        run(&mut with);
+        run(&mut without);
+        for x in 95..115 {
+            let i = (row + 3) * dim + x;
+            assert_eq!(
+                without.biome[i], with.biome[i],
+                "biome changed by a stream at {x}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_biomes_have_no_specks() {
+        let map = crate::worldmap::generate(
+            3,
+            WorldConfig {
+                size: 16_384,
+                map_cell: 32,
+            },
+        );
+        let dim = map.dim();
+        let sea = BiomeKind::Sea as u8;
+        let mut seen = vec![false; map.biome.len()];
+        let mut small = 0;
+        for start in 0..map.biome.len() {
+            if seen[start] || map.biome[start] == sea {
+                continue;
+            }
+            let (mut stack, mut cells, mut touches_other_land) = (vec![start], 0, false);
+            seen[start] = true;
+            while let Some(i) = stack.pop() {
+                cells += 1;
+                let (x, z) = (i % dim, i / dim);
+                for (nx, nz) in [
+                    (x.wrapping_sub(1), z),
+                    (x + 1, z),
+                    (x, z.wrapping_sub(1)),
+                    (x, z + 1),
+                ] {
+                    if nx >= dim || nz >= dim {
+                        continue;
+                    }
+                    let n = nz * dim + nx;
+                    if map.biome[n] == map.biome[start] && !seen[n] {
+                        seen[n] = true;
+                        stack.push(n);
+                    } else if map.biome[n] != map.biome[start] && map.biome[n] != sea {
+                        touches_other_land = true;
+                    }
+                }
+            }
+            // a patch with land beside it that is small enough to be a speck
+            if touches_other_land && cells < MIN_BIOME_CELLS / 2 {
+                small += 1;
+            }
+        }
+        assert_eq!(0, small, "{small} specks of biome");
     }
 
     #[test]

@@ -7,6 +7,8 @@
 pub mod climate;
 pub mod detail;
 pub mod erosion;
+pub mod features;
+pub mod gameplay;
 pub mod hydrology;
 pub mod io;
 pub mod noise;
@@ -16,11 +18,12 @@ pub mod water;
 
 use std::sync::Arc;
 
+pub use features::{Feature, FeatureKind};
 pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 1;
+pub const GENERATOR_VERSION: u32 = 2;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -115,6 +118,10 @@ pub struct WorldMap {
     pub trees: Vec<u8>,
     /// How rough the ground is, 0..1 as 0..=255: the amplitude of the detail laid over it.
     pub roughness: Vec<u8>,
+    /// 1 on the river cells that are fords, shallow however wide the river is there.
+    pub ford: Vec<u8>,
+    /// What the gameplay pass found: passes, crossings, spawn regions, resources and encounters.
+    pub features: Vec<Feature>,
 }
 
 /// The eight cells around one, as (dx, dz), in the order `WorldMap::down` indexes them.
@@ -152,6 +159,8 @@ impl WorldMap {
             biome: vec![0; cells],
             trees: vec![0; cells],
             roughness: vec![0; cells],
+            ford: vec![0; cells],
+            features: Vec::new(),
         }
     }
 
@@ -272,7 +281,7 @@ pub fn test_terrain(seed: u32) -> Arc<WorldTerrain> {
 /// trees to stand among.
 #[cfg(test)]
 pub fn forest_spot(terrain: &WorldTerrain) -> bevy::math::I64Vec2 {
-    tree_spot(terrain, 90, 255)
+    tree_spot(terrain, 80, 255)
 }
 
 /// The middle of dry land nearest the test world's centre where trees grow this thickly, as
@@ -285,8 +294,8 @@ pub fn tree_spot(terrain: &WorldTerrain, least: u8, most: u8) -> bevy::math::I64
     for cz in 12..dim - 12 {
         for cx in 12..dim - 12 {
             let near = |dx: i64, dz: i64| map.index((cx + dx) as usize, (cz + dz) as usize);
-            let forested = (-10..=10).step_by(5).all(|dz| {
-                (-10..=10).step_by(5).all(|dx| {
+            let forested = (-12..=12).step_by(2).all(|dz| {
+                (-12..=12).step_by(2).all(|dx| {
                     let i = near(dx, dz);
                     (least..=most).contains(&map.trees[i])
                         && map.water_kind[i] == 0
@@ -330,9 +339,12 @@ pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     // eroded ground, where the rivers really run
     hydrology::run(&mut map, false);
     erosion::run(&mut map);
+    // ranges get their passes before the rivers settle into the ground they leave
+    gameplay::carve_passes(&mut map);
     hydrology::run(&mut map, true);
     climate::run(&mut map);
     detail::roughness_layer(&mut map);
+    gameplay::label(&mut map);
     map
 }
 

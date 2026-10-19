@@ -126,3 +126,17 @@ throughput is identical, as the loader's per-frame budget caps it. The high leg'
 against 77-85 ms in the baseline runs.
 Determinism: `generator::determinism` pins a hash of chunks built from a hand-made map, portable across
 machines.
+
+## Phase 6: gameplay pass, plus fixes from flying the game
+
+Passes (graded valleys joining walkable lowlands across ranges), river crossings at 2-3 km, spawn regions,
+resource sites, caves and hotspots are generated and validated on world creation; the default world takes
+3.0 s (`worldmap_generate`). Smoothing, minimum biome size, riparian belts (big rivers and lakes only) and
+drying of narrow streams in dry ground were added after flying the game.
+
+Flight (`bench/flight-phase6.txt`): frame p99 3.2 / 5.1 / 7.1 / 6.3 ms against baseline 3.0 / 5.2 / 5.7 / 4.7.
+Sprint and high-altitude p99 are about 1.5 ms over the baseline. Not proven, but the likely reason is that the
+flight now crosses forest and jungle where the baseline crossed open land, so the main thread integrates more
+mesh per frame; the same build moved 0.4-0.5 ms between runs, which does not cover it. Treat it as a regression
+to chase with a render-side profile, not as settled. Chunk generation is faster than the baseline (cold p50
+11.1 / 11.0 ms against 26.2 / 27.1, plains p99 43.9 against 60.2).

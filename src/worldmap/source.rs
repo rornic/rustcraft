@@ -5,6 +5,7 @@ use super::detail::{detail, dunes};
 use super::noise::perlin;
 use super::terrain::smoothstep;
 use super::water::RiverHit;
+use super::FeatureKind;
 use super::WorldMap;
 use crate::chunks::generate::biome::{BiomeId, Biomes, Climate};
 use crate::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
@@ -22,9 +23,8 @@ fn channel(ground: f32, river: RiverHit) -> f32 {
         let t = river.distance / half;
         return ground.min(river.bed + depth * t * t);
     }
-    if ground <= river.surface {
-        return ground;
-    }
+    // the bank starts level with the water, ground lower than it filled in and ground higher cut
+    // down, and eases out to the land's own height, so no dry crevice is left along the river
     let t = ((river.distance - half) / bank_width(river)).clamp(0.0, 1.0);
     river.surface + (ground - river.surface) * t * t * (3.0 - 2.0 * t)
 }
@@ -217,26 +217,16 @@ impl TerrainSource for WorldTerrain {
         self.map.bilinear_bytes(&self.map.trees, x, z) as f64 / 255.0
     }
 
+    // The spawn region nearest the world's middle.
+    // The spawn region nearest the world's middle.
     fn find_spawn(&self) -> (i64, i64, f64) {
-        let map = &self.map;
-        let (half, cell) = (map.config.half_size(), map.config.map_cell);
-        let mid = map.dim() as i64 / 2;
-        for ring in 0..mid {
-            for i in -ring..=ring {
-                for (dx, dz) in [(i, -ring), (i, ring), (-ring, i), (ring, i)] {
-                    let (cx, cz) = ((mid + dx) as usize, (mid + dz) as usize);
-                    let above = map.height[map.index(cx, cz)] as f64 - WATER_LEVEL as f64;
-                    let i = map.index(cx, cz);
-                    // open ground, not forest, to start in: dense trees are most of what a view draws
-                    if (4.0..30.0).contains(&above) && map.water_kind[i] == 0 && map.trees[i] <= 40
-                    {
-                        let x = (cx as i64 * cell + cell / 2) - half;
-                        let z = (cz as i64 * cell + cell / 2) - half;
-                        return (x, z, self.height(x as f64, z as f64));
-                    }
-                }
-            }
-        }
-        (0, 0, self.height(0.0, 0.0))
+        let nearest = self
+            .map
+            .features
+            .iter()
+            .filter(|f| f.kind == FeatureKind::Spawn)
+            .min_by_key(|f| (f.x as i64).abs() + (f.z as i64).abs());
+        let (x, z) = nearest.map_or((0, 0), |f| (f.x as i64, f.z as i64));
+        (x, z, self.height(x as f64, z as f64))
     }
 }
