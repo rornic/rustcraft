@@ -37,6 +37,7 @@ TILES = [
     dict(name="SandstoneSide", derive="strata", body="SandstoneTop"),
     dict(name="SandstoneTop", prompt="pale tan sandstone, smooth fine grain", avoid="orange, red, brown, bricks, terracotta", mean=(214, 192, 148)),
     dict(name="SnowSide", derive="fringe", body="Dirt", top="Snow", depth=(3, 5)),
+    dict(name="CompactedStone", derive="shade", body="Stone", factor=0.62, tint=(0.96, 0.98, 1.06)),  # stone packed hard, darker and cooler; breaks only to explosives
     # ground flora, drawn by flora.py; grass and fern are greyscale for the climate's tint
     dict(name="TallGrass", derive="sprite", grey=187),  # as bright as GrassTop, so it tints alike
     dict(name="Fern", derive="sprite", grey=150),
@@ -114,12 +115,16 @@ def finish(t, data, suffix=""):
 
 def derive(t, seed):
     """Tiles built from already-picked ones: `overlay` (just a ragged fringe, on transparency), `fringe` (over a body tile) or `strata` (darker rows).
-    `sprite` tiles are drawn from scratch by flora.py."""
+    `shade` darkens and tints a body tile. `sprite` tiles are drawn from scratch by flora.py."""
     if t["derive"] == "sprite":
         Image.fromarray(sprite(t["name"], seed, t.get("grey")), "RGBA").save(OUT / f"{t['name']}.png")
         return
     rng = np.random.default_rng(seed)
     load = lambda name: np.asarray(Image.open(OUT / f"{name}.png").convert("RGB"), float)
+    if t["derive"] == "shade":
+        out = load(t["body"]) * t["factor"] * np.array(t["tint"])
+        Image.fromarray(np.clip(out.round(), 0, 255).astype("uint8")).convert("RGBA").save(OUT / f"{t['name']}.png")
+        return
     if t["derive"] != "strata":
         top = load(t["top"])
         depth = rng.integers(t["depth"][0], t["depth"][1] + 1, 16)

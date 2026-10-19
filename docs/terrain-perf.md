@@ -89,3 +89,18 @@ Level 1 and 3 nodes are slower because the spawn area is now jungle and forest w
 Flight (`bench/flight-phase5a.txt`): frame p99 2.5 / 5.4 / 6.1 / 5.0 ms against 2.4 / 5.4 / 5.9 / 5.1,
 throughput unchanged (it is capped by the loader's per-frame budget, not by generation). Worst frame in the
 high leg was 110 ms, against 77-85 ms in earlier runs; it is a single frame and varies run to run.
+
+## Open question: map cell size, 16 m or 32 m
+
+Seed 1, 65,536 m world, 16 cores (`world_map --cell N`):
+
+| cell | cells | generation | peak memory |
+|---|---|---|---|
+| 32 m | 2048^2 (4.2M) | 2.7 s | 270 MB |
+| 16 m | 4096^2 (16.8M) | 12.9 s | 856 MB |
+| 8 m (extrapolated) | 8192^2 (67M) | about a minute | 3+ GB |
+
+32 m stays the default: rivers are drawn as segments with their own width, so cell size does not limit them,
+and chunk detail noise supplies everything finer than 64 m. 16 m is supported (`[world] map_cell = 16`) and
+costs about 5x the time. The erosion constants are in cell units, so a finer map erodes differently, not
+just more finely; it would need retuning, not only a config change.

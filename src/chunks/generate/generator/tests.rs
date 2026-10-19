@@ -279,7 +279,7 @@ fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
     );
     assert_eq!(
         BlockType::Snow,
-        under_grass(BlockType::Ice, ground - 5, ground, 1)
+        under_grass(BlockType::Ice, ground - 3, ground, 1)
     );
     assert_eq!(
         BlockType::Ice,
@@ -718,10 +718,10 @@ fn test_grass_sides_carry_their_untinted_shade() {
 
 #[test]
 fn test_only_full_detail_grass_below_the_top_layer_is_dirt() {
-    assert_eq!(BlockType::Dirt, under_grass(BlockType::Grass, 10, 20, 1));
+    assert_eq!(BlockType::Dirt, under_grass(BlockType::Grass, 16, 20, 1));
     assert_eq!(BlockType::Grass, under_grass(BlockType::Grass, 19, 20, 1));
     assert_eq!(BlockType::Grass, under_grass(BlockType::Grass, 10, 20, 4));
-    assert_eq!(BlockType::Stone, under_grass(BlockType::Stone, 10, 20, 1));
+    assert_eq!(BlockType::Stone, under_grass(BlockType::Stone, 16, 20, 1));
 }
 
 #[test]
@@ -2082,4 +2082,83 @@ fn test_lakes_and_rivers_above_the_sea_are_filled_to_their_own_surface() {
             assert_eq!(BlockType::Sand, water(ground - 1), "the bed is sand");
         }
     }
+}
+
+#[test]
+fn test_ground_is_soil_over_stone_over_compacted_stone_by_depth_below_the_surface() {
+    use super::terrain::{COMPACTED_DEPTH, SOIL_DEPTH};
+    let top = 600;
+    let at = |block, depth| under_grass(block, top - 1 - depth, top, 1);
+    assert_eq!(BlockType::Grass, at(BlockType::Grass, 0));
+    for depth in 1..SOIL_DEPTH {
+        assert_eq!(
+            BlockType::Dirt,
+            at(BlockType::Grass, depth),
+            "depth {depth}"
+        );
+        assert_eq!(BlockType::Sand, at(BlockType::Sand, depth));
+    }
+    for depth in SOIL_DEPTH..COMPACTED_DEPTH {
+        assert_eq!(
+            BlockType::Stone,
+            at(BlockType::Grass, depth),
+            "depth {depth}"
+        );
+        assert_eq!(BlockType::Stone, at(BlockType::Sand, depth));
+        assert_eq!(BlockType::Stone, at(BlockType::Stone, depth));
+    }
+    for depth in [COMPACTED_DEPTH, COMPACTED_DEPTH + 1, 40] {
+        for block in [
+            BlockType::Grass,
+            BlockType::Sand,
+            BlockType::Stone,
+            BlockType::Snow,
+        ] {
+            assert_eq!(
+                BlockType::CompactedStone,
+                at(block, depth),
+                "{block:?} {depth}"
+            );
+        }
+    }
+    // water is never packed, and wide cells keep to the surface's block
+    assert_eq!(BlockType::Water, at(BlockType::Water, 9));
+    assert_eq!(
+        BlockType::Grass,
+        under_grass(BlockType::Grass, top - 20, top, 4)
+    );
+}
+
+#[test]
+fn test_compacted_stone_follows_the_local_surface_not_a_fixed_height() {
+    use super::terrain::COMPACTED_DEPTH;
+    let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
+    let terrain = crate::worldmap::test_terrain(5);
+    let map = terrain.map();
+    // dry cells a few blocks or a few hundred above the sea, spread over the world
+    let columns: Vec<(i64, i64)> = (0..map.dim())
+        .step_by(37)
+        .flat_map(|cz| (0..map.dim()).step_by(41).map(move |cx| (cx, cz)))
+        .filter(|&(cx, cz)| {
+            let i = map.index(cx, cz);
+            map.water_kind[i] == 0 && map.height[i] > WATER_LEVEL as f32 + 6.0
+        })
+        .map(|(cx, cz)| {
+            let (x, z) = map.cell_centre(cx, cz);
+            (x as i64, z as i64)
+        })
+        .collect();
+    let mut seen = 0;
+    for (x, z) in columns {
+        seen += 1;
+        let ground = regions.get_height(x, z).round() as i64;
+        let below = |depth: i64| block_at(&regions, x, ground - 1 - depth, z);
+        assert_eq!(
+            BlockType::CompactedStone,
+            below(COMPACTED_DEPTH),
+            "({x}, {z}) at {ground}"
+        );
+        assert_eq!(BlockType::Stone, below(COMPACTED_DEPTH - 1));
+    }
+    assert!(seen >= 2, "only {seen} dry columns found");
 }

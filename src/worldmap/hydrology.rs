@@ -22,9 +22,10 @@ const MAX_LAKE_CELLS: usize = 60_000;
 const BREACH_ROUNDS: usize = 6;
 const MAX_RIVER_DEPTH: f32 = 12.0;
 
-/// Blocks across a river draining `area` square blocks of land.
+/// Blocks across a river draining `area` square blocks of land: a stream a block or two wide where
+/// it starts, ten at a few square kilometres, close to a hundred where a whole range drains.
 pub fn river_width(area: f32) -> f32 {
-    1.2 + 0.0045 * (area - RIVER_MIN_AREA).max(0.0).sqrt() + 0.0015 * area.sqrt()
+    1.5 * (area / RIVER_MIN_AREA).max(1.0).powf(0.78)
 }
 
 /// Blocks deep, at the middle of a river draining `area` square blocks of land.

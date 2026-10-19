@@ -133,19 +133,37 @@ pub(super) fn terrain_block(
     }
 }
 
-// Grass is only the top layer of the ground, over dirt, and glacier ice over snow. Wider LOD cells are sampled mid-cell, which would turn their tops dirt.
+// Blocks of soil, sand or snow under the surface block before stone, and how far under the
+// ground's surface the stone is packed hard, which only explosives break.
+pub(super) const SOIL_DEPTH: i64 = 4;
+pub(super) const COMPACTED_DEPTH: i64 = 6;
+
+// The ground in layers: grass is only the top block, over dirt, glacier ice over snow, then the
+// soil gives way to stone and the stone to compacted stone a fixed depth under this column's own
+// surface. Wider LOD cells are sampled mid-cell, which would turn their tops into dirt, and they
+// don't show the layers.
 pub(super) fn under_grass(
     block: BlockType,
     world_y: i64,
     column_height: i64,
     cell: i64,
 ) -> BlockType {
-    if cell != 1 || world_y >= column_height - 1 {
+    let depth = column_height - 1 - world_y;
+    if cell != 1 || depth <= 0 {
         return block;
     }
-    match block {
+    let block = match block {
         BlockType::Grass => BlockType::Dirt,
         BlockType::Ice => BlockType::Snow,
+        other => other,
+    };
+    let soil = matches!(
+        block,
+        BlockType::Dirt | BlockType::Sand | BlockType::Gravel | BlockType::Snow
+    );
+    match block {
+        _ if depth >= COMPACTED_DEPTH && is_solid(block) => BlockType::CompactedStone,
+        _ if depth >= SOIL_DEPTH && soil => BlockType::Stone,
         other => other,
     }
 }
