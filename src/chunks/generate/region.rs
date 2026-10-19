@@ -2,6 +2,7 @@ use bevy::math::I64Vec2;
 
 use super::biome::BiomeId;
 use super::terrain_source::TerrainSource;
+use super::terrain_source::WaterKind;
 
 pub const REGION_SIZE: i64 = 256;
 // Regions keep the lowest and highest column in each tile this many blocks across.
@@ -30,7 +31,9 @@ pub struct Region {
     biomes: Vec<BiomeId>,
     // tree density, 0..1 as 0..=255
     trees: Vec<u8>,
-    // the lowest and highest column in each TILE_SIZE tile, TILES x TILES, row-major [z][x]
+    // the height of the water over each column, 0 where there is none
+    water: Vec<f32>,
+    // the lowest ground and highest ground or inland water in each TILE_SIZE tile, TILES x TILES, row-major [z][x]
     tile_range: Vec<(f32, f32)>,
 }
 
@@ -47,11 +50,16 @@ impl Region {
         self.biomes[Self::index(local_x, local_z)]
     }
 
+    pub fn water_at(&self, local_x: i64, local_z: i64) -> f32 {
+        self.water[Self::index(local_x, local_z)]
+    }
+
     pub fn trees_at(&self, local_x: i64, local_z: i64) -> f64 {
         self.trees[Self::index(local_x, local_z)] as f64 / 255.0
     }
 
-    /// The lowest and highest columns in `min..=max` (local x, z), rounded out to whole tiles.
+    /// The lowest ground and highest ground or inland water in `min..=max` (local x, z), rounded out to
+    /// whole tiles.
     pub fn height_range(&self, min: I64Vec2, max: I64Vec2) -> (f32, f32) {
         let (min, max) = (min / TILE_SIZE, max / TILE_SIZE);
         (min.y..=max.y)
@@ -69,6 +77,7 @@ pub fn compute_region(noise: &dyn TerrainSource, coord: RegionCoord) -> Region {
     let mut heights = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
     let mut biomes = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
     let mut trees = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
+    let mut water = Vec::with_capacity((REGION_SIZE * REGION_SIZE) as usize);
     let mut tile_range = vec![(f32::MAX, f32::MIN); (TILES * TILES) as usize];
     for z in 0..REGION_SIZE {
         for x in 0..REGION_SIZE {
@@ -77,14 +86,22 @@ pub fn compute_region(noise: &dyn TerrainSource, coord: RegionCoord) -> Region {
             heights.push(height);
             biomes.push(sample.biome);
             trees.push((sample.trees * 255.0).round() as u8);
+            water.push(sample.water_surface);
             let tile = &mut tile_range[((z / TILE_SIZE) * TILES + x / TILE_SIZE) as usize];
-            *tile = (tile.0.min(height), tile.1.max(height));
+            // the sea is left out: nodes under it are known to be water, see `lod::spawn::known_empty`
+            let inland = if sample.water_kind == WaterKind::Ocean {
+                0.0
+            } else {
+                sample.water_surface
+            };
+            *tile = (tile.0.min(height), tile.1.max(height.max(inland)));
         }
     }
     Region {
         heights,
         biomes,
         trees,
+        water,
         tile_range,
     }
 }

@@ -35,8 +35,9 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     for x in 0..size {
         for z in 0..size {
             let column_height = columns.height(x, z);
-            // above the ground and the sea, the column is air here whatever its climate
-            if world_y >= ground_top(column_height).max(WATER_LEVEL) {
+            let water_top = columns.water_top(x, z);
+            // above the ground and the water, the column is air here whatever its climate
+            if world_y >= ground_top(column_height).max(water_top) {
                 cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
                 continue;
             }
@@ -47,7 +48,15 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
             );
             cells.extend((world_y..world_y + size).map(|y| {
                 under_grass(
-                    column_block(biomes, biome, y, column_height, gradient, temperature),
+                    column_block(
+                        biomes,
+                        biome,
+                        y,
+                        column_height,
+                        gradient,
+                        temperature,
+                        water_top,
+                    ),
                     y,
                     column_height,
                     1,
@@ -100,6 +109,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                 column_height,
                 gradient,
                 temperature,
+                columns.water_top(x, z),
             );
             let coord = bevy::math::U16Vec3::new(x as u16, local_y as u16, z as u16);
             if ground != BlockType::Grass || chunk_data.get_block_at(coord) != BlockType::Air {

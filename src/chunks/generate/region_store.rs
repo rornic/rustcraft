@@ -8,6 +8,7 @@ use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
 use super::terrain_source::TerrainSource;
 use super::trees::TreeGround;
+use super::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
 
 // The fewest regions kept, about 400KB each.
@@ -172,6 +173,21 @@ impl HeightSampler<'_> {
         let origin = coord.origin();
         self.region(coord)
             .biome_at(world_x - origin.x, world_z - origin.y)
+    }
+
+    /// The height of the water's surface over the column, in whole blocks, or the sea's where the
+    /// column is dry, which is what ground over it is measured from.
+    pub fn water_top(&mut self, world_x: i64, world_z: i64) -> i64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        let surface = self
+            .region(coord)
+            .water_at(world_x - origin.x, world_z - origin.y);
+        if surface > 0.0 {
+            surface.round() as i64
+        } else {
+            WATER_LEVEL
+        }
     }
 
     pub fn trees(&mut self, world_x: i64, world_z: i64) -> f64 {

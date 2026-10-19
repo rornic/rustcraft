@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::biome::BiomeId;
 use super::region_store::HeightSampler;
-use super::terrain_source::TerrainSource;
+use super::terrain_source::{TerrainSource, WaterKind};
+use super::WATER_LEVEL;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;
 
@@ -52,7 +53,9 @@ pub struct ColumnGrid {
     heights: Vec<f32>,
     biomes: Vec<BiomeId>,
     trees: Vec<f32>,
-    /// The lowest and highest ground under the node's cells, and the cell beyond each edge.
+    // the height of the water over each cell, 0 where there is none
+    water: Vec<f32>,
+    /// The lowest ground and highest ground or inland water under the node's cells, and the cell beyond each edge.
     pub lowest: f32,
     pub highest: f32,
 }
@@ -68,6 +71,7 @@ impl ColumnGrid {
             heights: Vec::with_capacity(span * span),
             biomes: Vec::with_capacity(span * span),
             trees: Vec::with_capacity(span * span),
+            water: Vec::with_capacity(span * span),
             lowest: f32::MAX,
             highest: f32::MIN,
         };
@@ -79,9 +83,16 @@ impl ColumnGrid {
                 grid.heights.push(sample.height as f32);
                 grid.biomes.push(sample.biome);
                 grid.trees.push(sample.trees as f32);
+                grid.water.push(sample.water_surface);
                 if (-1..=size).contains(&cx) && (-1..=size).contains(&cz) {
                     grid.lowest = grid.lowest.min(sample.height as f32);
-                    grid.highest = grid.highest.max(sample.height as f32);
+                    // the sea is left out: nodes under it are known to be water
+                    let inland = if sample.water_kind == WaterKind::Ocean {
+                        0.0
+                    } else {
+                        sample.water_surface
+                    };
+                    grid.highest = grid.highest.max((sample.height as f32).max(inland));
                 }
             }
         }
@@ -114,6 +125,14 @@ impl ColumnGrid {
     pub fn trees(&self, cx: i32, cz: i32) -> f64 {
         self.trees[Self::index(cx, cz)] as f64
     }
+
+    /// The height of the water's surface over the cell in whole blocks, or the sea's where it's dry.
+    pub fn water_top(&self, cx: i32, cz: i32) -> i64 {
+        match self.water[Self::index(cx, cz)] {
+            surface if surface > 0.0 => surface.round() as i64,
+            _ => WATER_LEVEL,
+        }
+    }
 }
 
 /// What generating a full-detail chunk takes from each of its columns, the same for every chunk
@@ -123,6 +142,7 @@ pub struct ChunkColumns {
     gradients: Vec<f64>,
     biomes: Vec<BiomeId>,
     temperatures: Vec<f32>,
+    water_tops: Vec<i64>,
     /// The lowest and highest ground under the chunks.
     pub lowest: i64,
     pub highest: i64,
@@ -137,6 +157,7 @@ impl ChunkColumns {
             gradients: Vec::with_capacity(cells),
             biomes: Vec::with_capacity(cells),
             temperatures: Vec::with_capacity(cells),
+            water_tops: Vec::with_capacity(cells),
             lowest: i64::MAX,
             highest: i64::MIN,
         };
@@ -148,6 +169,7 @@ impl ChunkColumns {
                 columns.heights.push(height);
                 columns.gradients.push(gradient_x.abs() + gradient_z.abs());
                 columns.biomes.push(heights.biome(world_x, world_z));
+                columns.water_tops.push(heights.water_top(world_x, world_z));
                 columns
                     .temperatures
                     .push(noise.temperature(world_x as f64, world_z as f64));
@@ -178,6 +200,11 @@ impl ChunkColumns {
 
     pub fn temperature(&self, cx: i64, cz: i64) -> f32 {
         self.temperatures[Self::index(cx, cz)]
+    }
+
+    /// The height of the water's surface over the column, or the sea's where it's dry.
+    pub fn water_top(&self, cx: i64, cz: i64) -> i64 {
+        self.water_tops[Self::index(cx, cz)]
     }
 }
 

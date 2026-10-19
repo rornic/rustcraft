@@ -11,12 +11,12 @@ pub(super) fn underwater(
     block: BlockType,
     bottom: i64,
     cell: i64,
-    column_height: i64,
+    (column_height, water_top): (i64, i64),
 ) -> BlockType {
     if is_solid(block)
-        && bottom < WATER_LEVEL
-        && WATER_LEVEL <= bottom + cell
-        && ground_top(column_height) < WATER_LEVEL
+        && bottom < water_top
+        && water_top <= bottom + cell
+        && ground_top(column_height) < water_top
     {
         BlockType::Water
     } else {
@@ -63,9 +63,9 @@ pub(super) fn freeze_cell(
     block: BlockType,
     temperature: f32,
     cell_top: i64,
-    cell: i64,
+    (cell, water_top): (i64, i64),
 ) -> BlockType {
-    if cell > 1 && block == BlockType::Water && cell_top > WATER_LEVEL - ice_depth(temperature) {
+    if cell > 1 && block == BlockType::Water && cell_top > water_top - ice_depth(temperature) {
         BlockType::Ice
     } else {
         block
@@ -95,19 +95,25 @@ pub(super) fn terrain_block(
     column_height: i64,
     combined_gradient: f64,
     temperature: f32,
+    water_top: i64,
 ) -> BlockType {
     if world_y < ground_top(column_height) {
+        // under water the ground is sand, whatever it would be dry
+        if ground_top(column_height) < water_top {
+            return BlockType::Sand;
+        }
         let above_sea = world_y - WATER_LEVEL;
+        let above_water = world_y - water_top;
         let line = snow_line(temperature);
         let snows = temperature < SNOW_MAX_TEMPERATURE;
         if snows && above_sea >= line && combined_gradient <= snow_holding_slope(above_sea, line) {
             BlockType::Snow
         } else if !snows && above_sea >= SNOW_LINE
             || above_sea >= 120 && combined_gradient >= 2.0
-            || (above_sea >= 2 && combined_gradient >= 3.5)
+            || (above_water >= 2 && combined_gradient >= 3.5)
         {
             BlockType::Stone
-        } else if above_sea >= 2 {
+        } else if above_water >= 2 {
             if temperature < SNOWY_GRASS_TEMPERATURE && world_y == column_height - 1 {
                 BlockType::Snow
             } else {
@@ -116,8 +122,8 @@ pub(super) fn terrain_block(
         } else {
             BlockType::Sand
         }
-    } else if world_y < WATER_LEVEL {
-        if world_y >= WATER_LEVEL - ice_depth(temperature) {
+    } else if world_y < water_top {
+        if world_y >= water_top - ice_depth(temperature) {
             BlockType::Ice
         } else {
             BlockType::Water
@@ -152,7 +158,14 @@ pub(in crate::chunks::generate) fn column_block(
     column_height: i64,
     combined_gradient: f64,
     temperature: f32,
+    water_top: i64,
 ) -> BlockType {
-    let base = terrain_block(world_y, column_height, combined_gradient, temperature);
+    let base = terrain_block(
+        world_y,
+        column_height,
+        combined_gradient,
+        temperature,
+        water_top,
+    );
     biomes.block(biome, base, world_y - WATER_LEVEL, combined_gradient)
 }

@@ -224,46 +224,58 @@ fn test_trees_across_chunk_borders_are_whole() {
 fn test_cold_sea_freezes_from_the_top_and_thicker_when_colder() {
     let ice_layers = |temperature| {
         (WATER_LEVEL - 10..WATER_LEVEL)
-            .filter(|&y| terrain_block(y, 0, 0.0, temperature) == BlockType::Ice)
+            .filter(|&y| terrain_block(y, 0, 0.0, temperature, WATER_LEVEL) == BlockType::Ice)
             .count()
     };
     assert_eq!(0, ice_layers(0.5));
     assert_eq!(0, ice_layers(FREEZE_TEMPERATURE));
     assert_eq!(1, ice_layers(FREEZE_TEMPERATURE - 0.01));
     assert_eq!(3, ice_layers(0.0));
-    assert_eq!(BlockType::Ice, terrain_block(WATER_LEVEL - 1, 0, 0.0, 0.0));
+    assert_eq!(
+        BlockType::Ice,
+        terrain_block(WATER_LEVEL - 1, 0, 0.0, 0.0, WATER_LEVEL)
+    );
     assert_eq!(
         BlockType::Water,
-        terrain_block(WATER_LEVEL - 4, 0, 0.0, 0.0)
+        terrain_block(WATER_LEVEL - 4, 0, 0.0, 0.0, WATER_LEVEL)
     );
-    assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0, 0.0));
+    assert_eq!(
+        BlockType::Air,
+        terrain_block(WATER_LEVEL, 0, 0.0, 0.0, WATER_LEVEL)
+    );
 }
 
 #[test]
 fn test_wide_cells_freeze_when_they_reach_the_ice() {
     let top = WATER_LEVEL;
-    assert_eq!(BlockType::Ice, freeze_cell(BlockType::Water, 0.0, top, 32));
     assert_eq!(
-        BlockType::Water,
-        freeze_cell(BlockType::Water, 0.0, top - 32, 32)
+        BlockType::Ice,
+        freeze_cell(BlockType::Water, 0.0, top, (32, WATER_LEVEL))
     );
     assert_eq!(
         BlockType::Water,
-        freeze_cell(BlockType::Water, 0.5, top, 32)
+        freeze_cell(BlockType::Water, 0.0, top - 32, (32, WATER_LEVEL))
+    );
+    assert_eq!(
+        BlockType::Water,
+        freeze_cell(BlockType::Water, 0.5, top, (32, WATER_LEVEL))
     );
     assert_eq!(
         BlockType::Stone,
-        freeze_cell(BlockType::Stone, 0.0, top, 32)
+        freeze_cell(BlockType::Stone, 0.0, top, (32, WATER_LEVEL))
     );
 }
 
 #[test]
 fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
     let ground = WATER_LEVEL + 20;
-    assert_eq!(BlockType::Snow, terrain_block(ground - 1, ground, 0.0, 0.1));
+    assert_eq!(
+        BlockType::Snow,
+        terrain_block(ground - 1, ground, 0.0, 0.1, WATER_LEVEL)
+    );
     assert_eq!(
         BlockType::Grass,
-        terrain_block(ground - 1, ground, 0.0, 0.5)
+        terrain_block(ground - 1, ground, 0.0, 0.5, WATER_LEVEL)
     );
     assert_eq!(
         BlockType::Snow,
@@ -278,12 +290,18 @@ fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
 #[test]
 fn test_terrain_block_floor_and_water() {
     // below the solid floor even a zero-height column is solid
-    assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0, 0.5));
-    assert_eq!(BlockType::Water, terrain_block(20, 0, 0.0, 0.5));
-    assert_eq!(BlockType::Air, terrain_block(WATER_LEVEL, 0, 0.0, 0.5));
+    assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0, 0.5, WATER_LEVEL));
+    assert_eq!(
+        BlockType::Water,
+        terrain_block(20, 0, 0.0, 0.5, WATER_LEVEL)
+    );
+    assert_eq!(
+        BlockType::Air,
+        terrain_block(WATER_LEVEL, 0, 0.0, 0.5, WATER_LEVEL)
+    );
     assert_eq!(
         BlockType::Grass,
-        terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0, 0.5)
+        terrain_block(WATER_LEVEL + 10, WATER_LEVEL + 20, 0.0, 0.5, WATER_LEVEL)
     );
 }
 
@@ -291,7 +309,7 @@ fn test_terrain_block_floor_and_water() {
 fn test_snow_settles_on_steeper_ground_higher_up() {
     let at = |above_sea: i64, slope: f64| {
         let y = WATER_LEVEL + above_sea;
-        terrain_block(y, y + 1, slope, 0.5)
+        terrain_block(y, y + 1, slope, 0.5, WATER_LEVEL)
     };
     assert_ne!(BlockType::Snow, at(200, 0.0));
     assert_eq!(BlockType::Snow, at(230, 1.0));
@@ -305,7 +323,7 @@ fn test_snow_settles_on_steeper_ground_higher_up() {
 fn test_snow_line_drops_in_the_cold_and_hot_ground_is_bare() {
     let at = |above_sea: i64, temperature: f32| {
         let y = WATER_LEVEL + above_sea;
-        terrain_block(y, y + 1, 0.0, temperature)
+        terrain_block(y, y + 1, 0.0, temperature, WATER_LEVEL)
     };
     assert_ne!(BlockType::Snow, at(100, 0.5));
     assert_eq!(BlockType::Snow, at(100, 0.35));
@@ -317,7 +335,8 @@ fn test_snow_line_drops_in_the_cold_and_hot_ground_is_bare() {
 
 #[test]
 fn test_only_the_top_of_frozen_grass_is_snow() {
-    let at = |y: i64, temperature: f32| terrain_block(y, WATER_LEVEL + 7, 0.0, temperature);
+    let at =
+        |y: i64, temperature: f32| terrain_block(y, WATER_LEVEL + 7, 0.0, temperature, WATER_LEVEL);
     let top = WATER_LEVEL + 6;
     assert_eq!(BlockType::Snow, at(top, 0.05));
     assert_eq!(BlockType::Grass, at(top, 0.3));
@@ -1996,4 +2015,71 @@ fn test_lod_non_air_only_covers_interior() {
     assert!(cells
         .iter()
         .all(|(c, _)| c.min_element() >= 0 && c.max_element() < 16));
+}
+
+// The block at world (x, y, z) from a freshly generated chunk.
+fn block_at(regions: &Arc<RegionStore>, x: i64, y: i64, z: i64) -> BlockType {
+    let coord = ChunkCoordinate(I64Vec3::new(x, y, z).div_euclid(I64Vec3::splat(16)));
+    generate_chunk(regions.clone(), coord).get_block_at(U16Vec3::new(
+        x.rem_euclid(16) as u16,
+        y.rem_euclid(16) as u16,
+        z.rem_euclid(16) as u16,
+    ))
+}
+
+// Cell centres of the test world's map where `kind` water flows or sits, and the sample there.
+fn wet_columns(kind: crate::chunks::generate::terrain_source::WaterKind) -> Vec<(i64, i64)> {
+    use crate::chunks::generate::terrain_source::TerrainSource;
+    let terrain = crate::worldmap::test_terrain(5);
+    let map = terrain.map();
+    let mut found = Vec::new();
+    'cells: for cz in 0..map.dim() {
+        for cx in 0..map.dim() {
+            let (x, z) = map.cell_centre(cx, cz);
+            let (x, z) = (x.round(), z.round());
+            let sample = terrain.sample(x, z);
+            let depth = sample.water_surface - sample.height as f32;
+            if sample.water_kind == kind
+                && sample.water_surface > WATER_LEVEL as f32 + 3.0
+                && depth > 2.0
+            {
+                found.push((x as i64, z as i64));
+                if found.len() >= 6 {
+                    break 'cells;
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn test_lakes_and_rivers_above_the_sea_are_filled_to_their_own_surface() {
+    use crate::chunks::generate::terrain_source::{TerrainSource, WaterKind};
+    let terrain = crate::worldmap::test_terrain(5);
+    let regions = Arc::new(RegionStore::new(terrain.clone()));
+    for kind in [WaterKind::Lake, WaterKind::River] {
+        let columns = wet_columns(kind);
+        assert!(
+            !columns.is_empty(),
+            "no {kind:?} above the sea on the test world"
+        );
+        for (x, z) in columns {
+            let sample = terrain.sample(x as f64, z as f64);
+            // the column's own water, at whole blocks, as chunk generation takes it
+            let top = regions.sampler().water_top(x, z);
+            let ground = regions.get_height(x, z).round() as i64;
+            assert!(
+                top > ground,
+                "{kind:?} at ({x}, {z}): water {top} over ground {ground}"
+            );
+            assert!(top > WATER_LEVEL, "{sample:?}");
+            let water = |y| block_at(&regions, x, y, z);
+            assert_eq!(BlockType::Air, water(top + 1), "{kind:?} at ({x}, {z})");
+            // the top layer may be ice in the cold, but never air, and under it is water
+            assert!(matches!(water(top - 1), BlockType::Water | BlockType::Ice));
+            assert_eq!(BlockType::Water, water(top - 1 - 4.min(top - ground - 1)));
+            assert_eq!(BlockType::Sand, water(ground - 1), "the bed is sand");
+        }
+    }
 }

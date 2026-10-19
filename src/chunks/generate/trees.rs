@@ -4,6 +4,7 @@ use super::biome::BiomeId;
 use super::generator::column_block;
 use super::region_store::{HeightSampler, SLOPE_SPAN};
 use super::terrain_source::TerrainSource;
+use super::WATER_LEVEL;
 use crate::block::BlockType;
 
 /// What trees need to know about the ground to take root, from the full-detail heightmap or
@@ -500,6 +501,7 @@ fn tree_in_cell(
         height,
         gradient,
         temperature,
+        WATER_LEVEL,
     );
     if ground != BlockType::Grass {
         return None;

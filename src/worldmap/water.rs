@@ -2,7 +2,6 @@
 //! each with a width and a water surface, drawn here as segments between cell centres so a
 //! river 6 blocks wide stays 6 blocks wide on a map of 32-block cells.
 
-use super::hydrology::{river_depth, river_width};
 use super::{WaterCell, WorldMap, NEIGHBOURS, NO_FLOW};
 
 // Cells searched round a point for river segments: a segment runs one cell, and a wide river
