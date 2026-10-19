@@ -150,6 +150,8 @@ impl Canopy {
                 while z1 < n && (x0..x1).all(|x| same(x, z1)) {
                     z1 += 1;
                 }
+                // one column alone is a cube that stands out from afar, and the ground is tinted for it
+                let alone = x1 - x0 == 1 && z1 - z0 == 1;
                 let (mut lowest, mut tint, mut count) = (f32::MAX, Vec3::ZERO, 0.0);
                 // the points under crowns' bounds, in points across the node
                 let (mut near, mut far) = (UVec2::MAX, UVec2::ZERO);
@@ -179,6 +181,9 @@ impl Canopy {
                 );
                 // from a little under the ground, so no gap shows on slopes
                 let bottom = mesh_y(lowest as f64 - 2.0);
+                if alone {
+                    continue;
+                }
                 boxes.push(TreeBox {
                     min: Vec3::new(near.x, bottom, near.y),
                     max: Vec3::new(far.x, mesh_y(steps as f64 * step).max(bottom + 0.1), far.y),
