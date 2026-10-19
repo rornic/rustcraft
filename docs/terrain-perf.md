@@ -104,3 +104,25 @@ Seed 1, 65,536 m world, 16 cores (`world_map --cell N`):
 and chunk detail noise supplies everything finer than 64 m. 16 m is supported (`[world] map_cell = 16`) and
 costs about 5x the time. The erosion constants are in cell units, so a finer map erodes differently, not
 just more finely; it would need retuning, not only a config change.
+
+## Phase 5: chunk detail, water, strata, cliffs (done)
+
+Full chunk pipeline: bicubic ground plus roughness-scaled detail, river channels and lakes, water filled to
+each column's own surface, soil/stone/compacted-stone strata, 3D-noise cliffs cut before the water fills.
+A cheap "water nearby" mask skips river and lake lookups for the columns that have none.
+
+| bench | baseline | now |
+|---|---|---|
+| terrain sample, height | 1.12 us | 0.242 us |
+| chunk_gen cold p50, plains / mountains / coast | 26.2 / 27.1 / 19.8 ms | 13.2 / 11.1 / 12.0 ms |
+| chunk_gen cold p99, plains / mountains / coast | 60.2 / 60.3 / 84.1 ms | 61.3 / 33.1 / 37.0 ms |
+
+Cold plains p99 is level with the baseline (61.3 against 60.2 ms): it is the first region in an area plus
+columns, and it varies by about 10 ms between runs of the same build. The other five rows improved.
+Flight (`bench/flight-phase5.txt`, taken before the water mask, so the mask only helps): frame p99
+2.6 / 5.3 / 6.2 / 5.2 ms against baseline 3.0 / 5.2 / 5.7 / 4.7. Sprint is 0.5 ms over the baseline's p99, a
+run-to-run difference on a headless harness (the same build moved by 0.4 ms between two runs), and
+throughput is identical, as the loader's per-frame budget caps it. The high leg's worst frame was 73 ms
+against 77-85 ms in the baseline runs.
+Determinism: `generator::determinism` pins a hash of chunks built from a hand-made map, portable across
+machines.

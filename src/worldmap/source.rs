@@ -43,6 +43,28 @@ fn meander(seed: u32, x: f64, z: f64) -> (f64, f64) {
     (bend(0x3EA1), bend(0x3EA2))
 }
 
+// Which cells have a river or lake within `NEAR` cells, which is as far as a river's banks, a
+// meander and a lake's shore reach.
+fn near_water(map: &WorldMap) -> Vec<bool> {
+    const NEAR: i64 = 4;
+    let dim = map.dim() as i64;
+    let mut near = vec![false; map.height.len()];
+    for cz in 0..dim {
+        for cx in 0..dim {
+            let i = (cz * dim + cx) as usize;
+            if map.river_width[i] <= 0.0 && map.water_kind[i] != 2 {
+                continue;
+            }
+            for z in (cz - NEAR).max(0)..=(cz + NEAR).min(dim - 1) {
+                for x in (cx - NEAR).max(0)..=(cx + NEAR).min(dim - 1) {
+                    near[(z * dim + x) as usize] = true;
+                }
+            }
+        }
+    }
+    near
+}
+
 /// Terrain read from a `WorldMap`, with detail laid over its ground.
 pub struct WorldTerrain {
     map: Arc<WorldMap>,
@@ -50,6 +72,8 @@ pub struct WorldTerrain {
     // the biome each `BiomeKind` is, indexed by kind
     kinds: Vec<BiomeId>,
     desert: BiomeId,
+    // cells with a river or lake within a few cells of them, so the rest skip looking for water
+    near_water: Vec<bool>,
 }
 
 impl WorldTerrain {
@@ -64,11 +88,13 @@ impl WorldTerrain {
             })
             .collect();
         let desert = biomes.id("desert").expect("desert in table");
+        let near_water = near_water(&map);
         Self {
             map,
             biomes,
             kinds,
             desert,
+            near_water,
         }
     }
 
@@ -108,7 +134,15 @@ impl TerrainSource for WorldTerrain {
         let sea = WATER_LEVEL as f64;
         let biome = self.biome_at(x, z);
         let base = map.height_at(x, z) as f64;
-        let river = if cell <= RIVER_DETAIL_CELL {
+        let near_water = {
+            let (u, v) = map.to_cell(x, z);
+            let max = (map.dim() - 1) as f64;
+            self.near_water[map.index(
+                u.round().clamp(0.0, max) as usize,
+                v.round().clamp(0.0, max) as usize,
+            )]
+        };
+        let river = if near_water && cell <= RIVER_DETAIL_CELL {
             let (mx, mz) = meander(seed, x, z);
             map.river_at(x + mx, z + mz)
         } else {
@@ -120,8 +154,10 @@ impl TerrainSource for WorldTerrain {
             detail += dunes(seed ^ 0xD05E, x, z, cell, base - sea);
         }
         // lake floors and shores stay as the map has them, or the detail would stripe the water's edge
-        if let Some(surface) = map.lake_at(x, z, f32::NEG_INFINITY) {
-            detail *= smoothstep(0.0, 6.0, base - surface as f64);
+        if near_water {
+            if let Some(surface) = map.lake_at(x, z, f32::NEG_INFINITY) {
+                detail *= smoothstep(0.0, 6.0, base - surface as f64);
+            }
         }
         // the channel of a river is smooth, banks and all
         if let Some(river) = river {
@@ -140,7 +176,10 @@ impl TerrainSource for WorldTerrain {
             river.filter(|r| r.distance < r.width / 2.0 && ground < r.surface as f64)
         {
             (river.surface, WaterKind::River)
-        } else if let Some(surface) = map.lake_at(x, z, ground as f32) {
+        } else if let Some(surface) = near_water
+            .then(|| map.lake_at(x, z, ground as f32))
+            .flatten()
+        {
             (surface, WaterKind::Lake)
         } else {
             (0.0, WaterKind::None)
