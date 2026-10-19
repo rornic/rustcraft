@@ -206,7 +206,6 @@ impl TerrainSource for WorldTerrain {
             seed,
             x,
             z,
-            cell,
             biome == self.mountain,
             base + detail,
             base - sea,

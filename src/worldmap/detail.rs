@@ -51,17 +51,18 @@ pub fn cliff_density(seed: u32, x: i64, y: i64, z: i64) -> f64 {
         + 0.35 * perlin3(seed ^ 0xC120, fx / 6.0, fy / 6.0, fz / 6.0)
 }
 
-// Mountain ground is stepped into terraces in patches: plateaus joined by near-vertical risers,
-// each step between these two heights, as the rock strata weather into big ledges and cliff faces.
+// Mountain ground is stepped into terraces in patches: plateaus joined by steep risers, each step
+// between these two heights, as the rock strata weather into big ledges and cliff faces. The
+// steps stack: they follow the height alone, so ground only ever climbs through them.
 const TERRACE_STEP: (f64, f64) = (55.0, 120.0);
-// The share of each step that is the riser, the rest being flat.
-const TERRACE_RISER: f64 = 0.3;
+// The share of each step that is the riser, the rest being flat, and how much of the ground's own
+// slope a terraced patch keeps between its ledges.
+const TERRACE_RISER: f64 = 0.45;
+const TERRACE_KEEPS: f64 = 0.2;
 // Patches of terraces are noise this many blocks across, with this much of the ground in them
-// (the noise is over `TERRACE_PATCH_START`), and the strata in each tilt by up to this many
-// blocks a block, which is what points the ledges different ways.
+// (the noise is over `TERRACE_PATCH_START`).
 const TERRACE_PATCH_WAVELENGTH: f64 = 2200.0;
 const TERRACE_PATCH_START: f64 = -0.05;
-const TERRACE_TILT: f64 = 0.45;
 
 /// How much of the way, 0..1, mountain ground at (`x`, `z`) is terraced, before its height.
 pub fn terrace_patch(seed: u32, x: f64, z: f64) -> f64 {
@@ -77,37 +78,31 @@ pub fn terrace_patch(seed: u32, x: f64, z: f64) -> f64 {
 }
 
 /// `height`, blocks above the sea `above_sea`, stepped into terraces on mountain ground where a
-/// patch of them is, more the higher it is, in cells `cell` blocks wide: wide cells see the
-/// ground without its steps, as the steps are finer than they are. The strata are tilted
-/// differently from patch to patch, so their ledges run every which way, not along the contours.
-pub fn terraced(
-    seed: u32,
-    x: f64,
-    z: f64,
-    cell: f64,
-    mountain: bool,
-    height: f64,
-    above_sea: f64,
-) -> f64 {
+/// patch of them is, more the higher it is. The same at every cell size.
+///
+/// Each patch's steps are a different size and sit at a different height, drifting slowly from
+/// place to place, so ledges don't line up from one patch to the next. The result is a function
+/// of height and these slow drifts only, so rising ground climbs through the steps in turn and
+/// never falls back between them.
+pub fn terraced(seed: u32, x: f64, z: f64, mountain: bool, height: f64, above_sea: f64) -> f64 {
     if !mountain {
         return height;
     }
-    let weight = terrace_patch(seed, x, z)
-        * smoothstep(40.0, 130.0, above_sea)
-        * (1.0 - smoothstep(2.0, 12.0, cell));
+    // the same at every cell size, so LOD levels beside each other differ only by what a slope
+    // changes between their sample points, which their skirts cover
+    let weight = terrace_patch(seed, x, z) * smoothstep(40.0, 130.0, above_sea);
     if weight <= 0.0 {
         return height;
     }
-    // each patch's step height and the lie of its strata wander from place to place
     let wander = 0.5 + 0.5 * perlin(seed ^ 0x7E22, x / 3100.0, z / 3100.0);
     let step = TERRACE_STEP.0 + (TERRACE_STEP.1 - TERRACE_STEP.0) * wander.clamp(0.0, 1.0);
-    let tilt_x = perlin(seed ^ 0x7E23, x / 2700.0, z / 2700.0) * TERRACE_TILT;
-    let tilt_z = perlin(seed ^ 0x7E24, x / 2700.0, z / 2700.0) * TERRACE_TILT;
-    let plane = height + tilt_x * x + tilt_z * z;
-    let t = plane / step;
+    // where in its step the sea level falls, which moves ledges up and down between patches
+    let phase = (0.5 + 0.5 * perlin(seed ^ 0x7E25, x / 2600.0, z / 2600.0)) * step;
+    let t = (height + phase) / step;
     let floor = t.floor();
-    let stepped =
-        (floor + smoothstep(1.0 - TERRACE_RISER, 1.0, t - floor)) * step - tilt_x * x - tilt_z * z;
+    let ledge = (floor + smoothstep(1.0 - TERRACE_RISER, 1.0, t - floor)) * step - phase;
+    // some of the ground's own rise is kept between the ledges, so they don't sit on dead flats
+    let stepped = ledge + (height - ledge) * TERRACE_KEEPS;
     height + (stepped - height) * weight
 }
 
@@ -235,34 +230,43 @@ mod tests {
     }
 
     #[test]
-    fn test_terraces_are_few_and_big_and_only_on_mountains() {
-        // a hillside climbing half a block a block, along a line through terraced and plain patches
-        let steepest_in = |mountain: bool, above_sea: f64, range: std::ops::Range<i64>| {
-            let h = |x: f64| {
-                terraced(
-                    1,
-                    x,
-                    0.0,
-                    1.0,
-                    mountain,
-                    448.0 + above_sea + x * 0.5,
-                    above_sea,
-                )
-            };
-            range
-                .map(|i| (h(i as f64 + 1.0) - h(i as f64)).abs())
-                .fold(0.0, f64::max)
+    fn test_terraces_stack_climbing_never_falling_back_between_ledges() {
+        // ground rising steadily half a block a block, along a line through terraced patches and not
+        let profile = |x: f64, y: f64, above: f64| {
+            (0..6000)
+                .map(|i| {
+                    let h = 448.0 + above + i as f64 * 0.5;
+                    terraced(1, x + i as f64 * 3.0, y, true, h, above + i as f64 * 0.5)
+                })
+                .collect::<Vec<f64>>()
         };
-        // somewhere along it steps turn the hillside into cliffs, and they are tall
-        assert!(
-            steepest_in(true, 200.0, 0..20_000) > 2.0,
-            "{}",
-            steepest_in(true, 200.0, 0..20_000)
-        );
-        // but not low mountain, nor ground that is not mountain
-        assert!(steepest_in(true, 20.0, 0..20_000) < 0.55);
-        assert!(steepest_in(false, 200.0, 0..20_000) < 0.55);
-        // patches: some of the ground is left as it was, and some is terraced
+        let mut terraced_somewhere = false;
+        for (x, y) in [
+            (0.0, 0.0),
+            (5000.0, -3000.0),
+            (-8000.0, 4000.0),
+            (2000.0, 9000.0),
+        ] {
+            let out = profile(x, y, 100.0);
+            // never down: going up the slope never takes the ground back down, bar the little a
+            // drifting patch edge gives, which is under a block over a metre
+            let worst_fall = out.windows(2).map(|w| w[0] - w[1]).fold(0.0, f64::max);
+            assert!(
+                worst_fall < 1.0,
+                "ground fell {worst_fall} on a rising slope at ({x}, {y})"
+            );
+            // and a terraced patch is steeper than the slope somewhere: that is its cliff
+            let steepest = out.windows(2).map(|w| w[1] - w[0]).fold(0.0, f64::max);
+            terraced_somewhere |= steepest > 2.0;
+        }
+        assert!(terraced_somewhere, "no terraces on any of the slopes");
+        // flat ground stays flat, and ground that is not mountain, or low, is left alone
+        assert_eq!(600.0, terraced(1, 9.0, 9.0, false, 600.0, 200.0));
+        assert_eq!(500.0, terraced(1, 9.0, 9.0, true, 500.0, 10.0));
+    }
+
+    #[test]
+    fn test_terraces_are_in_patches_with_ledges_at_different_heights() {
         let patched: Vec<bool> = (0..400)
             .map(|i| terrace_patch(1, i as f64 * 97.0, i as f64 * 41.0) > 0.5)
             .collect();
@@ -271,42 +275,26 @@ mod tests {
             (0.15..0.65).contains(&share),
             "{share} of the ground terraced"
         );
-        // and cells too wide for the steps see the ground without them
-        assert_eq!(540.0, terraced(1, 5.0, 5.0, 32.0, true, 540.0, 200.0));
-    }
-
-    #[test]
-    fn test_terraces_run_different_ways() {
-        // where a terraced patch is, the direction the ledges strike in (across which way the
-        // ground steps) differs from patch to patch: sample the step's tilt over a wide area
-        let tilts: Vec<(f64, f64)> = (0..60)
-            .map(|i| {
-                let (x, z) = (i as f64 * 1900.0, i as f64 * 1300.0);
-                (
-                    perlin(1 ^ 0x7E23, x / 2700.0, z / 2700.0),
-                    perlin(1 ^ 0x7E24, x / 2700.0, z / 2700.0),
-                )
-            })
+        // the height the first riser, where the ground is steeper than twice its slope, starts at
+        // differs from one terraced place to another
+        let first_ledge = |x: f64, z: f64| {
+            let at = |h: f64| terraced(1, x, z, true, 600.0 + h, 200.0 + h);
+            (0..30_000)
+                .map(|i| i as f64 * 0.1)
+                .find(|&h| at(h + 0.1) - at(h) > 0.2)
+        };
+        let places: Vec<(f64, f64)> = (0..400)
+            .map(|i| (i as f64 * 710.0, i as f64 * 330.0 - 40_000.0))
+            .filter(|&(x, z)| terrace_patch(1, x, z) > 0.95)
+            .take(8)
             .collect();
-        let (mut north, mut south, mut east, mut west) = (0, 0, 0, 0);
-        for (tx, tz) in tilts {
-            if tz > 0.1 {
-                north += 1;
-            }
-            if tz < -0.1 {
-                south += 1;
-            }
-            if tx > 0.1 {
-                east += 1;
-            }
-            if tx < -0.1 {
-                west += 1;
-            }
-        }
-        assert!(
-            north > 3 && south > 3 && east > 3 && west > 3,
-            "{north} {south} {east} {west}"
-        );
+        let ledges: Vec<f64> = places
+            .iter()
+            .filter_map(|&(x, z)| first_ledge(x, z))
+            .collect();
+        let spread = ledges.iter().cloned().fold(f64::MIN, f64::max)
+            - ledges.iter().cloned().fold(f64::MAX, f64::min);
+        assert!(ledges.len() >= 2 && spread > 8.0, "ledges {ledges:?}");
     }
 
     #[test]

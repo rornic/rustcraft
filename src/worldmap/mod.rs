@@ -23,7 +23,7 @@ pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 5;
+pub const GENERATOR_VERSION: u32 = 7;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -339,6 +339,7 @@ pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     // eroded ground, where the rivers really run
     hydrology::run(&mut map, false);
     erosion::run(&mut map);
+    terrain::raise_peaks(&mut map);
     // ranges get their passes before the rivers settle into the ground they leave
     gameplay::carve_passes(&mut map);
     hydrology::run(&mut map, true);

@@ -301,7 +301,8 @@ pub fn run(map: &mut WorldMap, carve: bool) {
                     // wide is cut at block scale, see `worldmap::source`, and digging all of its
                     // 32 m cell down to the bed would leave a dry crevice beside the water
                     let filled = (width[i] / map.config.map_cell as f32).min(1.0);
-                    map.height[i] = bed + depth * (1.0 - filled);
+                    // only ever cut: a bed held up by the water downstream must not raise the land
+                    map.height[i] = (bed + depth * (1.0 - filled)).min(map.height[i]);
                 }
             }
             _ => {}
@@ -340,6 +341,31 @@ mod tests {
             }
         }
         map
+    }
+
+    #[test]
+    fn test_rivers_are_cut_into_the_land_and_never_raise_it() {
+        let config = WorldConfig {
+            size: 32_768,
+            map_cell: 32,
+        };
+        let mut map = crate::worldmap::terrain::base_terrain(7, config);
+        run(&mut map, false);
+        let before = map.height.clone();
+        run(&mut map, true);
+        let mut rivers = 0;
+        for i in 0..map.height.len() {
+            if map.water_kind[i] == WaterCell::River as u8 {
+                rivers += 1;
+                assert!(
+                    map.height[i] <= before[i] + 1e-3,
+                    "river cell {i} raised from {} to {}",
+                    before[i],
+                    map.height[i]
+                );
+            }
+        }
+        assert!(rivers > 50);
     }
 
     #[test]

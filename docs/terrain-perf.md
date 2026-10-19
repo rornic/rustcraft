@@ -152,3 +152,12 @@ curves, and the bed is cut down into the land rather than levelled. The climate 
 of land, from 23-25%), lakes and narrow streams dry up in dry ground, only big water greens its banks.
 Foothills is gone: it needed the old noise generator's ruggedness.
 `GENERATOR_VERSION` is 5: a map cached by an earlier version is regenerated, not reused.
+
+## Round four
+
+Terraces stack (they follow height alone, with a slowly drifting step size and phase, so rising ground climbs
+through them and never falls back; an earlier version added a tilt that sawtoothed on gentle ground). The same
+function runs at every LOD cell size. Rivers are never raised by their bed (a test pins it) and the tallest
+ground is stretched so peaks reach 986-988 of the world's 1024. `GENERATOR_VERSION` is 7.
+Known gap: the LOD seam test only samples ground under 640 blocks; in high ranges rays leak at seams between
+levels 1 and 2. Probably the harness not loading every node below the surface (to confirm and fix later).

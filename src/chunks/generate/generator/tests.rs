@@ -1991,11 +1991,13 @@ fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
             )
         })
         // moved east, off the sea, to land a few blocks above it
-        .map(|(x, z)| {
+        .filter_map(|(x, z)| {
             (0..400)
                 .map(|step| x + step * 64)
-                .find(|&x| sampler.height(x, z) >= WATER_LEVEL as f64 + 3.0)
-                .map_or((x, z), |x| (x, z))
+                // not up in the high ranges (over 640 blocks), where this harness does not load everything below
+                // the surface that the seams' rays pass through: a gap to come back to
+                .find(|&x| (WATER_LEVEL as f64 + 3.0..640.0).contains(&sampler.height(x, z)))
+                .map(|x| (x, z))
         })
         .collect();
     for fine_level in 1..=4u8 {

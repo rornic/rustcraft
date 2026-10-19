@@ -37,6 +37,12 @@ const EDGE_FALLOFF: (f64, f64) = (0.66, 0.92);
 // How far, in blocks, the wander of the edge takes to change.
 const EDGE_WANDER: f64 = 4500.0;
 
+// Ground more than the first of these above the sea is stretched, by the full PEAK_STRETCH of
+// itself from the second up: 0.4 takes a peak 440 blocks over the sea to 610, which the easing
+// below brings to just under the top of the world.
+const PEAK_STRETCH_FROM: (f64, f64) = (180.0, 420.0);
+const PEAK_STRETCH: f64 = 0.4;
+
 const MAX_HEIGHT: f64 = WORLD_HEIGHT as f64 - 16.0;
 const PEAK_EASE_START: f64 = MAX_HEIGHT - 96.0;
 
@@ -157,6 +163,22 @@ pub(super) fn column(seed: u32, x: f64, z: f64, half: f64) -> (f64, f64) {
     (height, continentalness)
 }
 
+/// Stretches the tallest ground upward, so the highest peaks of a range stand close to the top
+/// of the world rather than where erosion leaves them. Ground under STRETCH_FROM above the sea is
+/// untouched, and the stretch grows smoothly, never reversing, so the lie of the land and where
+/// water runs stay as they were.
+pub(super) fn raise_peaks(map: &mut WorldMap) {
+    let sea = WATER_LEVEL as f64;
+    for h in map.height.iter_mut() {
+        let above = *h as f64 - sea;
+        if above > PEAK_STRETCH_FROM.0 {
+            let stretch =
+                1.0 + PEAK_STRETCH * smoothstep(PEAK_STRETCH_FROM.0, PEAK_STRETCH_FROM.1, above);
+            *h = ease_peaks(sea + above * stretch) as f32;
+        }
+    }
+}
+
 pub(super) fn base_terrain(seed: u32, config: WorldConfig) -> WorldMap {
     let dim = config.dim();
     let half = config.half_size() as f64;
@@ -186,6 +208,33 @@ mod tests {
         assert_eq!(300.0, ease_peaks(300.0));
         assert!(ease_peaks(450.0) > ease_peaks(420.0));
         assert!(ease_peaks(2000.0) < MAX_HEIGHT);
+    }
+
+    #[test]
+    fn test_peaks_are_stretched_towards_the_top_of_the_world_and_lowlands_are_left_alone() {
+        let config = WorldConfig {
+            size: 64 * 32,
+            map_cell: 32,
+        };
+        let mut map = WorldMap::empty(1, config);
+        let heights: Vec<f32> = (0..map.height.len())
+            .map(|i| WATER_LEVEL as f32 + (i % 64) as f32 * 7.0)
+            .collect();
+        map.height = heights.clone();
+        raise_peaks(&mut map);
+        for (before, after) in heights.iter().zip(&map.height) {
+            if *before - WATER_LEVEL as f32 <= PEAK_STRETCH_FROM.0 as f32 {
+                assert_eq!(before, after, "ground under the stretch moved");
+            }
+            assert!(*after < MAX_HEIGHT as f32 + 20.0 && *after >= *before - 1e-3);
+        }
+        // never reverses: higher ground stays higher
+        for row in map.height.windows(2).take(63) {
+            assert!(row[1] >= row[0] - 1e-3);
+        }
+        // and the tallest of them, 441 blocks over the sea, now stands near the top
+        let tallest = map.height[..64].iter().cloned().fold(0.0, f32::max);
+        assert!(tallest > 960.0, "{tallest}");
     }
 
     #[test]
