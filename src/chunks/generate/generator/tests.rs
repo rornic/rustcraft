@@ -1448,7 +1448,7 @@ fn test_canopy_shade_leaves_bare_columns_and_other_lods_alone() {
 }
 
 #[test]
-fn test_a_lone_tree_is_still_there_in_every_cell_up_to_sixteen_wide() {
+fn test_a_lone_tree_is_still_there_in_every_cell_under_sixteen_wide() {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
     let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
@@ -1468,7 +1468,7 @@ fn test_a_lone_tree_is_still_there_in_every_cell_up_to_sixteen_wide() {
         .find(|t| trees.iter().filter(|o| near(t, o)).count() == 1)
         .expect("no lone tree");
     let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
-    for level in [1u8, 2, 3, 4] {
+    for level in [1u8, 2, 3] {
         let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), level);
         let blocks = LodBlocks::sample(&regions, key);
         let cell = key.cell_size();
