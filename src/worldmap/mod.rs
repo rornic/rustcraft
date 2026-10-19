@@ -4,6 +4,7 @@
 //! A `WorldMap` is a plain value that saves to disk and loads back, so one machine can make it
 //! and share it with the rest: nothing downstream depends on the float maths that made it.
 
+pub mod climate;
 pub mod erosion;
 pub mod hydrology;
 pub mod io;
@@ -103,6 +104,14 @@ pub struct WorldMap {
     pub water_surface: Vec<f32>,
     /// Blocks across the river through each cell, 0 where there is none.
     pub river_width: Vec<f32>,
+    /// How warm each cell is at sea level, 0..1.
+    pub temperature: Vec<f32>,
+    /// How wet each cell is, 0..1.
+    pub moisture: Vec<f32>,
+    /// A `climate::BiomeKind` per cell.
+    pub biome: Vec<u8>,
+    /// How thickly trees grow at each cell, 0..1 as 0..=255.
+    pub trees: Vec<u8>,
 }
 
 /// The eight cells around one, as (dx, dz), in the order `WorldMap::down` indexes them.
@@ -135,6 +144,10 @@ impl WorldMap {
             water_kind: vec![0; cells],
             water_surface: vec![0.0; cells],
             river_width: vec![0.0; cells],
+            temperature: vec![0.0; cells],
+            moisture: vec![0.0; cells],
+            biome: vec![0; cells],
+            trees: vec![0; cells],
         }
     }
 
@@ -175,6 +188,21 @@ impl WorldMap {
         let (tx, tz) = ((u - fu) as f32, (v - fv) as f32);
         let top = self.at(layer, cx, cz) * (1.0 - tx) + self.at(layer, cx + 1, cz) * tx;
         let bottom = self.at(layer, cx, cz + 1) * (1.0 - tx) + self.at(layer, cx + 1, cz + 1) * tx;
+        top * (1.0 - tz) + bottom * tz
+    }
+
+    /// `bilinear` of a layer of bytes, as a number in the byte's range.
+    pub fn bilinear_bytes(&self, layer: &[u8], x: f64, z: f64) -> f32 {
+        let (u, v) = self.to_cell(x, z);
+        let (fu, fv) = (u.floor(), v.floor());
+        let (cx, cz) = (fu as i64, fv as i64);
+        let (tx, tz) = ((u - fu) as f32, (v - fv) as f32);
+        let max = self.dim() as i64 - 1;
+        let at = |x: i64, z: i64| {
+            layer[self.index(x.clamp(0, max) as usize, z.clamp(0, max) as usize)] as f32
+        };
+        let top = at(cx, cz) * (1.0 - tx) + at(cx + 1, cz) * tx;
+        let bottom = at(cx, cz + 1) * (1.0 - tx) + at(cx + 1, cz + 1) * tx;
         top * (1.0 - tz) + bottom * tz
     }
 
@@ -242,6 +270,7 @@ pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     hydrology::run(&mut map, false);
     erosion::run(&mut map);
     hydrology::run(&mut map, true);
+    climate::run(&mut map);
     map
 }
 

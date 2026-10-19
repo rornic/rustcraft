@@ -390,6 +390,10 @@ impl TerrainSource for NoiseGenerator {
     fn find_spawn(&self) -> (i64, i64, f64) {
         NoiseGenerator::find_spawn(self)
     }
+
+    fn tree_bound(&self, x: f64, z: f64) -> f64 {
+        self.biomes.tree_bound(self.climate(x, z))
+    }
 }
 
 #[cfg(test)]

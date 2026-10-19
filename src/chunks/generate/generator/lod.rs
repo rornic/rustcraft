@@ -106,8 +106,7 @@ impl TreeGround for GridGround<'_> {
     // From the climate alone, far cheaper than the whole terrain `trees` takes. The density is
     // stored as a byte, which can round it up by half a step.
     fn rules_out(&mut self, x: i64, z: i64, chance: f64) -> bool {
-        let climate = self.noise.climate(x as f64, z as f64);
-        chance >= self.noise.biomes().tree_bound(climate) + 1.0 / 255.0
+        chance >= self.noise.tree_bound(x as f64, z as f64) + 1.0 / 255.0
     }
 
     fn base_height(&mut self, x: i64, z: i64) -> i64 {

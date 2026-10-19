@@ -60,3 +60,12 @@ land), which took hydrology from 2.3 s to under 1 s. Droplets run in 128-cell ti
 so tiles run in parallel and a seed still gives the same map (tested).
 Plain droplets alone left cell-sized speckle on slopes and no valleys at range scale, hence the
 stream-power pass for valleys and fewer, longer, higher-inertia droplets for flank gullies.
+
+## Phase 4: climate and biomes (not yet used by the game)
+
+Warmth from latitude, lapse rate of 1/800 per block (the rate `snow_line` already uses), moisture from a
+westerly sweep over each row (sea evaporates, rising ground rains out, 60% of rain is recycled inland),
+blended with its rank among the land so every seed has dry and wet ground. A Whittaker table picks one
+of ten biomes per cell. The default world takes 3.5 s. Seed 1 comes out at 18% desert, 14% steppe, 21%
+savanna, 16% jungle, 15% forest, 7% tundra/taiga/glacier, with jungle on windward coasts and desert in
+the lee of ranges.

@@ -2,6 +2,7 @@ mod desert;
 mod foothills;
 mod forest;
 mod glacier;
+mod plain;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::Vec3;
@@ -11,6 +12,7 @@ pub use desert::Desert;
 pub use foothills::Foothills;
 pub use forest::Forest;
 pub use glacier::Glacier;
+pub use plain::Plain;
 
 // How hot and how wet a column is, each 0..1. See `NoiseGenerator::climate`.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -102,6 +104,13 @@ impl Biomes {
             Box::new(Desert::new(seed)),
             Box::new(Forest),
             Box::new(Foothills::new(seed)),
+            // the biomes a world map names, which never take a column from the base terrain by
+            // strength: see `worldmap::climate`
+            Box::new(Plain::new("tundra", 0.01)),
+            Box::new(Plain::new("taiga", 0.45)),
+            Box::new(Plain::new("steppe", 0.004)),
+            Box::new(Plain::new("savanna", 0.03)),
+            Box::new(Plain::new("jungle", 0.8)),
         ])
     }
 
@@ -135,6 +144,24 @@ impl Biomes {
     pub fn tree_bound(&self, climate: Climate) -> f64 {
         let gain: f64 = self.biomes.iter().map(|b| b.tree_gain(climate)).sum();
         (BASE_TREE_DENSITY + gain).min(1.0)
+    }
+
+    /// The biome called `name`.
+    pub fn id(&self, name: &str) -> Option<BiomeId> {
+        self.biomes
+            .iter()
+            .position(|b| b.name() == name)
+            .map(|i| BiomeId(i as u8 + 1))
+    }
+
+    /// How thickly trees grow in `biome`, 0..1.
+    pub fn tree_density(&self, biome: BiomeId) -> f64 {
+        match biome.0.checked_sub(1) {
+            None => BASE_TREE_DENSITY,
+            Some(i) => self.biomes[i as usize]
+                .tree_density()
+                .unwrap_or(BASE_TREE_DENSITY),
+        }
     }
 
     // The biome's name, or None for the base terrain.

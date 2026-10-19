@@ -246,15 +246,18 @@ fn layers(terrain: &dyn TerrainSource, args: &Args) -> [(&'static str, image::Rg
                 WaterKind::River => [120, 230, 255],
             };
             water.put_pixel(x, z, image::Rgb(colour));
-            // a stable colour per biome id
-            let id = format!("{:?}", sample.biome)
-                .bytes()
-                .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
-            let rgb = [
-                (id >> 3) as u8 | 64,
-                (id >> 11) as u8 | 64,
-                (id >> 19) as u8 | 64,
-            ];
+            let rgb = match terrain.biomes().name(sample.biome) {
+                None => [140, 190, 90],
+                Some("glacier") => [235, 242, 250],
+                Some("desert") => [232, 200, 130],
+                Some("forest") => [40, 110, 50],
+                Some("tundra") => [150, 160, 135],
+                Some("taiga") => [50, 100, 80],
+                Some("steppe") => [190, 180, 100],
+                Some("savanna") => [205, 165, 65],
+                Some("jungle") => [10, 85, 30],
+                Some(_) => [255, 0, 255],
+            };
             biome.put_pixel(
                 x,
                 z,
@@ -280,7 +283,17 @@ fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
         .filter(|s| s.height >= WATER_LEVEL as f64)
         .count();
     println!("land: {:.1}%", 100.0 * land as f64 / samples.len() as f64);
-    for name in ["desert", "forest", "foothills", "glacier"] {
+    for name in [
+        "desert",
+        "forest",
+        "foothills",
+        "glacier",
+        "tundra",
+        "taiga",
+        "steppe",
+        "savanna",
+        "jungle",
+    ] {
         let count = samples
             .iter()
             .filter(|s| s.height >= WATER_LEVEL as f64 && biomes.name(s.biome) == Some(name))

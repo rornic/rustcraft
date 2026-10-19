@@ -86,6 +86,10 @@ impl WorldMap {
         put_bytes(&mut out, &self.water_kind);
         put_layer(&mut out, &self.water_surface);
         put_layer(&mut out, &self.river_width);
+        put_layer(&mut out, &self.temperature);
+        put_layer(&mut out, &self.moisture);
+        put_bytes(&mut out, &self.biome);
+        put_bytes(&mut out, &self.trees);
         let sum = checksum(&out);
         out.extend(sum.to_le_bytes());
         out
@@ -129,6 +133,10 @@ impl WorldMap {
             water_kind: r.bytes(cells)?,
             water_surface: r.layer(cells)?,
             river_width: r.layer(cells)?,
+            temperature: r.layer(cells)?,
+            moisture: r.layer(cells)?,
+            biome: r.bytes(cells)?,
+            trees: r.bytes(cells)?,
         })
     }
 

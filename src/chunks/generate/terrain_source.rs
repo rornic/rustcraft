@@ -49,6 +49,12 @@ pub trait TerrainSource: Send + Sync {
     /// The nearest lowland column to the world centre.
     fn find_spawn(&self) -> (i64, i64, f64);
 
+    /// The most tree density the column at (x, z) can have, without sampling its terrain, so
+    /// callers can rule out trees cheaply. 1 if it can't say.
+    fn tree_bound(&self, _x: f64, _z: f64) -> f64 {
+        1.0
+    }
+
     fn sample(&self, x: f64, z: f64) -> TerrainSample {
         self.sample_for_cell(x, z, 1.0)
     }
