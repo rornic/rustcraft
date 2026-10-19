@@ -179,33 +179,40 @@ fn start_time() -> f32 {
 }
 
 fn main() {
-    App::new()
-        .add_plugins((
-            DefaultPlugins
-                .set(ImagePlugin::default_nearest())
-                .set(task_pool_plugin())
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        present_mode: bevy::window::PresentMode::AutoNoVsync,
-                        ..default()
-                    }),
+    let renderer = Settings::read("assets/settings.toml")
+        .expect("Failed to read settings.toml")
+        .renderer;
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins
+            .set(ImagePlugin::default_nearest())
+            .set(task_pool_plugin())
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    present_mode: bevy::window::PresentMode::AutoNoVsync,
                     ..default()
                 }),
-            MaterialPlugin::<ChunkMaterial>::default(),
-            MaterialPlugin::<WaterMaterial>::default(),
-            MaterialPlugin::<MurkMaterial>::default(),
-            TerrainPlugin,
-            CloudPlugin,
-            CurvaturePlugin,
-            SunGlarePlugin,
-            NightSkyPlugin,
-            DebugOverlayPlugin,
-            AmbiencePlugin,
-            CritterPlugin,
-            WeatherPlugin,
-            BirdPlugin,
-        ))
-        .insert_resource(winit_settings())
+                ..default()
+            }),
+        MaterialPlugin::<ChunkMaterial>::default(),
+        MaterialPlugin::<WaterMaterial>::default(),
+        MaterialPlugin::<MurkMaterial>::default(),
+        TerrainPlugin,
+        CloudPlugin,
+        CurvaturePlugin,
+        SunGlarePlugin,
+        NightSkyPlugin,
+        DebugOverlayPlugin,
+        AmbiencePlugin,
+        CritterPlugin,
+        WeatherPlugin,
+        BirdPlugin,
+    ));
+    // the terrain's meshes share a few big buffers, see `RendererSettings::mesh_slab_mb`
+    if let Some(render) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        render.insert_resource(renderer.mesh_allocator());
+    }
+    app.insert_resource(winit_settings())
         .insert_resource(ClearColor(Color::BLACK))
         .add_systems(Startup, (spawn_atmosphere, setup_scene.after(spawn_clouds)))
         // once the camera's moved, see `TransformSystems::Propagate`
