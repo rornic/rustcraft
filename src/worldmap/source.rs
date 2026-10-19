@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::climate::{BiomeKind, LAPSE_PER_BLOCK};
-use super::detail::{detail, dunes, terraced};
+use super::detail::{detail, dunes, foothill_weight, gully_relief, scarps, terraced};
 use super::noise::perlin;
 use super::terrain::smoothstep;
 use super::water::RiverHit;
@@ -183,6 +183,24 @@ impl TerrainSource for WorldTerrain {
         if biome == self.desert {
             detail += dunes(seed ^ 0xD05E, x, z, cell, base - sea);
         }
+        // the ground round a range is weathered: small scarps stepping up it and gullies and sharp
+        // ridges cut into it, as the range's own faces are
+        let mountain = biome == self.mountain;
+        let near_range = map.bilinear_bytes(&map.range, x, z) as f64 / 255.0;
+        let foothills = if mountain {
+            0.0
+        } else {
+            foothill_weight(near_range, base - sea)
+        };
+        let rough = if mountain { 1.0 } else { foothills };
+        detail += scarps(seed, x, z, foothills, base + detail) - (base + detail);
+        detail += gully_relief(
+            seed,
+            x,
+            z,
+            rough * smoothstep(40.0, 110.0, base - sea),
+            cell,
+        );
         // lake floors and shores stay as the map has them, or the detail would stripe the water's edge
         if near_water {
             if let Some(surface) = map.lake_at(x, z, f32::NEG_INFINITY) {
@@ -202,14 +220,7 @@ impl TerrainSource for WorldTerrain {
         // from there, so a river is carved into the terrain, and never stands above or beside
         // ground lower than itself
         let rivers = rivers.map(|r| r.map(|r| sunk_into(r, base)));
-        let mut ground = terraced(
-            seed,
-            x,
-            z,
-            biome == self.mountain,
-            base + detail,
-            base - sea,
-        );
+        let mut ground = terraced(seed, x, z, mountain, base + detail, base - sea);
         if let Some(river) = rivers[0] {
             ground = channel(ground as f32, river) as f64;
         }

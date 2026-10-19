@@ -105,6 +105,7 @@ impl WorldMap {
         put_bytes(&mut out, &self.biome);
         put_bytes(&mut out, &self.trees);
         put_bytes(&mut out, &self.roughness);
+        put_bytes(&mut out, &self.range);
         put_bytes(&mut out, &self.ford);
         out.extend((self.features.len() as u64).to_le_bytes());
         for f in &self.features {
@@ -161,6 +162,7 @@ impl WorldMap {
             biome: r.bytes(cells)?,
             trees: r.bytes(cells)?,
             roughness: r.bytes(cells)?,
+            range: r.bytes(cells)?,
             ford: r.bytes(cells)?,
             features: r.features()?,
         })

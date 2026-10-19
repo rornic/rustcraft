@@ -2201,6 +2201,11 @@ fn test_compacted_stone_follows_the_local_surface_not_a_fixed_height() {
         .collect();
     let mut seen = 0;
     for (x, z) in columns {
+        // cliffs are cut into steep ground, which moves its surface from the height
+        let (gx, gz) = regions.sampler().gradient(x, z);
+        if crate::worldmap::detail::cliff_reach(gx.abs() + gz.abs()) > 0.0 {
+            continue;
+        }
         seen += 1;
         let ground = regions.get_height(x, z).round() as i64;
         let below = |depth: i64| block_at(&regions, x, ground - 1 - depth, z);
@@ -2580,5 +2585,54 @@ fn test_no_pines_stand_in_savanna_jungle_or_desert() {
     assert!(
         places >= 6 && hot_trees > 50 && high_hot_trees > 10,
         "{places} places, {hot_trees} hot trees, {high_hot_trees} high"
+    );
+}
+
+#[test]
+fn test_the_foothills_round_a_range_are_much_rougher_than_the_lowland_far_from_one() {
+    use crate::worldmap::climate::BiomeKind;
+    let terrain = crate::worldmap::WorldTerrain::new(std::sync::Arc::new(
+        crate::worldmap::generate(1, crate::worldmap::WorldConfig::default()),
+    ));
+    let map = terrain.map().clone();
+    let regions = RegionStore::new(std::sync::Arc::new(terrain));
+    let mut heights = regions.sampler();
+    let dim = map.dim();
+    let (mut near, mut far) = (Vec::new(), Vec::new());
+    for cz in (0..dim).step_by(11) {
+        for cx in (0..dim).step_by(11) {
+            let i = map.index(cx, cz);
+            let above = map.height[i] - WATER_LEVEL as f32;
+            if !(40.0..200.0).contains(&above)
+                || map.water_kind[i] != 0
+                || BiomeKind::from_u8(map.biome[i]) == BiomeKind::Mountain
+            {
+                continue;
+            }
+            let range = map.range[i] as f32 / 255.0;
+            let (x, z) = map.cell_centre(cx, cz);
+            let (gx, gz) = heights.gradient(x as i64, z as i64);
+            let gradient = gx.abs() + gz.abs();
+            if range > 0.5 {
+                near.push(gradient);
+            } else if range < 0.05 {
+                far.push(gradient);
+            }
+        }
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    };
+    assert!(
+        near.len() > 200 && far.len() > 200,
+        "{} foothill and {} lowland columns",
+        near.len(),
+        far.len()
+    );
+    let (near, far) = (median(&mut near), median(&mut far));
+    assert!(
+        near > far * 3.0 && near > 0.9,
+        "foothills {near} against lowland {far}"
     );
 }

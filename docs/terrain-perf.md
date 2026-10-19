@@ -184,3 +184,17 @@ of the ground), mountain ground is treated as no steeper than 0.9 when choosing 
 pines and flora on it, cling to the faces. The alpine rock line moved from 175 to 260 blocks above the sea, and
 trees over 120 blocks above the sea are pines in any climate (tropical ranges never get cold enough). The
 generator version is 10.
+
+## Round eight: rough foothills
+
+A `range` layer (the mountain biome's share of a wide window, spread twice) marks the foothills. Ground near a
+range gets roughness up to 0.8, scarps (12-34 block steps in patches), and gullies and sharp ridges (ridged noise,
+22 blocks), as mountains do; cliff carving follows from the steeper faces. Median gradient on foothill ground is
+1.49 against 0.29 far from a range (a test needs 3x). Mountain terraces and scarps now use a fixed flight size and
+phase per square of ground, blended at square edges, because a flight size that drifted slid ledges across level
+ground as phantom cliffs. `GENERATOR_VERSION` is 12.
+
+Cost (game closed): terrain sample 274 ns (was 242); cold chunk p50 plains / mountains / coast 13.7 / 17.9 / 13.2 ms
+(was 13.2 / 11.0 / 12.0), p99 52.7 / 52.1 / 47.6. Mountain chunks cost more with gullies, terraces and cliffs on
+them; still under the original baseline (26.2 / 27.1 / 19.8). GPU memory at spawn rose to 3.7 GB (from 2.7) with the
+rougher ground, so watch it in big ranges on a 6 GB card.

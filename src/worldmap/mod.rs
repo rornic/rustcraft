@@ -23,7 +23,7 @@ pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 11;
+pub const GENERATOR_VERSION: u32 = 12;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -118,6 +118,9 @@ pub struct WorldMap {
     pub trees: Vec<u8>,
     /// How rough the ground is, 0..1 as 0..=255: the amplitude of the detail laid over it.
     pub roughness: Vec<u8>,
+    /// How near each cell is to a mountain range, 0..1 as 0..=255, reaching a few kilometres out
+    /// into the land round it: where the foothills are.
+    pub range: Vec<u8>,
     /// 1 on the river cells that are fords, shallow however wide the river is there.
     pub ford: Vec<u8>,
     /// What the gameplay pass found: passes, crossings, spawn regions, resources and encounters.
@@ -159,6 +162,7 @@ impl WorldMap {
             biome: vec![0; cells],
             trees: vec![0; cells],
             roughness: vec![0; cells],
+            range: vec![0; cells],
             ford: vec![0; cells],
             features: Vec::new(),
         }

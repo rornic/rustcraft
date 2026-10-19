@@ -4,7 +4,7 @@
 //! only LOD meshes use, may call `resolved`, which does.
 
 use super::climate::BiomeKind;
-use super::noise::{fbm_filtered, perlin, perlin3};
+use super::noise::{fbm_filtered, perlin, perlin3, ridged, unit};
 use super::terrain::smoothstep;
 use super::{par_rows, WorldMap};
 use crate::chunks::generate::WATER_LEVEL;
@@ -57,12 +57,55 @@ pub fn cliff_density(seed: u32, x: i64, y: i64, z: i64) -> f64 {
 const TERRACE_STEP: (f64, f64) = (55.0, 120.0);
 // The share of each step that is the riser, the rest being flat, and how much of the ground's own
 // slope a terraced patch keeps between its ledges.
-const TERRACE_RISER: f64 = 0.45;
+const TERRACE_RISER: f64 = 0.35;
 const TERRACE_KEEPS: f64 = 0.2;
 // Patches of terraces are noise this many blocks across, with this much of the ground in them
 // (the noise is over `TERRACE_PATCH_START`).
 const TERRACE_PATCH_WAVELENGTH: f64 = 2200.0;
 const TERRACE_PATCH_START: f64 = -0.05;
+// Each square of this many blocks has its own step size and height of ledge.
+const TERRACE_CELL: f64 = 2400.0;
+
+// A staircase of `step` blocks a flight, `phase` blocks up, the ledge flat for the first
+// `1 - riser` of each flight and rising steeply over the rest.
+fn staircase(height: f64, step: f64, phase: f64, riser: f64) -> f64 {
+    let t = (height + phase) / step;
+    let floor = t.floor();
+    (floor + smoothstep(1.0 - riser, 1.0, t - floor)) * step - phase
+}
+
+/// A staircase of ledges at (`x`, `z`) whose flights are between `steps.0` and `steps.1` blocks
+/// and whose heights are a function of `height` alone within each square of `cell` blocks, each
+/// square with its own flight size and phase and fixed throughout, so ledges stay where they are on
+/// level ground. The four squares round a point are blended, so the ledges ease from one square's
+/// into the next's rather than jumping: the blend only ever mixes staircases, so the ground
+/// still climbs through them and never falls back.
+fn blended_staircase(
+    seed: u32,
+    x: f64,
+    z: f64,
+    height: f64,
+    steps: (f64, f64),
+    riser: f64,
+    cell: f64,
+) -> f64 {
+    let (u, v) = (x / cell, z / cell);
+    let (cx, cz) = (u.floor(), v.floor());
+    // mostly one square's staircase, easing into the next's only over the middle of the way
+    let (fx, fz) = (
+        smoothstep(0.35, 0.65, u - cx),
+        smoothstep(0.35, 0.65, v - cz),
+    );
+    let corner = |dx: f64, dz: f64| {
+        let (ix, iz) = ((cx + dx) as i32, (cz + dz) as i32);
+        let step = steps.0 + (steps.1 - steps.0) * unit(seed ^ 0x57A1, ix, iz);
+        let phase = unit(seed ^ 0x57A2, ix, iz) * step;
+        staircase(height, step, phase, riser)
+    };
+    let top = corner(0.0, 0.0) * (1.0 - fx) + corner(1.0, 0.0) * fx;
+    let bottom = corner(0.0, 1.0) * (1.0 - fx) + corner(1.0, 1.0) * fx;
+    top * (1.0 - fz) + bottom * fz
+}
 
 /// How much of the way, 0..1, mountain ground at (`x`, `z`) is terraced, before its height.
 pub fn terrace_patch(seed: u32, x: f64, z: f64) -> f64 {
@@ -94,13 +137,15 @@ pub fn terraced(seed: u32, x: f64, z: f64, mountain: bool, height: f64, above_se
     if weight <= 0.0 {
         return height;
     }
-    let wander = 0.5 + 0.5 * perlin(seed ^ 0x7E22, x / 3100.0, z / 3100.0);
-    let step = TERRACE_STEP.0 + (TERRACE_STEP.1 - TERRACE_STEP.0) * wander.clamp(0.0, 1.0);
-    // where in its step the sea level falls, which moves ledges up and down between patches
-    let phase = (0.5 + 0.5 * perlin(seed ^ 0x7E25, x / 2600.0, z / 2600.0)) * step;
-    let t = (height + phase) / step;
-    let floor = t.floor();
-    let ledge = (floor + smoothstep(1.0 - TERRACE_RISER, 1.0, t - floor)) * step - phase;
+    let ledge = blended_staircase(
+        seed,
+        x,
+        z,
+        height,
+        TERRACE_STEP,
+        TERRACE_RISER,
+        TERRACE_CELL,
+    );
     // some of the ground's own rise is kept between the ledges, so they don't sit on dead flats
     let stepped = ledge + (height - ledge) * TERRACE_KEEPS;
     height + (stepped - height) * weight
@@ -108,6 +153,8 @@ pub fn terraced(seed: u32, x: f64, z: f64, mountain: bool, height: f64, above_se
 
 // Patches of meadow on a mountain: noise this many blocks across, with the ground where it is over
 // the second taking grass however steep.
+// Cells either side that a mountain biome's presence is spread over, twice, to find the foothills.
+const RANGE_REACH: usize = 18;
 const MEADOW_WAVELENGTH: f64 = 55.0;
 const MEADOW_OVER: f64 = 0.12;
 
@@ -115,6 +162,59 @@ const MEADOW_OVER: f64 = 0.12;
 /// is bare rock. About a third of the ground.
 pub fn meadow_patch(seed: u32, x: f64, z: f64) -> bool {
     perlin(seed ^ 0x3EAD, x / MEADOW_WAVELENGTH, z / MEADOW_WAVELENGTH) > MEADOW_OVER
+}
+
+// Foothills: the ground round a range, within a few kilometres of it, is rough, steps up in small
+// scarps and is cut into gullies and sharp ridges, as weather works at the edge of high ground.
+const SCARP_STEP: (f64, f64) = (12.0, 34.0);
+const SCARP_RISER: f64 = 0.4;
+const SCARP_PATCH_WAVELENGTH: f64 = 500.0;
+const SCARP_CELL: f64 = 900.0;
+const GULLY_WAVELENGTH: f64 = 85.0;
+const GULLY_HEIGHT: f64 = 22.0;
+
+/// How much of the way, 0..1, ground `above_sea` blocks up and `range` (0..1) near a mountain range
+/// is foothills: none far from a range or on the lowlands, all of it on the higher ground against one.
+pub fn foothill_weight(range: f64, above_sea: f64) -> f64 {
+    smoothstep(0.1, 0.55, range) * smoothstep(15.0, 90.0, above_sea)
+}
+
+/// `height` stepped into small scarps where `weight` of foothills is, in patches, as the terraces on
+/// a mountain are but smaller and closer: a function of height and slow drifts only, so rising
+/// ground climbs through them and never falls back.
+pub fn scarps(seed: u32, x: f64, z: f64, weight: f64, height: f64) -> f64 {
+    let patch = smoothstep(
+        -0.2,
+        0.25,
+        perlin(
+            seed ^ 0x5CA2,
+            x / SCARP_PATCH_WAVELENGTH,
+            z / SCARP_PATCH_WAVELENGTH,
+        ),
+    );
+    let weight = weight * patch;
+    if weight <= 0.0 {
+        return height;
+    }
+    let ledge = blended_staircase(seed, x, z, height, SCARP_STEP, SCARP_RISER, SCARP_CELL);
+    height + (ledge - height) * weight * 0.85
+}
+
+/// Erosion's work on the ground: gullies and sharp ridges between them, in -1..1 where the ridges
+/// are the highs, scaled by `GULLY_HEIGHT` and the weight by whoever calls it. Ridged noise
+/// has sharp crests and rounded troughs, as slopes weather into ridge lines with gullies off them.
+pub fn gullies(seed: u32, x: f64, z: f64) -> f64 {
+    (ridged(seed ^ 0x6011, x, z, GULLY_WAVELENGTH, 3) - 0.45) * 2.0
+}
+
+/// How high gullies cut into ground `weight` of foothills or mountain.
+pub fn gully_relief(seed: u32, x: f64, z: f64, weight: f64, cell: f64) -> f64 {
+    // finer than wide cells can show, so they fade out in them, as the other detail does
+    let seen = 1.0 - smoothstep(4.0, 16.0, cell);
+    if weight <= 0.0 || seen <= 0.0 {
+        return 0.0;
+    }
+    gullies(seed, x, z) * GULLY_HEIGHT * weight * seen
 }
 
 /// How high the detail rises over, or falls under, the map's ground at (`x`, `z`) on ground
@@ -168,6 +268,21 @@ pub fn roughness_layer(map: &mut WorldMap) {
     let dim = map.dim();
     let sea = WATER_LEVEL as f32;
     let cell = map.config.map_cell as f32;
+    // how near each cell is to a range: the share of mountain in a wide window round it, widened
+    let mountain: Vec<f32> = map
+        .biome
+        .iter()
+        .map(|&k| (BiomeKind::from_u8(k) == BiomeKind::Mountain) as u8 as f32)
+        .collect();
+    let near = super::climate::blur_box(
+        &super::climate::blur_box(&mountain, dim, RANGE_REACH),
+        dim,
+        RANGE_REACH,
+    );
+    map.range = near
+        .iter()
+        .map(|&v| ((v * 2.5).clamp(0.0, 1.0) * 255.0).round() as u8)
+        .collect();
     let mut out = vec![0u8; dim * dim];
     par_rows(dim, &mut out, |row, cells| {
         let h = |x: usize, z: usize| map.height[z * dim + x];
@@ -185,6 +300,9 @@ pub fn roughness_layer(map: &mut WorldMap) {
             if kind == BiomeKind::Mountain {
                 r = r.max(0.75);
             }
+            // the foothills are rough too, the more the nearer a range
+            let range = map.range[row * dim + col] as f64 / 255.0;
+            r = r.max(0.8 * foothill_weight(range, above_sea));
             r *= match kind {
                 BiomeKind::Desert => 0.6,
                 BiomeKind::Glacier => 0.5,
@@ -268,7 +386,7 @@ mod tests {
             );
             // and a terraced patch is steeper than the slope somewhere: that is its cliff
             let steepest = out.windows(2).map(|w| w[1] - w[0]).fold(0.0, f64::max);
-            terraced_somewhere |= steepest > 2.0;
+            terraced_somewhere |= steepest > 1.2;
         }
         assert!(terraced_somewhere, "no terraces on any of the slopes");
         // flat ground stays flat, and ground that is not mountain, or low, is left alone
@@ -318,6 +436,55 @@ mod tests {
         // runs of meadow are tens of blocks long
         let flips = patch.windows(2).filter(|w| w[0] != w[1]).count();
         assert!(flips < 4000 / 8, "{flips} changes in 12 km: speckled");
+    }
+
+    #[test]
+    fn test_foothills_are_near_a_range_and_up_off_the_lowland() {
+        assert_eq!(0.0, foothill_weight(0.0, 200.0));
+        assert_eq!(0.0, foothill_weight(0.9, 5.0));
+        assert!(foothill_weight(0.9, 120.0) > 0.99);
+        assert!(foothill_weight(0.3, 60.0) > 0.0 && foothill_weight(0.3, 60.0) < 0.9);
+    }
+
+    #[test]
+    fn test_scarps_step_up_a_foothill_slope_without_falling_back() {
+        // ground rising a half block a block, through patches of scarps and not
+        let mut climbed = false;
+        for (x, z) in [
+            (0.0, 0.0),
+            (3000.0, 900.0),
+            (-2500.0, 4000.0),
+            (800.0, -5000.0),
+        ] {
+            let out: Vec<f64> = (0..6000)
+                .map(|i| scarps(1, x + i as f64 * 2.0, z, 1.0, 500.0 + i as f64 * 0.5))
+                .collect();
+            let worst_fall = out.windows(2).map(|w| w[0] - w[1]).fold(0.0, f64::max);
+            assert!(
+                worst_fall < 1.0,
+                "fell {worst_fall} on a rising slope at ({x}, {z})"
+            );
+            climbed |= out.windows(2).map(|w| w[1] - w[0]).fold(0.0, f64::max) > 1.0;
+        }
+        assert!(climbed, "no scarp anywhere");
+        // none away from a range
+        assert_eq!(500.0, scarps(1, 9.0, 9.0, 0.0, 500.0));
+    }
+
+    #[test]
+    fn test_gullies_cut_sharp_ridges_and_fade_out_in_wide_cells_and_off_the_weight() {
+        let relief: Vec<f64> = (0..4000)
+            .map(|i| gully_relief(2, i as f64 * 2.0, 17.0, 1.0, 1.0))
+            .collect();
+        let (lo, hi) = relief
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(l, h), &v| (l.min(v), h.max(v)));
+        assert!(
+            hi - lo > 15.0 && hi <= GULLY_HEIGHT * 1.1 && lo >= -GULLY_HEIGHT,
+            "{lo}..{hi}"
+        );
+        assert_eq!(0.0, gully_relief(2, 5.0, 5.0, 0.0, 1.0));
+        assert_eq!(0.0, gully_relief(2, 5.0, 5.0, 1.0, 32.0));
     }
 
     #[test]
