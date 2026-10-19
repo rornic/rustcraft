@@ -4,6 +4,7 @@
 //! A `WorldMap` is a plain value that saves to disk and loads back, so one machine can make it
 //! and share it with the rest: nothing downstream depends on the float maths that made it.
 
+pub mod erosion;
 pub mod hydrology;
 pub mod io;
 pub mod noise;
@@ -236,7 +237,11 @@ pub(crate) fn par_rows<T: Send>(dim: usize, layer: &mut [T], f: impl Fn(usize, &
 pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     config.validate().expect("invalid world config");
     let mut map = terrain::base_terrain(seed, config);
-    hydrology::run(&mut map);
+    // water first, so basins are cut open before the rain wears the ground, then again over the
+    // eroded ground, where the rivers really run
+    hydrology::run(&mut map, false);
+    erosion::run(&mut map);
+    hydrology::run(&mut map, true);
     map
 }
 

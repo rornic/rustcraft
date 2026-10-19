@@ -50,3 +50,13 @@ Generating the default world rose from 92 ms to 2.4 s, almost all of it hydrolog
 71.9 ns before, because each lookup now searches 25 cells for river segments. Still well under the
 1.12 us of a layered-noise sample. A coarse per-cell "river nearby" mask would remove the search; not
 needed yet.
+
+## Phase 2: erosion (not yet used by the game)
+
+Generation pipeline: base terrain, hydrology (breaching only), stream-power valleys (6 passes),
+droplet erosion in tiles, thermal erosion, hydrology again with rivers carved. The default world takes
+3.3 s on 16 cores. The priority flood now queues only the sea's shore (open sea is never reached from
+land), which took hydrology from 2.3 s to under 1 s. Droplets run in 128-cell tiles, four rounds apart,
+so tiles run in parallel and a seed still gives the same map (tested).
+Plain droplets alone left cell-sized speckle on slopes and no valleys at range scale, hence the
+stream-power pass for valleys and fewer, longer, higher-inertia droplets for flank gullies.

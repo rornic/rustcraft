@@ -31,21 +31,21 @@ pub fn river_depth(area: f32) -> f32 {
     (1.2 + 0.00125 * area.sqrt()).min(MAX_RIVER_DEPTH)
 }
 
-const NONE: u32 = u32::MAX;
+pub(super) const NONE: u32 = u32::MAX;
 
 // What the priority flood works out: every cell's height once its basin is filled to its
 // spill point, the cell it drains into, and the cells in the order they were reached, which is
 // downstream before upstream.
-struct Flood {
-    filled: Vec<f32>,
-    down: Vec<u32>,
-    order: Vec<u32>,
+pub(super) struct Flood {
+    pub(super) filled: Vec<f32>,
+    pub(super) down: Vec<u32>,
+    pub(super) order: Vec<u32>,
 }
 
 // Barnes' priority flood: start from the sea and the map's edge and always take the lowest cell
 // next, so each cell is reached from its lowest neighbour and a basin's floor is raised to its
 // spill point. A cell drains into the one it was reached from, so every path ends at the sea.
-fn priority_flood(height: &[f32], dim: usize) -> Flood {
+pub(super) fn priority_flood(height: &[f32], dim: usize) -> Flood {
     let cells = height.len();
     let sea = WATER_LEVEL as f32;
     let mut flood = Flood {
@@ -64,9 +64,17 @@ fn priority_flood(height: &[f32], dim: usize) -> Flood {
     for z in 0..dim {
         for x in 0..dim {
             let i = z * dim + x;
-            if height[i] < sea || x == 0 || z == 0 || x == dim - 1 || z == dim - 1 {
+            let edge = x == 0 || z == 0 || x == dim - 1 || z == dim - 1;
+            if height[i] < sea || edge {
                 seen[i] = true;
-                push(&mut heap, height[i], i);
+                // open sea is never reached from the land, so only its shore needs the queue
+                let shore = edge
+                    || NEIGHBOURS.iter().any(|&(dx, dz)| {
+                        height[(z as i64 + dz) as usize * dim + (x as i64 + dx) as usize] >= sea
+                    });
+                if shore {
+                    push(&mut heap, height[i], i);
+                }
             }
         }
     }
@@ -184,8 +192,21 @@ fn breach(height: &mut [f32], flood: &Flood, basin: &Basin) -> bool {
     false
 }
 
-/// Works out lakes, drainage and rivers from the height layer, and carves the rivers into it.
-pub fn run(map: &mut WorldMap) {
+/// Cells of land draining through each cell, itself included.
+pub(super) fn accumulate(flood: &Flood) -> Vec<f32> {
+    let mut flow = vec![1.0f32; flood.down.len()];
+    for &i in flood.order.iter().rev() {
+        let d = flood.down[i as usize];
+        if d != NONE {
+            flow[d as usize] += flow[i as usize];
+        }
+    }
+    flow
+}
+
+/// Works out lakes, drainage and rivers from the height layer, cutting open basins that are too
+/// small or big to be lakes and, with `carve`, the rivers' beds into the ground.
+pub fn run(map: &mut WorldMap, carve: bool) {
     let dim = map.dim();
     let sea = WATER_LEVEL as f32;
     let mut original = map.height.clone();
@@ -215,13 +236,7 @@ pub fn run(map: &mut WorldMap) {
         kind[*cell] = WaterCell::Lake as u8;
     }
 
-    let mut flow = vec![1.0f32; original.len()];
-    for &i in flood.order.iter().rev() {
-        let d = flood.down[i as usize];
-        if d != NONE {
-            flow[d as usize] += flow[i as usize];
-        }
-    }
+    let flow = accumulate(&flood);
 
     map.down = flood
         .down
@@ -264,7 +279,9 @@ pub fn run(map: &mut WorldMap) {
                 kind[i] = WaterCell::River as u8;
                 surface[i] = bed + depth;
                 width[i] = river_width(flow[i] * cell_area);
-                map.height[i] = bed;
+                if carve {
+                    map.height[i] = bed;
+                }
             }
             _ => {}
         }
@@ -309,7 +326,7 @@ mod tests {
         let mut map = valley();
         let dim = map.dim();
         // an enclosed basin: floor 464, rim 482
-        run(&mut map);
+        run(&mut map, true);
         let middle = 32 * dim + 32;
         assert_eq!(WaterCell::Lake as u8, map.water_kind[middle]);
         assert!(map.water_surface[middle] > map.height[middle] + 5.0);
@@ -318,7 +335,7 @@ mod tests {
     #[test]
     fn test_water_all_drains_to_the_sea() {
         let mut map = valley();
-        run(&mut map);
+        run(&mut map, true);
         let dim = map.dim();
         for start in 0..map.height.len() {
             let mut i = start;
