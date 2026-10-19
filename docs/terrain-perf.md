@@ -41,3 +41,12 @@ No regression. The one-off 77-85 ms worst frame in the high leg is in the baseli
 Samples: bicubic height 47.5 ns, bilinear 16.9 ns, `WorldTerrain` height 71.9 ns, biome 72.2 ns,
 water 82.7 ns, against 1.12 us for a layered-noise sample. The game still runs on the noise generator
 until phase 5, so the flight numbers are unchanged.
+
+## Phase 3: hydrology (not yet used by the game)
+
+Priority-flood fill, breaching of small basins, D8 flow, accumulation and river carving.
+Generating the default world rose from 92 ms to 2.4 s, almost all of it hydrology (a priority flood over
+4.2M cells, up to six times while rims are cut). `WorldTerrain` height 112.9 ns, water 115.1 ns, against
+71.9 ns before, because each lookup now searches 25 cells for river segments. Still well under the
+1.12 us of a layered-noise sample. A coarse per-cell "river nearby" mask would remove the search; not
+needed yet.

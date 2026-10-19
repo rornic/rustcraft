@@ -153,11 +153,9 @@ pub(super) fn base_terrain(seed: u32, config: WorldConfig) -> WorldMap {
         }
     });
     WorldMap {
-        version: 0,
-        seed,
-        config,
         height: cells.iter().map(|c| c.0).collect(),
         continentalness: cells.iter().map(|c| c.1).collect(),
+        ..WorldMap::empty(seed, config)
     }
 }
 

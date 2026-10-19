@@ -4,10 +4,12 @@
 //! A `WorldMap` is a plain value that saves to disk and loads back, so one machine can make it
 //! and share it with the rest: nothing downstream depends on the float maths that made it.
 
+pub mod hydrology;
 pub mod io;
 pub mod noise;
 mod source;
 mod terrain;
+pub mod water;
 
 use std::sync::Arc;
 
@@ -90,9 +92,60 @@ pub struct WorldMap {
     pub height: Vec<f32>,
     /// How far inland, -1 deep ocean to 1.
     pub continentalness: Vec<f32>,
+    /// Cells of land draining through each cell, itself included.
+    pub flow: Vec<f32>,
+    /// Which neighbour each cell drains into, as an index into `NEIGHBOURS`, or `NO_FLOW`.
+    pub down: Vec<u8>,
+    /// A `WaterCell` per cell.
+    pub water_kind: Vec<u8>,
+    /// Height of the water's surface over each wet cell, 0 over dry ones.
+    pub water_surface: Vec<f32>,
+    /// Blocks across the river through each cell, 0 where there is none.
+    pub river_width: Vec<f32>,
 }
 
+/// The eight cells around one, as (dx, dz), in the order `WorldMap::down` indexes them.
+pub const NEIGHBOURS: [(i64, i64); 8] = [
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+];
+
+/// `WorldMap::down` of a cell that drains nowhere, the sea and the map's edge.
+pub const NO_FLOW: u8 = 255;
+
 impl WorldMap {
+    /// A map of `config`'s size with every layer zero.
+    pub fn empty(seed: u32, config: WorldConfig) -> Self {
+        let cells = config.dim() * config.dim();
+        Self {
+            version: GENERATOR_VERSION,
+            seed,
+            config,
+            height: vec![0.0; cells],
+            continentalness: vec![0.0; cells],
+            flow: vec![0.0; cells],
+            down: vec![NO_FLOW; cells],
+            water_kind: vec![0; cells],
+            water_surface: vec![0.0; cells],
+            river_width: vec![0.0; cells],
+        }
+    }
+
+    /// The centre of cell (`cx`, `cz`) in world coordinates.
+    pub fn cell_centre(&self, cx: usize, cz: usize) -> (f64, f64) {
+        let (cell, half) = (self.config.map_cell as f64, self.config.half_size() as f64);
+        (
+            (cx as f64 + 0.5) * cell - half,
+            (cz as f64 + 0.5) * cell - half,
+        )
+    }
+
     pub fn dim(&self) -> usize {
         self.config.dim()
     }
@@ -183,7 +236,7 @@ pub(crate) fn par_rows<T: Send>(dim: usize, layer: &mut [T], f: impl Fn(usize, &
 pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     config.validate().expect("invalid world config");
     let mut map = terrain::base_terrain(seed, config);
-    map.version = GENERATOR_VERSION;
+    hydrology::run(&mut map);
     map
 }
 
@@ -197,13 +250,9 @@ mod tests {
             map_cell: 32,
         };
         let dim = config.dim();
-        WorldMap {
-            version: GENERATOR_VERSION,
-            seed: 1,
-            config,
-            height: (0..dim * dim).map(|i| (i % dim) as f32 * 10.0).collect(),
-            continentalness: vec![0.0; dim * dim],
-        }
+        let mut map = WorldMap::empty(1, config);
+        map.height = (0..dim * dim).map(|i| (i % dim) as f32 * 10.0).collect();
+        map
     }
 
     #[test]

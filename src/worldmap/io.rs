@@ -21,6 +21,11 @@ fn put_layer(out: &mut Vec<u8>, layer: &[f32]) {
     }
 }
 
+fn put_bytes(out: &mut Vec<u8>, layer: &[u8]) {
+    out.extend((layer.len() as u64).to_le_bytes());
+    out.extend(layer);
+}
+
 fn bad(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
@@ -43,6 +48,14 @@ impl Reader<'_> {
 
     fn i64(&mut self) -> io::Result<i64> {
         Ok(i64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
+    fn bytes(&mut self, expected: usize) -> io::Result<Vec<u8>> {
+        let len = u64::from_le_bytes(self.take(8)?.try_into().unwrap()) as usize;
+        if len != expected {
+            return Err(bad(format!("layer has {len} cells, expected {expected}")));
+        }
+        Ok(self.take(len)?.to_vec())
     }
 
     fn layer(&mut self, expected: usize) -> io::Result<Vec<f32>> {
@@ -68,6 +81,11 @@ impl WorldMap {
         out.extend(self.config.map_cell.to_le_bytes());
         put_layer(&mut out, &self.height);
         put_layer(&mut out, &self.continentalness);
+        put_layer(&mut out, &self.flow);
+        put_bytes(&mut out, &self.down);
+        put_bytes(&mut out, &self.water_kind);
+        put_layer(&mut out, &self.water_surface);
+        put_layer(&mut out, &self.river_width);
         let sum = checksum(&out);
         out.extend(sum.to_le_bytes());
         out
@@ -106,6 +124,11 @@ impl WorldMap {
             config,
             height: r.layer(cells)?,
             continentalness: r.layer(cells)?,
+            flow: r.layer(cells)?,
+            down: r.bytes(cells)?,
+            water_kind: r.bytes(cells)?,
+            water_surface: r.layer(cells)?,
+            river_width: r.layer(cells)?,
         })
     }
 

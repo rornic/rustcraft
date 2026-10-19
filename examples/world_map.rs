@@ -191,6 +191,37 @@ fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) ->
     img
 }
 
+// Lakes and rivers over the height map, rivers drawn a pixel wide at least so they show at any scale.
+fn overlay_water(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMap, args: &Args) {
+    use rustcraft::worldmap::WaterCell;
+    let half = args.pixels as f64 / 2.0;
+    for cz in 0..map.dim() {
+        for cx in 0..map.dim() {
+            let i = map.index(cx, cz);
+            let colour = match WaterCell::from_u8(map.water_kind[i]) {
+                WaterCell::Lake => [50, 130, 230],
+                WaterCell::River => [90, 190, 255],
+                _ => continue,
+            };
+            let (wx, wz) = map.cell_centre(cx, cz);
+            let px = ((wx - args.center.0) / args.scale + half).round();
+            let pz = ((wz - args.center.1) / args.scale + half).round();
+            let reach = (map.river_width[i] as f64 / args.scale / 2.0)
+                .ceil()
+                .max(0.0) as i64;
+            for dz in -reach..=reach {
+                for dx in -reach..=reach {
+                    let (x, z) = (px as i64 + dx, pz as i64 + dz);
+                    if (0..args.pixels as i64).contains(&x) && (0..args.pixels as i64).contains(&z)
+                    {
+                        image.put_pixel(x as u32, z as u32, image::Rgb(colour));
+                    }
+                }
+            }
+        }
+    }
+}
+
 // The water and biome layers, one pixel per sample of the height map.
 fn layers(terrain: &dyn TerrainSource, args: &Args) -> [(&'static str, image::RgbImage); 2] {
     let size = args.pixels;
@@ -276,6 +307,7 @@ fn print_stats(samples: &[(TerrainSample, Climate)], biomes: &Biomes) {
 
 fn main() {
     let args = parse_args();
+    let mut world_map = None;
     let noise: Box<dyn TerrainSource> = if args.worldmap {
         let config = WorldConfig {
             size: args.size,
@@ -284,7 +316,9 @@ fn main() {
         let start = std::time::Instant::now();
         let map = rustcraft::worldmap::generate(args.seed, config);
         println!("generated the world map in {:.1?}", start.elapsed());
-        Box::new(WorldTerrain::new(std::sync::Arc::new(map)))
+        let map = std::sync::Arc::new(map);
+        world_map = Some(map.clone());
+        Box::new(WorldTerrain::new(map))
     } else {
         Box::new(NoiseGenerator::new(args.seed))
     };
@@ -302,9 +336,11 @@ fn main() {
     let spawn = noise.find_spawn();
     println!("spawn: x={} z={} height={:.1}", spawn.0, spawn.1, spawn.2);
 
-    render(&samples, noise.biomes(), &args)
-        .save(&args.out)
-        .expect("failed to save image");
+    let mut image = render(&samples, noise.biomes(), &args);
+    if let Some(map) = &world_map {
+        overlay_water(&mut image, map, &args);
+    }
+    image.save(&args.out).expect("failed to save image");
     println!("wrote {}", args.out);
     let stem = args.out.strip_suffix(".png").unwrap_or(&args.out);
     for (layer, image) in layers(&*noise, &args) {
