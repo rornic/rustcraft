@@ -1,6 +1,6 @@
 use super::Biome;
 
-const TREE_DENSITY: f64 = 0.55;
+const TREE_DENSITY: f64 = 0.35;
 
 pub struct Forest;
 

@@ -71,10 +71,10 @@ impl Biomes {
             // placeholder kept so ids stay put, see `worldmap::climate::BiomeKind`
             Box::new(Plain::new("foothills", BASE_TREE_DENSITY)),
             Box::new(Plain::new("tundra", 0.01)),
-            Box::new(Plain::new("taiga", 0.45)),
+            Box::new(Plain::new("taiga", 0.3)),
             Box::new(Plain::new("steppe", 0.004)),
             Box::new(Plain::new("savanna", 0.03)),
-            Box::new(Plain::new("jungle", 0.8)),
+            Box::new(Plain::new("jungle", 0.4)),
         ])
     }
 

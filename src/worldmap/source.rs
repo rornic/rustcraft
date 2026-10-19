@@ -226,7 +226,10 @@ impl TerrainSource for WorldTerrain {
                 for (dx, dz) in [(i, -ring), (i, ring), (-ring, i), (ring, i)] {
                     let (cx, cz) = ((mid + dx) as usize, (mid + dz) as usize);
                     let above = map.height[map.index(cx, cz)] as f64 - WATER_LEVEL as f64;
-                    if (4.0..30.0).contains(&above) && map.water_kind[map.index(cx, cz)] == 0 {
+                    let i = map.index(cx, cz);
+                    // open ground, not forest, to start in: dense trees are most of what a view draws
+                    if (4.0..30.0).contains(&above) && map.water_kind[i] == 0 && map.trees[i] <= 40
+                    {
                         let x = (cx as i64 * cell + cell / 2) - half;
                         let z = (cz as i64 * cell + cell / 2) - half;
                         return (x, z, self.height(x as f64, z as f64));
