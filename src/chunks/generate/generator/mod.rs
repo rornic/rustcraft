@@ -1,6 +1,8 @@
 mod buffers;
 mod canopy;
 mod chunk;
+#[cfg(test)]
+mod determinism;
 mod flora;
 mod greedy;
 mod lod;
