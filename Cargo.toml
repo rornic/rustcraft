@@ -21,6 +21,7 @@ bevy = { version = "0.20", default-features = false, features = [
 tracing = { version = "0.1.40", features = ["attributes"] }
 
 [dev-dependencies]
+criterion = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Enable a small amount of optimization in debug mode
@@ -33,3 +34,7 @@ opt-level = 3
 
 [profile.dev.package.objc2]
 debug-assertions = false
+
+[[bench]]
+name = "terrain"
+harness = false

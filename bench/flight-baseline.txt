@@ -1,0 +1,34 @@
+seed: 1
+render_distance: 1024
+load frames: 1799
+load frame_ms p50: 1.108
+load frame_ms p99: 2.973
+load frame_ms worst: 7.751
+load chunks_generated_per_s: 3771.5
+load lod_meshes_per_s: 175.8
+load chunk_queue mean/max: 65.4/452
+load lod_queue mean/max: 12.2/320
+walk frames: 1799
+walk frame_ms p50: 0.938
+walk frame_ms p99: 5.157
+walk frame_ms worst: 6.855
+walk chunks_generated_per_s: 3643.4
+walk lod_meshes_per_s: 95.4
+walk chunk_queue mean/max: 60.8/448
+walk lod_queue mean/max: 3.6/301
+sprint frames: 1799
+sprint frame_ms p50: 1.215
+sprint frame_ms p99: 5.669
+sprint frame_ms worst: 11.773
+sprint chunks_generated_per_s: 13362.1
+sprint lod_meshes_per_s: 351.4
+sprint chunk_queue mean/max: 223.5/448
+sprint lod_queue mean/max: 13.5/311
+high frames: 1799
+high frame_ms p50: 1.694
+high frame_ms p99: 4.666
+high frame_ms worst: 84.926
+high chunks_generated_per_s: 13382.7
+high lod_meshes_per_s: 662.4
+high chunk_queue mean/max: 224.4/448
+high lod_queue mean/max: 33.2/320
