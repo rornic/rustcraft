@@ -381,7 +381,7 @@ fn closeness(map: &WorldMap, source: impl Fn(usize) -> bool) -> Vec<f32> {
 }
 
 // A box blur of `radius` cells each way along both axes.
-fn blur_box(layer: &[f32], dim: usize, radius: usize) -> Vec<f32> {
+pub(super) fn blur_box(layer: &[f32], dim: usize, radius: usize) -> Vec<f32> {
     let along_x = {
         let mut out = vec![0.0f32; layer.len()];
         par_rows(dim, &mut out, |row, cells| {

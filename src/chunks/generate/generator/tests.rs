@@ -2096,7 +2096,12 @@ fn test_lakes_and_rivers_above_the_sea_are_filled_to_their_own_surface() {
             // the top layer may be ice in the cold, but never air, and under it is water
             assert!(matches!(water(top - 1), BlockType::Water | BlockType::Ice));
             assert_eq!(BlockType::Water, water(top - 1 - 4.min(top - ground - 1)));
-            assert_eq!(BlockType::Sand, water(ground - 1), "the bed is sand");
+            // sand, or water where a gorge's cliffs were cut open under it and flooded
+            assert!(
+                matches!(water(ground - 1), BlockType::Sand | BlockType::Water),
+                "the bed at ({x}, {z}) is {:?}",
+                water(ground - 1)
+            );
         }
     }
 }

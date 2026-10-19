@@ -37,11 +37,16 @@ const EDGE_FALLOFF: (f64, f64) = (0.66, 0.92);
 // How far, in blocks, the wander of the edge takes to change.
 const EDGE_WANDER: f64 = 4500.0;
 
-// Ground more than the first of these above the sea is stretched, by the full PEAK_STRETCH of
-// itself from the second up: 0.4 takes a peak 440 blocks over the sea to 610, which the easing
-// below brings to just under the top of the world.
-const PEAK_STRETCH_FROM: (f64, f64) = (180.0, 420.0);
-const PEAK_STRETCH: f64 = 0.4;
+// Peaks are sharpened where the ground is this many blocks over the sea, fully by the second: each
+// cell moves SHARPEN times its height over (or under) the average of the cells within
+// SHARPEN_RADIUS of it, about 600 blocks.
+const SHARPEN_FROM: (f64, f64) = (100.0, 260.0);
+const SHARPEN: f64 = 1.1;
+const SHARPEN_RADIUS: usize = 18;
+// The tallest ground is rescaled to stand at PEAK_TOP, in a straight line from RESCALE_FROM above
+// the sea up, never past the world's top.
+const RESCALE_FROM: f64 = 150.0;
+const PEAK_TOP: f64 = 990.0;
 
 const MAX_HEIGHT: f64 = WORLD_HEIGHT as f64 - 16.0;
 const PEAK_EASE_START: f64 = MAX_HEIGHT - 96.0;
@@ -163,18 +168,35 @@ pub(super) fn column(seed: u32, x: f64, z: f64, half: f64) -> (f64, f64) {
     (height, continentalness)
 }
 
-/// Stretches the tallest ground upward, so the highest peaks of a range stand close to the top
-/// of the world rather than where erosion leaves them. Ground under STRETCH_FROM above the sea is
-/// untouched, and the stretch grows smoothly, never reversing, so the lie of the land and where
-/// water runs stay as they were.
+/// Gives high ground real peaks and steep valleys between them: each high cell is pushed away
+/// from the average of the ground round it, so what stands above its surroundings stands higher and
+/// what lies below them lies lower, and then the tallest ground is rescaled in a straight line to
+/// stand just under the top of the world. A curve that eased heights towards the top would flatten
+/// every summit to the same level; a straight rescale keeps them different and keeps them sharp.
+/// Water still runs the same way: this moves peaks up and valley floors down, never across.
 pub(super) fn raise_peaks(map: &mut WorldMap) {
-    let sea = WATER_LEVEL as f64;
-    for h in map.height.iter_mut() {
-        let above = *h as f64 - sea;
-        if above > PEAK_STRETCH_FROM.0 {
-            let stretch =
-                1.0 + PEAK_STRETCH * smoothstep(PEAK_STRETCH_FROM.0, PEAK_STRETCH_FROM.1, above);
-            *h = ease_peaks(sea + above * stretch) as f32;
+    let sea = WATER_LEVEL as f32;
+    let dim = map.dim();
+    let around = super::climate::blur_box(&map.height, dim, SHARPEN_RADIUS);
+    for (h, mean) in map.height.iter_mut().zip(&around) {
+        let above = (*h - sea) as f64;
+        let weight = smoothstep(SHARPEN_FROM.0, SHARPEN_FROM.1, above);
+        if weight > 0.0 {
+            let sharpened = *h + (SHARPEN * weight) as f32 * (*h - mean);
+            // valleys deepen, but not into the sea
+            *h = sharpened.max(sea + 6.0).min(*h + 400.0);
+        }
+    }
+    // rescale the tallest ground to stand `PEAK_TOP` blocks up, in a straight line from where
+    // the ground starts to steepen
+    let top = map.height.iter().cloned().fold(sea, f32::max) as f64;
+    let (from, to) = (sea as f64 + RESCALE_FROM, PEAK_TOP);
+    if top > to {
+        let scale = (to - from) / (top - from);
+        for h in map.height.iter_mut() {
+            if *h as f64 > from {
+                *h = (from + (*h as f64 - from) * scale) as f32;
+            }
         }
     }
 }
@@ -210,31 +232,55 @@ mod tests {
         assert!(ease_peaks(2000.0) < MAX_HEIGHT);
     }
 
-    #[test]
-    fn test_peaks_are_stretched_towards_the_top_of_the_world_and_lowlands_are_left_alone() {
+    // Two cones on a high shoulder of land, with a valley between them.
+    fn two_peaks() -> WorldMap {
         let config = WorldConfig {
-            size: 64 * 32,
+            size: 128 * 32,
             map_cell: 32,
         };
+        let dim = config.dim();
         let mut map = WorldMap::empty(1, config);
-        let heights: Vec<f32> = (0..map.height.len())
-            .map(|i| WATER_LEVEL as f32 + (i % 64) as f32 * 7.0)
-            .collect();
-        map.height = heights.clone();
-        raise_peaks(&mut map);
-        for (before, after) in heights.iter().zip(&map.height) {
-            if *before - WATER_LEVEL as f32 <= PEAK_STRETCH_FROM.0 as f32 {
-                assert_eq!(before, after, "ground under the stretch moved");
+        for z in 0..dim {
+            for x in 0..dim {
+                let d =
+                    |cx: f32, cz: f32| ((x as f32 - cx).powi(2) + (z as f32 - cz).powi(2)).sqrt();
+                let cone = |cx: f32, cz: f32, height: f32| (height - d(cx, cz) * 14.0).max(0.0);
+                map.height[z * dim + x] = WATER_LEVEL as f32
+                    + 200.0
+                    + cone(40.0, 64.0, 250.0).max(cone(88.0, 64.0, 200.0));
             }
-            assert!(*after < MAX_HEIGHT as f32 + 20.0 && *after >= *before - 1e-3);
         }
-        // never reverses: higher ground stays higher
-        for row in map.height.windows(2).take(63) {
-            assert!(row[1] >= row[0] - 1e-3);
-        }
-        // and the tallest of them, 441 blocks over the sea, now stands near the top
-        let tallest = map.height[..64].iter().cloned().fold(0.0, f32::max);
-        assert!(tallest > 960.0, "{tallest}");
+        map
+    }
+
+    #[test]
+    fn test_peaks_stand_higher_and_valleys_lie_lower_than_the_ground_round_them() {
+        let (mut sharp, flat) = (two_peaks(), two_peaks());
+        raise_peaks(&mut sharp);
+        let dim = sharp.dim();
+        let at = |m: &WorldMap, x: usize| m.height[64 * dim + x];
+        // the summits are higher by more than the rescale takes back, relative to the shoulder
+        let rise = |m: &WorldMap, x: usize| at(m, x) - at(m, 4);
+        assert!(
+            rise(&sharp, 40) > rise(&flat, 40) * 1.2,
+            "{} vs {}",
+            rise(&sharp, 40),
+            rise(&flat, 40)
+        );
+        // and the valley floor between them has gone down, so the peaks stand out of it
+        let valley = |m: &WorldMap| (50..78).map(|x| at(m, x)).fold(f32::MAX, f32::min);
+        assert!(
+            valley(&sharp) < valley(&flat) - 5.0,
+            "{} vs {}",
+            valley(&sharp),
+            valley(&flat)
+        );
+        // no land goes into the sea, and the tallest ground is under the world's top
+        assert!(sharp.height.iter().all(|&h| h >= WATER_LEVEL as f32 + 5.0));
+        let tallest = sharp.height.iter().cloned().fold(0.0, f32::max);
+        assert!(tallest <= PEAK_TOP as f32 + 0.5, "{tallest}");
+        // the two summits end up at different heights, not squashed to one
+        assert!((at(&sharp, 40) - at(&sharp, 88)).abs() > 20.0);
     }
 
     #[test]

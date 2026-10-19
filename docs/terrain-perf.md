@@ -161,3 +161,11 @@ function runs at every LOD cell size. Rivers are never raised by their bed (a te
 ground is stretched so peaks reach 986-988 of the world's 1024. `GENERATOR_VERSION` is 7.
 Known gap: the LOD seam test only samples ground under 640 blocks; in high ranges rays leak at seams between
 levels 1 and 2. Probably the harness not loading every node below the surface (to confirm and fix later).
+
+## Round five: peaks
+
+The height easing curve squashed every summit to the same level, so tops were flat. It is replaced by sharpening
+(each high cell pushed 1.1x its height over the ground within ~600 blocks, which raises peaks and deepens the
+valleys between them) and a straight rescale so the tallest ground stands at 990. Seed 1: tallest 990, 99.9th
+percentile about 900, 4% of summit area nearly flat. Ground over 360 blocks above the sea is snow-capped in any
+climate. `GENERATOR_VERSION` is 8.

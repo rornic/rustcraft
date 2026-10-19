@@ -37,6 +37,9 @@ pub(super) const SNOW_LINE_PER_DEGREE: f64 = 800.0;
 // At or above this temperature it's too hot for snow, and the heights are bare rock.
 pub(super) const SNOW_MAX_TEMPERATURE: f32 = 0.62;
 
+// Above this height over the sea the ground is snow-capped in any climate, in the tropics too.
+pub(super) const SNOWCAP_ABOVE: i64 = 360;
+
 // Below this temperature even the grass is under a layer of snow.
 pub(super) const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
 
@@ -104,8 +107,14 @@ pub(super) fn terrain_block(
         }
         let above_sea = world_y - WATER_LEVEL;
         let above_water = world_y - water_top;
-        let line = snow_line(temperature);
-        let snows = temperature < SNOW_MAX_TEMPERATURE;
+        // the tallest ground wears snow whatever the climate, the line lowering to meet the cap
+        let capped = above_sea >= SNOWCAP_ABOVE;
+        let line = if capped {
+            snow_line(temperature).min(SNOWCAP_ABOVE)
+        } else {
+            snow_line(temperature)
+        };
+        let snows = temperature < SNOW_MAX_TEMPERATURE || capped;
         if snows && above_sea >= line && combined_gradient <= snow_holding_slope(above_sea, line) {
             BlockType::Snow
         } else if !snows && above_sea >= SNOW_LINE
