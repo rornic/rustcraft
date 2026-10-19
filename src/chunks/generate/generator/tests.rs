@@ -2162,3 +2162,102 @@ fn test_compacted_stone_follows_the_local_surface_not_a_fixed_height() {
     }
     assert!(seen >= 2, "only {seen} dry columns found");
 }
+
+// Blocks in the chunk at (`cx`, `cy`, `cz`) with air under a solid block in the same column, and
+// how many columns in it are steep enough for cliffs.
+fn overhangs(regions: &Arc<RegionStore>, (cx, cy, cz): (i64, i64, i64)) -> (usize, usize) {
+    use crate::worldmap::detail::cliff_reach;
+    let chunk = generate_chunk(regions.clone(), ChunkCoordinate(I64Vec3::new(cx, cy, cz)));
+    let mut heights = regions.sampler();
+    let (mut caves, mut steep) = (0, 0);
+    for x in 0..16u16 {
+        for z in 0..16u16 {
+            let (wx, wz) = (cx * 16 + x as i64, cz * 16 + z as i64);
+            let (gx, gz) = heights.gradient(wx, wz);
+            steep += (cliff_reach(gx.abs() + gz.abs()) > 0.0) as usize;
+            for y in 0..15u16 {
+                let (below, above) = (
+                    chunk.get_block_at(U16Vec3::new(x, y, z)),
+                    chunk.get_block_at(U16Vec3::new(x, y + 1, z)),
+                );
+                caves += (below == BlockType::Air && super::terrain::is_solid(above)) as usize;
+            }
+        }
+    }
+    (caves, steep)
+}
+
+#[test]
+fn test_steep_ground_gets_overhangs_and_gentle_ground_gets_none() {
+    let terrain = crate::worldmap::test_terrain(5);
+    let regions = Arc::new(RegionStore::new(terrain.clone()));
+    let map = terrain.map();
+    let (mut steep_caves, mut steep_columns, mut gentle_caves, mut gentle_chunks) = (0, 0, 0, 0);
+    for cz in (0..map.dim()).step_by(3) {
+        for cx in (0..map.dim()).step_by(3) {
+            let i = map.index(cx, cz);
+            if map.water_kind[i] != 0 || map.height[i] < WATER_LEVEL as f32 + 6.0 {
+                continue;
+            }
+            let (x, z) = map.cell_centre(cx, cz);
+            let (x, z) = (x as i64, z as i64);
+            let ground = regions.get_height(x, z).round() as i64;
+            let at = (
+                x.div_euclid(16),
+                (ground - 2).div_euclid(16),
+                z.div_euclid(16),
+            );
+            let (caves, steep) = overhangs(&regions, at);
+            if steep >= 8 {
+                steep_caves += caves;
+                steep_columns += steep;
+            } else if steep == 0 && gentle_chunks < 30 {
+                gentle_caves += caves;
+                gentle_chunks += 1;
+            }
+        }
+    }
+    assert!(steep_columns > 0, "no steep ground on the test world");
+    assert!(
+        steep_caves > 0,
+        "no overhangs on {steep_columns} steep columns"
+    );
+    assert_eq!(0, gentle_caves, "overhangs on gentle ground");
+}
+
+#[test]
+fn test_cliffs_are_cut_before_the_water_fills_what_they_open() {
+    use super::terrain::cut_cliff;
+    let sea = WATER_LEVEL;
+    // ground cut away under the water floods, and over it is open air
+    assert_eq!(
+        BlockType::Water,
+        cut_cliff(BlockType::Stone, false, sea - 10, 0.5, sea)
+    );
+    assert_eq!(
+        BlockType::Air,
+        cut_cliff(BlockType::Stone, false, sea + 3, 0.5, sea)
+    );
+    // the top layer of a frozen sea freezes in the cut too
+    assert_eq!(
+        BlockType::Ice,
+        cut_cliff(BlockType::Stone, false, sea - 1, 0.0, sea)
+    );
+    // rock builds up into air and water alike, and what was already right is left alone
+    assert_eq!(
+        BlockType::Stone,
+        cut_cliff(BlockType::Air, true, sea + 2, 0.5, sea)
+    );
+    assert_eq!(
+        BlockType::Stone,
+        cut_cliff(BlockType::Water, true, sea - 2, 0.5, sea)
+    );
+    assert_eq!(
+        BlockType::Grass,
+        cut_cliff(BlockType::Grass, true, sea + 2, 0.5, sea)
+    );
+    assert_eq!(
+        BlockType::Water,
+        cut_cliff(BlockType::Water, false, sea - 2, 0.5, sea)
+    );
+}

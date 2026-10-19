@@ -168,6 +168,30 @@ pub(super) fn under_grass(
     }
 }
 
+// A block after cliffs are cut, where the noise says the ground is `solid` here: rock builds up
+// where it wasn't, and ground cut away is open air above the water but floods below it, ice
+// and all, so caves in a sea cliff fill with the sea.
+pub(super) fn cut_cliff(
+    block: BlockType,
+    solid: bool,
+    y: i64,
+    temperature: f32,
+    water_top: i64,
+) -> BlockType {
+    match (solid, is_solid(block)) {
+        (true, false) => BlockType::Stone,
+        (false, true) => {
+            if y < water_top {
+                // well above the world's floor, so `terrain_block` sees only the water here
+                terrain_block(y, 0, 0.0, temperature, water_top)
+            } else {
+                BlockType::Air
+            }
+        }
+        _ => block,
+    }
+}
+
 // `terrain_block`, as the biome owning the column has it.
 pub(in crate::chunks::generate) fn column_block(
     biomes: &Biomes,

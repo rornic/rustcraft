@@ -4,7 +4,7 @@
 //! only LOD meshes use, may call `resolved`, which does.
 
 use super::climate::BiomeKind;
-use super::noise::{fbm_filtered, perlin};
+use super::noise::{fbm_filtered, perlin, perlin3};
 use super::terrain::smoothstep;
 use super::{par_rows, WorldMap};
 use crate::chunks::generate::WATER_LEVEL;
@@ -29,6 +29,26 @@ const DUNE_FIELD_WAVELENGTH: f64 = 700.0;
 // Dunes build up inland from the beach and give way to rock on high ground.
 const DUNE_SHORE: (f64, f64) = (2.0, 14.0);
 const DUNE_HIGH_GROUND: (f64, f64) = (70.0, 140.0);
+
+// Where the ground is steeper than this (see `terrain_block`), cliffs start to take shape, and
+// by the second the surface can move this far either way.
+const CLIFF_GRADIENT: (f64, f64) = (2.0, 4.5);
+const CLIFF_REACH: f64 = 7.0;
+
+/// How many blocks the surface of ground this steep can be moved up or down by `cliff_density`,
+/// 0 on ground too gentle for cliffs.
+pub fn cliff_reach(gradient: f64) -> f64 {
+    CLIFF_REACH * smoothstep(CLIFF_GRADIENT.0, CLIFF_GRADIENT.1, gradient)
+}
+
+/// Noise in -1..1 that cliffs and overhangs are cut from: the surface in a column is wherever
+/// `height - y + reach * cliff_density` crosses zero, which is a different height at each y, so
+/// ledges overhang and caves open in the face.
+pub fn cliff_density(seed: u32, x: i64, y: i64, z: i64) -> f64 {
+    let (fx, fy, fz) = (x as f64 + 0.5, y as f64 + 0.5, z as f64 + 0.5);
+    0.65 * perlin3(seed ^ 0xC11F, fx / 14.0, fy / 14.0, fz / 14.0)
+        + 0.35 * perlin3(seed ^ 0xC120, fx / 6.0, fy / 6.0, fz / 6.0)
+}
 
 /// How high the detail rises over, or falls under, the map's ground at (`x`, `z`) on ground
 /// `roughness` rough (0..1) and `above_sea` blocks up, in cells `cell` blocks wide.
@@ -135,6 +155,18 @@ mod tests {
             (up, down) = (up.max(step), down.min(step));
         }
         assert!(-down > up * 2.0, "steepest rise {up}, steepest fall {down}");
+    }
+
+    #[test]
+    fn test_cliffs_only_on_steep_ground_and_never_past_their_reach() {
+        assert_eq!(0.0, cliff_reach(0.0));
+        assert_eq!(0.0, cliff_reach(CLIFF_GRADIENT.0));
+        assert_eq!(CLIFF_REACH, cliff_reach(CLIFF_GRADIENT.1 + 1.0));
+        assert!(cliff_reach(3.0) > 0.0 && cliff_reach(3.0) < CLIFF_REACH);
+        for i in 0..500 {
+            let d = cliff_density(4, i * 3, i % 40, -i * 7);
+            assert!((-1.0..=1.0).contains(&d), "{d}");
+        }
     }
 
     #[test]

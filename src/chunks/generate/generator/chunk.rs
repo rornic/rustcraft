@@ -2,7 +2,7 @@ use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle};
 use super::flora::flora_at;
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
-use super::terrain::{column_block, ground_top, under_grass};
+use super::terrain::{column_block, cut_cliff, ground_top, under_grass};
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
@@ -16,6 +16,7 @@ use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::TreeTints;
 use crate::chunks::generate::trees::TREE_HEIGHT;
 use crate::chunks::generate::WATER_LEVEL;
+use crate::worldmap::detail::{cliff_density, cliff_reach};
 use bevy::math::I64Vec2;
 use bevy::math::IVec3;
 use std::cell::LazyCell;
@@ -28,6 +29,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     let columns = regions.chunk_columns(&mut heights, chunk_pos.0.x, chunk_pos.0.z);
     let (lowest, highest) = (columns.lowest, columns.highest);
     let size = CHUNK_SIZE as i64;
+    let seed = regions.terrain().seed();
     let world_y = chunk_pos.0.y * size;
     // cells in `ChunkData::from_cells` order, which is the order they're worked out in here
     let mut cells = Vec::with_capacity((size * size * size) as usize);
@@ -36,18 +38,19 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
         for z in 0..size {
             let column_height = columns.height(x, z);
             let water_top = columns.water_top(x, z);
+            let gradient = columns.gradient(x, z);
+            // how far the surface here is cut or built up into cliffs, on steep ground
+            let cliff = cliff_reach(gradient);
+            let bulge = cliff.ceil() as i64;
             // above the ground and the water, the column is air here whatever its climate
-            if world_y >= ground_top(column_height).max(water_top) {
+            if world_y >= (ground_top(column_height) + bulge).max(water_top) {
                 cells.extend(std::iter::repeat_n(BlockType::Air, size as usize));
                 continue;
             }
-            let (gradient, biome, temperature) = (
-                columns.gradient(x, z),
-                columns.biome(x, z),
-                columns.temperature(x, z),
-            );
+            let (biome, temperature) = (columns.biome(x, z), columns.temperature(x, z));
+            let (world_x, world_z) = (chunk_pos.0.x * size + x, chunk_pos.0.z * size + z);
             cells.extend((world_y..world_y + size).map(|y| {
-                under_grass(
+                let block = under_grass(
                     column_block(
                         biomes,
                         biome,
@@ -60,7 +63,14 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                     y,
                     column_height,
                     1,
-                )
+                );
+                // cliffs are cut from the ground before the water fills what they open
+                if cliff == 0.0 || (y - column_height).abs() > bulge {
+                    return block;
+                }
+                let density = (column_height - y) as f64 - 0.5
+                    + cliff * cliff_density(seed, world_x, y, world_z);
+                cut_cliff(block, density > 0.0, y, temperature, water_top)
             }));
         }
     }
@@ -89,12 +99,11 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     }
 
     // plants on the grass, in the air just over it, after the trees, so trunks keep their place
-    let seed = regions.terrain().seed();
     for x in 0..size {
         for z in 0..size {
             let column_height = columns.height(x, z);
             let local_y = column_height - world_y;
-            if !(0..size).contains(&local_y) {
+            if !(0..size).contains(&local_y) || cliff_reach(columns.gradient(x, z)) > 0.0 {
                 continue;
             }
             let (gradient, biome, temperature) = (

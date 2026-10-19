@@ -48,6 +48,51 @@ pub fn perlin(seed: u32, x: f64, z: f64) -> f64 {
     (top + v * (bottom - top)) * std::f64::consts::SQRT_2
 }
 
+const GRADIENTS_3D: [(f64, f64, f64); 12] = [
+    (1.0, 1.0, 0.0),
+    (-1.0, 1.0, 0.0),
+    (1.0, -1.0, 0.0),
+    (-1.0, -1.0, 0.0),
+    (1.0, 0.0, 1.0),
+    (-1.0, 0.0, 1.0),
+    (1.0, 0.0, -1.0),
+    (-1.0, 0.0, -1.0),
+    (0.0, 1.0, 1.0),
+    (0.0, -1.0, 1.0),
+    (0.0, 1.0, -1.0),
+    (0.0, -1.0, -1.0),
+];
+
+/// Perlin noise in three dimensions, about -1..1. The lattice's third coordinate is hashed in with
+/// the seed, so layers of it differ.
+pub fn perlin3(seed: u32, x: f64, y: f64, z: f64) -> f64 {
+    let (fx, fy, fz) = (x.floor(), y.floor(), z.floor());
+    let (ix, iy, iz) = (fx as i32, fy as i32, fz as i32);
+    let (dx, dy, dz) = (x - fx, y - fy, z - fz);
+    let corner = |cx: i32, cy: i32, cz: i32| {
+        let h = hash(
+            seed.wrapping_add((iy + cy) as u32 * 0x9E37_79B1),
+            ix + cx,
+            iz + cz,
+        );
+        let (gx, gy, gz) = GRADIENTS_3D[(h % 12) as usize];
+        gx * (dx - cx as f64) + gy * (dy - cy as f64) + gz * (dz - cz as f64)
+    };
+    let (u, v, w) = (fade(dx), fade(dy), fade(dz));
+    let lerp = |a: f64, b: f64, t: f64| a + t * (b - a);
+    let near = lerp(
+        lerp(corner(0, 0, 0), corner(1, 0, 0), u),
+        lerp(corner(0, 1, 0), corner(1, 1, 0), u),
+        v,
+    );
+    let far = lerp(
+        lerp(corner(0, 0, 1), corner(1, 0, 1), u),
+        lerp(corner(0, 1, 1), corner(1, 1, 1), u),
+        v,
+    );
+    lerp(near, far, w)
+}
+
 /// Fractal Perlin noise of `octaves`, about -1..1, with features `wavelength` blocks across.
 pub fn fbm(seed: u32, x: f64, z: f64, wavelength: f64, octaves: u32) -> f64 {
     let (mut frequency, mut amplitude, mut total, mut norm) = (1.0 / wavelength, 1.0, 0.0, 0.0);
@@ -166,6 +211,23 @@ mod tests {
                 .sum::<f64>()
         };
         assert!(spread(64.0) < spread(1.0) * 0.6);
+    }
+
+    #[test]
+    fn test_perlin3_is_continuous_bounded_and_fixed() {
+        let mut last = perlin3(2, 0.0, 5.3, 7.1);
+        for i in 1..2000 {
+            let n = perlin3(2, i as f64 * 0.01, 5.3, 7.1);
+            assert!(n.abs() <= 1.0001, "{n}");
+            assert!((n - last).abs() < 0.12, "jumped at {i}");
+            last = n;
+        }
+        assert_eq!(perlin3(2, 1.5, 2.5, 3.5), perlin3(2, 1.5, 2.5, 3.5));
+        // it varies up the third axis too, or overhangs would be curtains
+        let up: Vec<f64> = (0..20)
+            .map(|y| perlin3(2, 3.3, y as f64 * 0.7, 4.1))
+            .collect();
+        assert!(up.windows(2).any(|w| (w[0] - w[1]).abs() > 0.05));
     }
 
     #[test]
