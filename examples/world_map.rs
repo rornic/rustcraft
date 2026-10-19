@@ -195,18 +195,51 @@ fn overlay_water(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMa
                 WaterCell::River => [90, 190, 255],
                 _ => continue,
             };
-            let (wx, wz) = map.cell_centre(cx, cz);
-            let px = ((wx - args.center.0) / args.scale + half).round();
-            let pz = ((wz - args.center.1) / args.scale + half).round();
-            let reach = (map.river_width[i] as f64 / args.scale / 2.0)
+            let to_pixel = |cx: usize, cz: usize| {
+                let (wx, wz) = map.cell_centre(cx, cz);
+                (
+                    (wx - args.center.0) / args.scale + half,
+                    (wz - args.center.1) / args.scale + half,
+                )
+            };
+            // rivers run to the cell they drain into, lakes and sea cells are single patches
+            let (from, to) = match map.down[i] {
+                255 => (to_pixel(cx, cz), to_pixel(cx, cz)),
+                d => {
+                    let (dx, dz) = rustcraft::worldmap::NEIGHBOURS[d as usize];
+                    (
+                        to_pixel(cx, cz),
+                        to_pixel((cx as i64 + dx) as usize, (cz as i64 + dz) as usize),
+                    )
+                }
+            };
+            let (from, to) = if colour == [90, 190, 255] {
+                (from, to)
+            } else {
+                (from, from)
+            };
+            let wide = if map.water_kind[i] == WaterCell::Lake as u8 {
+                map.config.map_cell as f32
+            } else {
+                map.river_width[i]
+            };
+            let radius = (wide as f64 / args.scale / 2.0).max(0.0);
+            let steps = ((to.0 - from.0).abs().max((to.1 - from.1).abs()) * 2.0)
                 .ceil()
-                .max(0.0) as i64;
-            for dz in -reach..=reach {
-                for dx in -reach..=reach {
-                    let (x, z) = (px as i64 + dx, pz as i64 + dz);
-                    if (0..args.pixels as i64).contains(&x) && (0..args.pixels as i64).contains(&z)
-                    {
-                        image.put_pixel(x as u32, z as u32, image::Rgb(colour));
+                .max(1.0) as i64;
+            let reach = radius.ceil() as i64;
+            for step in 0..=steps {
+                let t = step as f64 / steps as f64;
+                let (px, pz) = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+                for dz in -reach..=reach {
+                    for dx in -reach..=reach {
+                        let (x, z) = (px.round() as i64 + dx, pz.round() as i64 + dz);
+                        if (dx * dx + dz * dz) as f64 <= radius * radius + 0.5
+                            && (0..args.pixels as i64).contains(&x)
+                            && (0..args.pixels as i64).contains(&z)
+                        {
+                            image.put_pixel(x as u32, z as u32, image::Rgb(colour));
+                        }
                     }
                 }
             }

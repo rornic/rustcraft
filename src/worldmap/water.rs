@@ -23,9 +23,8 @@ pub struct RiverHit {
 
 /// How deep, in blocks, a river `width` blocks across is.
 pub fn depth_for_width(width: f32) -> f32 {
-    // `river_width` and `river_depth` of the same area, solved for the depth
-    let area = ((width - river_width(0.0)) / 0.00375).max(0.0);
-    river_depth(area * area)
+    // depth grows with width the way `river_depth` does with `river_width`, near enough
+    (0.6 + (width - 1.2).max(0.0) / 3.0).min(12.0)
 }
 
 impl WorldMap {
@@ -103,7 +102,7 @@ impl WorldMap {
                 surface = surface.max(self.water_surface[i]);
             }
         }
-        (ground < surface).then_some(surface)
+        (surface > f32::MIN && ground < surface).then_some(surface)
     }
 }
 

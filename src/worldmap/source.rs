@@ -33,6 +33,16 @@ fn bank_width(river: RiverHit) -> f32 {
     2.0 + river.width * 0.25
 }
 
+// How far a river's line is moved off its straight run between cell centres at a point: slow
+// bends a few hundred blocks long, with smaller wiggles on them.
+fn meander(seed: u32, x: f64, z: f64) -> (f64, f64) {
+    let bend = |salt: u32| {
+        perlin(seed ^ salt, x / 260.0, z / 260.0) * 34.0
+            + perlin(seed ^ salt ^ 0x55, x / 80.0, z / 80.0) * 9.0
+    };
+    (bend(0x3EA1), bend(0x3EA2))
+}
+
 /// Terrain read from a `WorldMap`, with detail laid over its ground.
 pub struct WorldTerrain {
     map: Arc<WorldMap>,
@@ -99,7 +109,8 @@ impl TerrainSource for WorldTerrain {
         let biome = self.biome_at(x, z);
         let base = map.height_at(x, z) as f64;
         let river = if cell <= RIVER_DETAIL_CELL {
-            map.river_at(x, z)
+            let (mx, mz) = meander(seed, x, z);
+            map.river_at(x + mx, z + mz)
         } else {
             None
         };
@@ -107,6 +118,10 @@ impl TerrainSource for WorldTerrain {
         let mut detail = detail(seed, x, z, cell, roughness, base - sea);
         if biome == self.desert {
             detail += dunes(seed ^ 0xD05E, x, z, cell, base - sea);
+        }
+        // lake floors and shores stay as the map has them, or the detail would stripe the water's edge
+        if let Some(surface) = map.lake_at(x, z, f32::NEG_INFINITY) {
+            detail *= smoothstep(0.0, 6.0, base - surface as f64);
         }
         // the channel of a river is smooth, banks and all
         if let Some(river) = river {

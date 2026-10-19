@@ -7,8 +7,9 @@ use std::collections::BinaryHeap;
 use super::{WaterCell, WorldMap, NEIGHBOURS, NO_FLOW};
 use crate::chunks::generate::WATER_LEVEL;
 
-/// Square blocks of land that must drain through a cell for it to be a river.
-pub const RIVER_MIN_AREA: f32 = 2_560_000.0;
+/// Square blocks of land that must drain through a cell for it to be a stream, which starts a
+/// block or two wide and widens from there.
+pub const RIVER_MIN_AREA: f32 = 400_000.0;
 // A basin shallower than this is no lake, just a flat.
 const MIN_LAKE_DEPTH: f32 = 4.0;
 // Fewer cells than this is a pond, not worth a lake.
@@ -23,7 +24,7 @@ const MAX_RIVER_DEPTH: f32 = 12.0;
 
 /// Blocks across a river draining `area` square blocks of land.
 pub fn river_width(area: f32) -> f32 {
-    2.5 + 0.00375 * area.sqrt()
+    1.2 + 0.0045 * (area - RIVER_MIN_AREA).max(0.0).sqrt() + 0.0015 * area.sqrt()
 }
 
 /// Blocks deep, at the middle of a river draining `area` square blocks of land.
@@ -210,6 +211,19 @@ pub fn run(map: &mut WorldMap, carve: bool) {
     let dim = map.dim();
     let sea = WATER_LEVEL as f32;
     let mut original = map.height.clone();
+    // Scatter of up to a block or so, only for working out where water goes: on gentle ground the
+    // flood's order would send it in straight lines, and this makes its way wind. Taken out of the
+    // heights again below.
+    let scatter: Vec<f32> = (0..original.len())
+        .map(|i| {
+            let (x, z) = map.cell_centre(i % dim, i / dim);
+            (super::noise::fbm(map.seed ^ 0x7E1D, x, z, 260.0, 3) * 0.9) as f32
+                + super::noise::unit(map.seed ^ 0x7E1E, i as i32, (i >> 16) as i32) as f32 * 0.05
+        })
+        .collect();
+    for (h, s) in original.iter_mut().zip(&scatter) {
+        *h += s;
+    }
     let mut flood = priority_flood(&original, dim);
     let mut lakes = basins(&original, &flood, dim);
     for _ in 0..BREACH_ROUNDS {
@@ -224,7 +238,9 @@ pub fn run(map: &mut WorldMap, carve: bool) {
         lakes = basins(&original, &flood, dim);
     }
     // the cuts stay in the ground
-    map.height.copy_from_slice(&original);
+    for ((m, o), s) in map.height.iter_mut().zip(&original).zip(&scatter) {
+        *m = o - s;
+    }
 
     let mut kind = vec![WaterCell::None as u8; original.len()];
     for (i, &h) in original.iter().enumerate() {
