@@ -176,3 +176,11 @@ Snow is full snow blocks on every face (the snow-over-dirt tile is no longer use
 packed stone only beneath it at 16. Warmth now falls with height wherever trees and grass read the climate,
 so pines grow on the slopes of any range (cooler than 0.46 at their height), and a mountain's lower slopes are
 a conifer belt (density 0.3) that thins to nothing between 170 and 290 blocks above the sea. `GENERATOR_VERSION` is 9.
+
+## Round seven: meadows on mountain faces
+
+Mountain slopes were all bare rock, so no tree could stand on them. In patches about 50 blocks across (a third
+of the ground), mountain ground is treated as no steeper than 0.9 when choosing its blocks, so grass, and the
+pines and flora on it, cling to the faces. The alpine rock line moved from 175 to 260 blocks above the sea, and
+trees over 120 blocks above the sea are pines in any climate (tropical ranges never get cold enough). The
+generator version is 10.

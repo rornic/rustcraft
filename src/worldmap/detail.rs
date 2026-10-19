@@ -106,6 +106,17 @@ pub fn terraced(seed: u32, x: f64, z: f64, mountain: bool, height: f64, above_se
     height + (stepped - height) * weight
 }
 
+// Patches of meadow on a mountain: noise this many blocks across, with the ground where it is over
+// the second taking grass however steep.
+const MEADOW_WAVELENGTH: f64 = 55.0;
+const MEADOW_OVER: f64 = 0.12;
+
+/// Whether (`x`, `z`) is in a patch of meadow, which clings to a mountain's faces where the rest
+/// is bare rock. About a third of the ground.
+pub fn meadow_patch(seed: u32, x: f64, z: f64) -> bool {
+    perlin(seed ^ 0x3EAD, x / MEADOW_WAVELENGTH, z / MEADOW_WAVELENGTH) > MEADOW_OVER
+}
+
 /// How high the detail rises over, or falls under, the map's ground at (`x`, `z`) on ground
 /// `roughness` rough (0..1) and `above_sea` blocks up, in cells `cell` blocks wide.
 pub fn detail(seed: u32, x: f64, z: f64, cell: f64, roughness: f64, above_sea: f64) -> f64 {
@@ -295,6 +306,18 @@ mod tests {
         let spread = ledges.iter().cloned().fold(f64::MIN, f64::max)
             - ledges.iter().cloned().fold(f64::MAX, f64::min);
         assert!(ledges.len() >= 2 && spread > 8.0, "ledges {ledges:?}");
+    }
+
+    #[test]
+    fn test_meadow_patches_cover_a_third_in_patches_not_specks() {
+        let patch: Vec<bool> = (0..4000)
+            .map(|i| meadow_patch(2, i as f64 * 3.0, 11.0))
+            .collect();
+        let share = patch.iter().filter(|&&p| p).count() as f64 / patch.len() as f64;
+        assert!((0.2..0.5).contains(&share), "{share}");
+        // runs of meadow are tens of blocks long
+        let flips = patch.windows(2).filter(|w| w[0] != w[1]).count();
+        assert!(flips < 4000 / 8, "{flips} changes in 12 km: speckled");
     }
 
     #[test]

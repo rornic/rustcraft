@@ -210,6 +210,30 @@ pub(super) fn cut_cliff(
     }
 }
 
+// The steepest ground a patch of meadow still takes grass on: past it even meadow is rock.
+const MEADOW_GRADIENT: f64 = 0.9;
+
+// The gradient to choose a column's blocks by: on a mountain, in a patch of meadow, as gentle as
+// MEADOW_GRADIENT at most, so grass and the trees and flora on it cling to the face where the
+// rest of the slope is bare rock.
+pub(in crate::chunks::generate) fn block_gradient(
+    biomes: &Biomes,
+    biome: BiomeId,
+    seed: u32,
+    x: i64,
+    z: i64,
+    gradient: f64,
+) -> f64 {
+    if gradient > MEADOW_GRADIENT
+        && biomes.name(biome) == Some("mountain")
+        && crate::worldmap::detail::meadow_patch(seed, x as f64, z as f64)
+    {
+        MEADOW_GRADIENT
+    } else {
+        gradient
+    }
+}
+
 // `terrain_block`, as the biome owning the column has it.
 pub(in crate::chunks::generate) fn column_block(
     biomes: &Biomes,

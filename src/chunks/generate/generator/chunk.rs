@@ -2,7 +2,7 @@ use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle};
 use super::flora::flora_at;
 use super::mesh::mesh_blocks;
 use super::source::{BlockSource, ChunkNeighbourhood};
-use super::terrain::{column_block, cut_cliff, ground_top, under_grass};
+use super::terrain::{block_gradient, column_block, cut_cliff, ground_top, under_grass};
 use crate::block::BlockType;
 use crate::chunks::chunk::ChunkCoordinate;
 use crate::chunks::chunk::ChunkData;
@@ -56,13 +56,22 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                 continue;
             }
             let (biome, temperature) = (columns.biome(x, z), columns.temperature(x, z));
+            // the gradient the blocks are chosen by: meadow on a mountain takes grass up its faces
+            let slope = block_gradient(
+                biomes,
+                biome,
+                seed,
+                chunk_pos.0.x * size + x,
+                chunk_pos.0.z * size + z,
+                gradient,
+            );
             // snow lies deep, in full blocks, with the packed stone only beneath it
             let snowy = column_block(
                 biomes,
                 biome,
                 column_height - 1,
                 column_height,
-                gradient,
+                slope,
                 temperature,
                 water_top,
             ) == BlockType::Snow;
@@ -129,6 +138,14 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                 columns.gradient(x, z),
                 columns.biome(x, z),
                 columns.temperature(x, z),
+            );
+            let gradient = block_gradient(
+                biomes,
+                biome,
+                seed,
+                chunk_pos.0.x * size + x,
+                chunk_pos.0.z * size + z,
+                gradient,
             );
             let ground = column_block(
                 biomes,

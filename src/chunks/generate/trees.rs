@@ -60,6 +60,8 @@ pub const TREE_HEIGHT: i64 = 27;
 // Trees growing where it is cooler than this, at their height, are pines: cold lowlands, and
 // the slopes of any range higher up, where the air has cooled.
 const PINE_TEMPERATURE: f32 = 0.46;
+// Higher than this above the sea, trees are pines whatever the climate below.
+const ALPINE_PINES_ABOVE: i64 = 120;
 // Ground steeper than this (see `terrain_block`) is too steep to take root on.
 const MAX_GRADIENT: f64 = 1.5;
 // Broadleaf crowns are a big round crown with smaller lobes hanging off it on branches.
@@ -499,7 +501,15 @@ fn tree_in_cell(
     }
     let biome = heights.biome(x, z);
     let (gradient_x, gradient_z) = heights.gradient(x, z);
-    let gradient = gradient_x.abs() + gradient_z.abs();
+    // meadow clings to a mountain's faces, and trees stand on it
+    let gradient = super::generator::block_gradient(
+        noise.biomes(),
+        biome,
+        noise.seed(),
+        x,
+        z,
+        gradient_x.abs() + gradient_z.abs(),
+    );
     if gradient > MAX_GRADIENT {
         return None;
     }
@@ -521,7 +531,9 @@ fn tree_in_cell(
     let growth = ((seed >> 32) % 1000) as f64 / 1000.0;
     // how warm it is up where the tree stands, which falls with height
     let warmth = noise.climate(x as f64, z as f64).temperature;
-    let (kind, trunk, spread) = if warmth < PINE_TEMPERATURE {
+    // pines in the cold, and on any range's upper slopes, even in the tropics
+    let alpine = height - WATER_LEVEL >= ALPINE_PINES_ABOVE;
+    let (kind, trunk, spread) = if warmth < PINE_TEMPERATURE || alpine {
         (
             TreeKind::Pine,
             16 + (growth * 9.0) as i64,

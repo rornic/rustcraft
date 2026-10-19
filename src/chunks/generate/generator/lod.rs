@@ -6,7 +6,9 @@ use super::canopy::{
 use super::chunk::{sky_above, trees_may_reach};
 use super::mesh::mesh_blocks;
 use super::source::{water_depth, BlockSource, BoxFaces, TreeBox};
-use super::terrain::{column_block, freeze_cell, ground_top, is_solid, under_grass, underwater};
+use super::terrain::{
+    block_gradient, column_block, freeze_cell, ground_top, is_solid, under_grass, underwater,
+};
 use crate::block::BlockType;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::biome::{BiomeId, Biomes};
@@ -166,6 +168,14 @@ impl LodBlocks {
                 let biome = grid.biome(cx, cz);
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
+                let gradient = block_gradient(
+                    noise.biomes(),
+                    biome,
+                    noise.seed(),
+                    world_x,
+                    world_z,
+                    gradient,
+                );
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
                 let water_top = grid.water_top(cx, cz);
                 water_tops[Self::column(size, cx, cz)] = water_top;
@@ -312,6 +322,14 @@ impl LodBlocks {
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 let combined_gradient = gradient_x.abs() + gradient_z.abs();
                 let biome = heights.biome(world_x, world_z);
+                let combined_gradient = block_gradient(
+                    biomes,
+                    biome,
+                    noise.seed(),
+                    world_x,
+                    world_z,
+                    combined_gradient,
+                );
                 let temperature = noise.temperature(world_x as f64, world_z as f64);
                 let water_top = heights.water_top(world_x, world_z);
                 water_tops[Self::column(size, cx, cz)] = water_top;

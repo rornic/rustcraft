@@ -2439,3 +2439,91 @@ fn test_a_stream_joining_a_river_has_water_all_the_way_to_it() {
         broken.len()
     );
 }
+
+#[test]
+fn test_meadow_clings_to_a_mountain_face_where_the_rest_is_rock() {
+    use crate::chunks::generate::biome::Biomes;
+    let biomes = Biomes::new(1);
+    let mountain = biomes.id("mountain").unwrap();
+    let above = WATER_LEVEL + 110;
+    let steep = 2.2;
+    let (mut meadow, mut rock) = (0, 0);
+    for i in 0..3000 {
+        let (x, z) = (i * 23, i * 7 - 9000);
+        let gradient = super::terrain::block_gradient(&biomes, mountain, 1, x, z, steep);
+        let top = super::terrain::column_block(
+            &biomes,
+            mountain,
+            above - 1,
+            above,
+            gradient,
+            0.55,
+            WATER_LEVEL,
+        );
+        match top {
+            BlockType::Grass => {
+                meadow += 1;
+                assert!(
+                    gradient < steep,
+                    "a meadow that is no gentler than the face"
+                );
+            }
+            BlockType::Stone => rock += 1,
+            other => panic!("{other:?} on a mountain face"),
+        }
+    }
+    // a third or so is meadow, in patches, the rest rock
+    assert!(meadow > 500 && rock > 1000, "{meadow} meadow, {rock} rock");
+    // gentle ground and other biomes are left as they were
+    let gentle = super::terrain::block_gradient(&biomes, mountain, 1, 5, 5, 0.3);
+    assert_eq!(0.3, gentle);
+    let plain = crate::chunks::generate::biome::BiomeId::BASE;
+    assert_eq!(
+        steep,
+        super::terrain::block_gradient(&biomes, plain, 1, 5, 5, steep)
+    );
+}
+
+#[test]
+fn test_pines_grow_on_a_mountains_lower_slopes() {
+    use crate::chunks::generate::terrain_source::TerrainSource;
+    use crate::chunks::generate::trees::{trees_near, TreeKind};
+    use crate::worldmap::climate::BiomeKind;
+    let terrain =
+        crate::worldmap::WorldTerrain::new(std::sync::Arc::new(crate::worldmap::generate(
+            3,
+            crate::worldmap::WorldConfig {
+                size: 32_768,
+                map_cell: 32,
+            },
+        )));
+    let map = terrain.map().clone();
+    let dim = map.dim();
+    // the middle of a stretch of mountain in the upper conifer belt, whatever the climate
+    let belt = (20..dim - 20)
+        .step_by(5)
+        .flat_map(|z| (20..dim - 20).step_by(5).map(move |x| (x, z)))
+        .find(|&(x, z)| {
+            (-6..=6).step_by(2).all(|dz| {
+                (-6..=6).step_by(2).all(|dx| {
+                    let i = map.index((x as i64 + dx) as usize, (z as i64 + dz) as usize);
+                    BiomeKind::from_u8(map.biome[i]) == BiomeKind::Mountain
+                        && (130.0..230.0).contains(&(map.height[i] - WATER_LEVEL as f32))
+                        && map.water_kind[i] == 0
+                })
+            })
+        });
+    let (cx, cz) = belt.expect("no mountain slopes in the conifer belt");
+    let (x, z) = map.cell_centre(cx, cz);
+    let regions = RegionStore::new(std::sync::Arc::new(terrain));
+    let mut heights = regions.sampler();
+    let min = bevy::math::I64Vec2::new(x as i64 - 250, z as i64 - 250);
+    let trees = trees_near(regions.terrain(), &mut heights, min, min + 500);
+    let pines = trees.iter().filter(|t| t.kind == TreeKind::Pine).count();
+    assert!(trees.len() > 20, "only {} trees on the slope", trees.len());
+    assert!(
+        pines * 2 > trees.len(),
+        "{pines} of {} trees are pines",
+        trees.len()
+    );
+}
