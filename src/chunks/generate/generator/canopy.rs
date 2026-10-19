@@ -197,7 +197,7 @@ impl Canopy {
 pub(super) const TREE_MAX_CELL: i64 = 32;
 
 // Trunks are boxes only up to cells this wide: past them one is far under a pixel.
-pub(super) const TRUNK_MAX_CELL: i64 = 16;
+pub(super) const TRUNK_MAX_CELL: i64 = 8;
 
 // From cells this wide a crown is a box too, of its real size: as cells it would round up to a
 // cube a cell wide, several times its size.

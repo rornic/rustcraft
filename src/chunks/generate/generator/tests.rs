@@ -1517,7 +1517,7 @@ fn test_a_lone_tree_is_still_there_in_every_cell_under_sixteen_wide() {
 }
 
 #[test]
-fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
+fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_eight_wide() {
     use crate::chunks::generate::trees::trees_near;
     use bevy::math::I64Vec2;
     let regions = Arc::new(RegionStore::new(crate::worldmap::test_terrain(5)));
@@ -1536,7 +1536,7 @@ fn test_a_lone_trees_trunk_is_a_thin_box_in_cells_four_to_sixteen_wide() {
         .iter()
         .find(|t| trees.iter().filter(|o| near(t, o)).count() == 1)
         .expect("no lone tree");
-    for level in [2u8, 3, 4] {
+    for level in [2u8, 3] {
         let key = LodKey::containing(
             ChunkCoordinate(tree.base.div_euclid(I64Vec3::splat(16))),
             level,
