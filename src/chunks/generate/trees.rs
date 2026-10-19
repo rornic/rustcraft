@@ -272,6 +272,17 @@ impl Tree {
     /// or tiers instead of being one cuboid.
     pub fn crown_boxes(&self, layers: i64) -> Vec<(DVec3, DVec3)> {
         let (low, high) = self.leaf_bounds();
+        // one box is the bounds themselves, and a scan for the leaves' tighter ones is the dearest part of far LODs
+        if layers == 1 {
+            let (low, high) = (
+                low.max(I64Vec3::new(-TREE_REACH, 0, -TREE_REACH)),
+                high.min(I64Vec3::new(TREE_REACH, TREE_HEIGHT, TREE_REACH)),
+            );
+            return vec![(
+                (self.base + low).as_dvec3(),
+                (self.base + high + I64Vec3::ONE).as_dvec3(),
+            )];
+        }
         // only each row's first and last leaf, found from its ends, bear on the layers' bounds
         let mut leaves = Vec::new();
         let xs = low.x.max(-TREE_REACH)..=high.x.min(TREE_REACH);
