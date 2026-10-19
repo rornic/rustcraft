@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use rustcraft::chunks::chunk_loader::{Chunk, GenerateChunkData};
 use rustcraft::chunks::fade::FULLY_VISIBLE;
-use rustcraft::chunks::lod::{GenerateLodMesh, LodLoader};
+use rustcraft::chunks::group::ChunkGroup;
+use rustcraft::chunks::lod::{GenerateLodMesh, LodLoader, LodNode};
 use rustcraft::chunks::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
 use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
 use rustcraft::horizon::render_distance_at;
@@ -184,6 +185,53 @@ impl Flight {
         self.in_flight_lods = lods;
     }
 
+    // What the meshes hold, in megabytes: every vertex and index buffer, split by what draws it.
+    fn mesh_memory(&mut self) -> String {
+        let world = self.app.world_mut();
+        let size = |mesh: &Mesh| {
+            (mesh.get_vertex_buffer_size() + mesh.indices().map_or(0, |i| i.len() * 4)) as f64 / 1e6
+        };
+        let vertices = |mesh: &Mesh| mesh.count_vertices();
+        let handles: Vec<(Option<u8>, bool, bevy::asset::AssetId<Mesh>)> = {
+            let mut out = Vec::new();
+            let mut lods = world.query::<(&LodNode, &Mesh3d)>();
+            for (node, mesh) in lods.iter(world) {
+                out.push((Some(node.key().level), false, mesh.0.id()));
+            }
+            let mut groups = world.query::<(&ChunkGroup, &Mesh3d)>();
+            for (_, mesh) in groups.iter(world) {
+                out.push((None, true, mesh.0.id()));
+            }
+            out
+        };
+        let meshes = world.resource::<Assets<Mesh>>();
+        let total: f64 = meshes.iter().map(|(_, m)| size(m)).sum();
+        let total_vertices: usize = meshes.iter().map(|(_, m)| vertices(m)).sum();
+        let mut by_level = [(0.0f64, 0usize, 0usize); 12];
+        let (mut chunks, mut chunk_vertices, mut chunk_meshes) = (0.0, 0, 0);
+        for (level, is_chunk, id) in handles {
+            let Some(mesh) = meshes.get(id) else { continue };
+            if is_chunk {
+                chunks += size(mesh);
+                chunk_vertices += vertices(mesh);
+                chunk_meshes += 1;
+            } else if let Some(level) = level {
+                let slot = &mut by_level[level as usize % 12];
+                slot.0 += size(mesh);
+                slot.1 += vertices(mesh);
+                slot.2 += 1;
+            }
+        }
+        let mut out = format!(
+            "all meshes: {total:.0} MB, {total_vertices} vertices, {:.1} bytes a vertex\nfull-detail chunk groups: {chunks:.0} MB, {chunk_vertices} vertices, {chunk_meshes} meshes\n",
+            total * 1e6 / total_vertices.max(1) as f64
+        );
+        for (level, (mb, v, n)) in by_level.iter().enumerate().filter(|(_, s)| s.2 > 0) {
+            out += &format!("lod level {level}: {mb:.0} MB, {v} vertices, {n} nodes\n");
+        }
+        out
+    }
+
     fn camera(&mut self) -> Vec3 {
         let world = self.app.world_mut();
         world
@@ -289,9 +337,11 @@ fn main() {
         flight.step(&mut load);
     }
     load.report("load", &mut report);
+    let _ = writeln!(report, "after load:\n{}", flight.mesh_memory());
 
     let mut walk = flight.fly(secs, WALK_SPEED, Height::Above(2.0));
     walk.report("walk", &mut report);
+    let _ = writeln!(report, "after walk:\n{}", flight.mesh_memory());
     let mut sprint = flight.fly(secs, SPRINT_SPEED, Height::Above(2.0));
     sprint.report("sprint", &mut report);
 
