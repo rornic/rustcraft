@@ -45,6 +45,10 @@ const MIN_BIOME_CELLS: usize = 400;
 const MOUNTAIN_ABOVE: f32 = 150.0;
 const MOUNTAIN_STEEP_ABOVE: f32 = 70.0;
 const MOUNTAIN_STEEP: f32 = 0.4;
+// Conifers on a mountain's lower slopes, this thick, thinning out between these heights over the
+// sea to nothing: the treeline.
+const ALPINE_FOREST: f64 = 0.3;
+const TREELINE: (f64, f64) = (170.0, 290.0);
 
 /// What grows on a stretch of land, stored in `WorldMap::biome`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -276,8 +280,18 @@ pub fn run(map: &mut WorldMap) {
         // lakes and rivers, and nothing grows in them
         let wet = map.water_kind[i] == WaterCell::Lake as u8
             || map.water_kind[i] == WaterCell::River as u8;
-        let density =
-            tree_density(BiomeKind::from_u8(kinds[i]), &biomes) * if wet { 0.0 } else { 1.0 };
+        let kind = BiomeKind::from_u8(kinds[i]);
+        let above = (map.height[i] - sea) as f64;
+        // a mountain's slopes are forested with conifers below the treeline, thinning out into
+        // bare rock above it, instead of the few scattered trees the table gives the biome
+        let density = if kind == BiomeKind::Mountain {
+            ALPINE_FOREST
+                * smoothstep(15.0, 60.0, above)
+                * (1.0 - smoothstep(TREELINE.0, TREELINE.1, above))
+                + 0.02
+        } else {
+            tree_density(kind, &biomes)
+        } * if wet { 0.0 } else { 1.0 };
         trees[i] = (density.clamp(0.0, 1.0) * 255.0).round() as u8;
     }
     map.temperature = temperature;
@@ -643,6 +657,69 @@ mod tests {
                 "biome changed by a stream at {x}"
             );
         }
+    }
+
+    #[test]
+    fn test_mountain_slopes_have_a_conifer_belt_that_ends_at_the_treeline_and_the_air_cools_with_height(
+    ) {
+        use crate::chunks::generate::terrain_source::TerrainSource;
+        let map = std::sync::Arc::new(crate::worldmap::generate(
+            3,
+            WorldConfig {
+                size: 32_768,
+                map_cell: 32,
+            },
+        ));
+        let sea = WATER_LEVEL as f32;
+        let (mut lower, mut thick, mut high, mut bare) = (0, 0, 0, 0);
+        for i in 0..map.biome.len() {
+            if BiomeKind::from_u8(map.biome[i]) != BiomeKind::Mountain || map.water_kind[i] != 0 {
+                continue;
+            }
+            let above = map.height[i] - sea;
+            if (60.0..150.0).contains(&above) {
+                lower += 1;
+                thick += (map.trees[i] >= 40) as usize;
+            }
+            if above > 330.0 {
+                high += 1;
+                bare += (map.trees[i] <= 10) as usize;
+            }
+        }
+        assert!(
+            lower > 100 && thick * 2 > lower,
+            "{thick} of {lower} lower slope cells forested"
+        );
+        assert!(
+            high > 50 && bare == high,
+            "{bare} of {high} cells above the treeline are bare"
+        );
+        // warmth falls with height at the rate snow lines climb, at one place and then a higher one
+        let terrain = crate::worldmap::WorldTerrain::new(map.clone());
+        let low = (0..map.height.len())
+            .find(|&i| {
+                map.height[i] > sea + 5.0 && map.height[i] < sea + 20.0 && map.water_kind[i] == 0
+            })
+            .unwrap();
+        let peak = (0..map.height.len())
+            .find(|&i| map.height[i] > sea + 330.0)
+            .unwrap();
+        let warmth = |i: usize| {
+            let (x, z) = map.cell_centre(i % map.dim(), i / map.dim());
+            (terrain.climate(x, z).temperature, terrain.temperature(x, z))
+        };
+        let (high_air, high_sea_level) = warmth(peak);
+        let (low_air, low_sea_level) = warmth(low);
+        assert!(
+            (low_sea_level - low_air) < 0.03,
+            "lowland cooled by {}",
+            low_sea_level - low_air
+        );
+        assert!(
+            high_sea_level - high_air > 0.25,
+            "a peak cooled by only {}",
+            high_sea_level - high_air
+        );
     }
 
     #[test]

@@ -169,3 +169,10 @@ The height easing curve squashed every summit to the same level, so tops were fl
 valleys between them) and a straight rescale so the tallest ground stands at 990. Seed 1: tallest 990, 99.9th
 percentile about 900, 4% of summit area nearly flat. Ground over 360 blocks above the sea is snow-capped in any
 climate. `GENERATOR_VERSION` is 8.
+
+## Round six: snow and alpine forest
+
+Snow is full snow blocks on every face (the snow-over-dirt tile is no longer used) lying 14 blocks deep, with
+packed stone only beneath it at 16. Warmth now falls with height wherever trees and grass read the climate,
+so pines grow on the slopes of any range (cooler than 0.46 at their height), and a mountain's lower slopes are
+a conifer belt (density 0.3) that thins to nothing between 170 and 290 blocks above the sea. `GENERATOR_VERSION` is 9.

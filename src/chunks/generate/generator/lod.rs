@@ -619,7 +619,7 @@ fn fill_column(
     for cy in -1..=size {
         let bottom = base.y + cy as i64 * cell;
         let middle = bottom + cell / 2;
-        let mut block = under_grass(block_at(middle), middle, height, cell);
+        let mut block = under_grass(block_at(middle), middle, height, cell, false);
         block = freeze_cell(block, temperature, middle + cell / 2, (cell, water_top));
         if block == BlockType::Air && bottom < top {
             block = block_at(top - 1);

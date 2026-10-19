@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::climate::BiomeKind;
+use super::climate::{BiomeKind, LAPSE_PER_BLOCK};
 use super::detail::{detail, dunes, terraced};
 use super::noise::perlin;
 use super::terrain::smoothstep;
@@ -254,9 +254,12 @@ impl TerrainSource for WorldTerrain {
         }
     }
 
+    // How warm it is at the ground here, which falls with height at the rate snow lines climb at,
+    // so trees and grass higher up are cooler, and pines grow on the slopes of a range.
     fn climate(&self, x: f64, z: f64) -> Climate {
+        let above_sea = (self.map.height_at(x, z) - WATER_LEVEL as f32).max(0.0);
         Climate {
-            temperature: self.temperature(x, z),
+            temperature: (self.temperature(x, z) - above_sea * LAPSE_PER_BLOCK).clamp(0.0, 1.0),
             humidity: self.map.bilinear(&self.map.moisture, x, z).clamp(0.0, 1.0),
         }
     }

@@ -146,16 +146,20 @@ pub(super) fn terrain_block(
 // ground's surface the stone is packed hard, which only explosives break.
 pub(super) const SOIL_DEPTH: i64 = 4;
 pub(super) const COMPACTED_DEPTH: i64 = 6;
+// Under snow the cover is thick, full blocks of it, and the packed stone begins only beneath.
+pub(super) const SNOW_DEPTH: i64 = 14;
+pub(super) const SNOW_COMPACTED_DEPTH: i64 = 16;
 
 // The ground in layers: grass is only the top block, over dirt, glacier ice over snow, then the
 // soil gives way to stone and the stone to compacted stone a fixed depth under this column's own
 // surface. Wider LOD cells are sampled mid-cell, which would turn their tops into dirt, and they
-// don't show the layers.
+// don't show the layers. `snowy` is whether the column's surface is snow, which lies deep.
 pub(super) fn under_grass(
     block: BlockType,
     world_y: i64,
     column_height: i64,
     cell: i64,
+    snowy: bool,
 ) -> BlockType {
     let depth = column_height - 1 - world_y;
     if cell != 1 || depth <= 0 {
@@ -170,9 +174,14 @@ pub(super) fn under_grass(
         block,
         BlockType::Dirt | BlockType::Sand | BlockType::Gravel | BlockType::Snow
     );
+    let (soil_depth, compacted_depth) = if snowy {
+        (SNOW_DEPTH, SNOW_COMPACTED_DEPTH)
+    } else {
+        (SOIL_DEPTH, COMPACTED_DEPTH)
+    };
     match block {
-        _ if depth >= COMPACTED_DEPTH && is_solid(block) => BlockType::CompactedStone,
-        _ if depth >= SOIL_DEPTH && soil => BlockType::Stone,
+        _ if depth >= compacted_depth && is_solid(block) => BlockType::CompactedStone,
+        _ if depth >= soil_depth && soil => BlockType::Stone,
         other => other,
     }
 }

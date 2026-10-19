@@ -57,7 +57,9 @@ pub const TREE_REACH: i64 = 10;
 /// How far above its ground any tree reaches.
 pub const TREE_HEIGHT: i64 = 27;
 // Colder than this, trees are pines.
-const PINE_TEMPERATURE: f32 = 0.38;
+// Trees growing where it is cooler than this, at their height, are pines: cold lowlands, and
+// the slopes of any range higher up, where the air has cooled.
+const PINE_TEMPERATURE: f32 = 0.46;
 // Ground steeper than this (see `terrain_block`) is too steep to take root on.
 const MAX_GRADIENT: f64 = 1.5;
 // Broadleaf crowns are a big round crown with smaller lobes hanging off it on branches.
@@ -517,7 +519,9 @@ fn tree_in_cell(
 
     // 0..1, how big this one grew
     let growth = ((seed >> 32) % 1000) as f64 / 1000.0;
-    let (kind, trunk, spread) = if temperature < PINE_TEMPERATURE {
+    // how warm it is up where the tree stands, which falls with height
+    let warmth = noise.climate(x as f64, z as f64).temperature;
+    let (kind, trunk, spread) = if warmth < PINE_TEMPERATURE {
         (
             TreeKind::Pine,
             16 + (growth * 9.0) as i64,

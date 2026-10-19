@@ -56,6 +56,16 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                 continue;
             }
             let (biome, temperature) = (columns.biome(x, z), columns.temperature(x, z));
+            // snow lies deep, in full blocks, with the packed stone only beneath it
+            let snowy = column_block(
+                biomes,
+                biome,
+                column_height - 1,
+                column_height,
+                gradient,
+                temperature,
+                water_top,
+            ) == BlockType::Snow;
             let (world_x, world_z) = (chunk_pos.0.x * size + x, chunk_pos.0.z * size + z);
             cells.extend((world_y..world_y + size).map(|y| {
                 let block = under_grass(
@@ -71,6 +81,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                     y,
                     column_height,
                     1,
+                    snowy,
                 );
                 // cliffs are cut from the ground before the water fills what they open
                 if cliff == 0.0 || (y - column_height).abs() > bulge {
