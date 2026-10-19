@@ -190,6 +190,7 @@ impl Canopy {
                     block: BlockType::Leaves,
                     tint: tint / count,
                     faces: BoxFaces::NoBottom,
+                    taper: 0.0,
                 });
             }
         }

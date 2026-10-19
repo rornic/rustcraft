@@ -21,6 +21,7 @@ use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::Tree;
 use crate::chunks::generate::trees::TreeGround;
+use crate::chunks::generate::trees::TreeKind;
 use crate::chunks::generate::trees::TreeTints;
 use crate::chunks::generate::trees::THIN_TRUNK_CELL;
 use crate::chunks::generate::WATER_LEVEL;
@@ -33,6 +34,10 @@ use std::cell::LazyCell;
 use std::sync::Arc;
 
 pub(super) const SKIRT_CELLS: i32 = 2;
+
+// How far the tops of crown boxes are drawn in: a ball's, and a pine's nearer a cone's.
+const CROWN_TAPER: f32 = 0.5;
+const PINE_TAPER: f32 = 0.8;
 
 pub(super) struct LodBlocks {
     pub(super) size: i32,
@@ -247,6 +252,7 @@ impl LodBlocks {
                                 block: BlockType::Log,
                                 tint: Vec3::ONE,
                                 faces: BoxFaces::Sides,
+                                taper: 0.0,
                             });
                         }
                         if cell >= BOX_CROWN_CELL {
@@ -257,6 +263,10 @@ impl LodBlocks {
                                     block: BlockType::Leaves,
                                     tint: tree.tint(),
                                     faces: BoxFaces::All,
+                                    taper: match tree.kind {
+                                        TreeKind::Broadleaf => CROWN_TAPER,
+                                        TreeKind::Pine => PINE_TAPER,
+                                    },
                                 });
                             }
                         }
