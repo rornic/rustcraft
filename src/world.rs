@@ -68,7 +68,19 @@ impl World {
     /// A world over `terrain`, spawning on its nearest lowland.
     pub fn with_terrain(seed: u32, region_distance: u32, terrain: Arc<dyn TerrainSource>) -> Self {
         let height = WORLD_HEIGHT;
-        let (spawn_x, spawn_z, spawn_height) = terrain.find_spawn();
+        let (mut spawn_x, mut spawn_z, mut spawn_height) = terrain.find_spawn();
+        // RC_SPAWN=x,z starts the player there, for looking at a place by its coordinates
+        if let Some((x, z)) = std::env::var("RC_SPAWN")
+            .ok()
+            .and_then(|s| {
+                s.split_once(',')
+                    .map(|(x, z)| (x.trim().parse().ok(), z.trim().parse().ok()))
+            })
+            .and_then(|(x, z): (Option<i64>, Option<i64>)| Some((x?, z?)))
+        {
+            (spawn_x, spawn_z) = (x, z);
+            spawn_height = terrain.sample(x as f64, z as f64).height;
+        }
         let region_distance_blocks = region_distance as i64 * CHUNK_SIZE as i64;
         Self {
             seed,

@@ -37,7 +37,7 @@ pub struct Player;
 
 // Blocks a second, and how much faster while Shift is held.
 const MOVE_SPEED: f32 = 20.0;
-const SPRINT_MULTIPLIER: f32 = 4.0;
+const SPRINT_MULTIPLIER: f32 = 8.0;
 const LOOK_SENSITIVITY: f32 = 0.1;
 
 type PlayerCamera<'a> = (&'a ChildOf, &'a mut Transform);

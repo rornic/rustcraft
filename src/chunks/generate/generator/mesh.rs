@@ -35,15 +35,15 @@ pub(super) fn mesh_blocks(
     let mut inner_leaves = MeshBuffers::default();
 
     // water's surface sits below a full block's height, see `WATER_TOP`
-    let water_top = 0.5 - (0.5 - WATER_TOP) / cell_size as f32;
-    let water_faces = CUBE.map(|face| {
-        face.map(|mut v| {
+    let lowering = (0.5 - WATER_TOP) / cell_size as f32;
+    let water_face = |i: usize, top: f32| {
+        CUBE[i].map(|mut v| {
             if v.position[1] == 0.5 {
-                v.position[1] = water_top;
+                v.position[1] = top;
             }
             v
         })
-    });
+    };
 
     // columns' water depths, shared between the corners that sample them
     let mut depths = HashMap::new();
@@ -65,6 +65,11 @@ pub(super) fn mesh_blocks(
             continue;
         }
 
+        // shallow water in a coarse cell is drawn to its real surface, not the cell's top
+        let top = source
+            .water_surface_top(block_coord)
+            .map_or(0.5 - lowering, |top| (top - lowering).max(-0.45));
+        let water_faces: [_; 6] = std::array::from_fn(|i| water_face(i, top));
         for (i, offset) in FACE_NORMAL_OFFSET.into_iter().enumerate() {
             let neighbour = source.block(block_coord + offset);
             if !matches!(neighbour, BlockType::Air | BlockType::Leaves) && !neighbour.is_flora() {

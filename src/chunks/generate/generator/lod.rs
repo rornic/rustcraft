@@ -166,7 +166,7 @@ impl LodBlocks {
         for cx in -1..=size {
             for cz in -1..=size {
                 let exact_height = grid.height(cx, cz);
-                let height = exact_height.round() as i64;
+                let height = grid.ground_top(cx, cz);
                 ground_heights[Self::column(size, cx, cz)] = exact_height as f32;
                 (lowest, highest) = (lowest.min(height), highest.max(height));
                 let gradient = grid.gradient(cx, cz);
@@ -328,7 +328,7 @@ impl LodBlocks {
                 let world_x = base.x + cx as i64 * cell + cell / 2;
                 let world_z = base.z + cz as i64 * cell + cell / 2;
                 let exact_height = heights.height(world_x, world_z);
-                let column_height = exact_height.round() as i64;
+                let column_height = heights.ground_top(world_x, world_z);
                 ground_heights[Self::column(size, cx, cz)] = exact_height as f32;
                 (lowest, highest) = (lowest.min(column_height), highest.max(column_height));
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
@@ -428,6 +428,22 @@ impl LodBlocks {
         bottom < top && top < bottom + self.cell && is_solid(self.raw(coord))
     }
 
+    // The water's real surface in the cell it ends in, when that's under the cell's top.
+    pub(super) fn find_water_surface_top(&self, coord: IVec3) -> Option<f32> {
+        if self.raw(coord) != BlockType::Water || self.raw(coord + IVec3::Y) == BlockType::Water {
+            return None;
+        }
+        let column = Self::column(
+            self.size,
+            coord.x.clamp(-1, self.size),
+            coord.z.clamp(-1, self.size),
+        );
+        let top = *self.water_tops.get(column)?;
+        let bottom = self.base_y + coord.y as i64 * self.cell;
+        (bottom < top && top < bottom + self.cell)
+            .then(|| (top - bottom) as f32 / self.cell as f32 - 0.5)
+    }
+
     pub(super) fn surface_top(&self, coord: IVec3) -> Option<f32> {
         let coord = coord.clamp(IVec3::splat(-1), IVec3::splat(self.size));
         self.surface_tops[Self::index(self.size, coord)]
@@ -480,6 +496,10 @@ impl BlockSource for LodBlocks {
 
     fn surface_top(&self, coord: IVec3) -> Option<f32> {
         LodBlocks::surface_top(self, coord)
+    }
+
+    fn water_surface_top(&self, coord: IVec3) -> Option<f32> {
+        self.find_water_surface_top(coord)
     }
 
     fn has_surface_tops(&self) -> bool {
@@ -652,7 +672,27 @@ fn fill_column(
         let mut block = under_grass(block_at(middle), middle, height, cell, false);
         block = freeze_cell(block, temperature, middle + cell / 2, (cell, water_top));
         if block == BlockType::Air && bottom < top {
-            block = block_at(top - 1);
+            // the ground's own block fills the cell, except under water, where the water drawn over
+            // sand is what's seen: shallow water, which a cell's middle misses, would turn to sand
+            block = if water_top > top && water_top > bottom {
+                freeze_cell(
+                    BlockType::Water,
+                    temperature,
+                    middle + cell / 2,
+                    (cell, water_top),
+                )
+            } else {
+                block_at(top - 1)
+            };
+        } else if block == BlockType::Air && water_top > bottom && water_top > top {
+            // water reaching less than halfway into a cell over the ground is still water there,
+            // drawn up to its real surface: left as air, the sand under it would show
+            block = freeze_cell(
+                BlockType::Water,
+                temperature,
+                middle + cell / 2,
+                (cell, water_top),
+            );
         }
         cells[LodBlocks::index(size, IVec3::new(cx, cy, cz))] =
             underwater(block, bottom, cell, (height, water_top));

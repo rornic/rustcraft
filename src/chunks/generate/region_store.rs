@@ -160,6 +160,16 @@ pub struct HeightSampler<'a> {
     recent: Vec<(RegionCoord, Arc<Region>)>,
 }
 
+/// `ground` in whole blocks, kept a block under the water over it, if any.
+pub fn bed_top(ground: f32, surface: f32) -> i64 {
+    let top = ground.round() as i64;
+    if surface > ground {
+        top.min(surface.round() as i64 - 1)
+    } else {
+        top
+    }
+}
+
 impl HeightSampler<'_> {
     pub fn height(&mut self, world_x: i64, world_z: i64) -> f64 {
         let coord = RegionCoord::from_world(world_x, world_z);
@@ -188,6 +198,16 @@ impl HeightSampler<'_> {
         } else {
             WATER_LEVEL
         }
+    }
+
+    /// The top block of the ground in whole blocks, kept under the water over it: a bed a hair under
+    /// a shallow lake's surface would round up level with it, and the water be lost as dry sand.
+    pub fn ground_top(&mut self, world_x: i64, world_z: i64) -> i64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        let region = self.region(coord);
+        let (x, z) = (world_x - origin.x, world_z - origin.y);
+        bed_top(region.height_at(x, z), region.water_at(x, z))
     }
 
     pub fn trees(&mut self, world_x: i64, world_z: i64) -> f64 {

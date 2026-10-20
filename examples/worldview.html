@@ -1,0 +1,135 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>worldview</title>
+<style>
+  body { margin: 0; display: flex; height: 100vh; font: 13px monospace; background: #111; color: #ddd; }
+  #side { width: 300px; padding: 8px; overflow-y: auto; box-sizing: border-box; }
+  #view { flex: 1; position: relative; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+  .layer { display: flex; align-items: center; gap: 4px; }
+  .layer input[type=range] { width: 80px; }
+  pre { white-space: pre-wrap; margin: 4px 0; }
+  input[type=number] { width: 70px; }
+  #pos { position: absolute; left: 6px; bottom: 6px; background: #000a; padding: 2px 6px; }
+</style>
+<div id="side">
+  <div>seed <input id="seed" type="number" value="42"> <button id="gen">generate</button></div>
+  <div id="status"></div>
+  <h4>layers (top draws last)</h4>
+  <div id="layers"></div>
+  <h4>view</h4>
+  <div>x <input id="vx" type="number"> z <input id="vz" type="number"> <button id="go">go</button></div>
+  <div>scale <span id="scale"></span> blocks/px. wheel zooms, drag pans, click inspects. x east, z south.</div>
+  <h4>export</h4>
+  <div>w <input id="ew" type="number" value="1024"> h <input id="eh" type="number" value="1024"></div>
+  <div>scale <input id="es" type="number" step="any" min="0.25"> <button id="fit">fit view</button></div>
+  <div><button id="export">export png</button> (centred on the view)</div>
+  <pre id="exported"></pre>
+  <h4>info</h4>
+  <pre id="info">click the map</pre>
+</div>
+<div id="view"><canvas id="c"></canvas><div id="pos"></div></div>
+<script>
+const LAYERS = [
+  ["height", 1], ["blocks", 0], ["biomes", 0], ["trees", 0], ["temperature", 0], ["moisture", 0],
+  ["continentalness", 0], ["roughness", 0], ["range", 0], ["flow", 0],
+  ["hillshade", 1], ["contours", 0], ["water", 0.6], ["waterlevel", 0], ["flowdir", 0],
+  ["features", 0], ["cells", 0],
+];
+const on = {}, alpha = {};
+const q = new URLSearchParams(location.search);
+const saved = q.get("layers");
+for (const [n, d] of LAYERS) { on[n] = d > 0; alpha[n] = d || 1; }
+if (saved) { for (const n in on) on[n] = false; for (const p of saved.split(",")) { const [n, a] = p.split(":"); on[n] = true; alpha[n] = +a || 1; } }
+const $ = id => document.getElementById(id);
+let seed = +(q.get("seed") ?? 42), view = { x: +(q.get("x") ?? 0), z: +(q.get("z") ?? 0), scale: +(q.get("scale") ?? 64) };
+$("seed").value = seed;
+const c = $("c"), g = c.getContext("2d");
+const T = 256, tiles = new Map();
+
+function layerParam() { return LAYERS.filter(([n]) => on[n]).map(([n]) => n + (alpha[n] < 1 ? ":" + alpha[n] : "")).join(","); }
+function box() { return c.getBoundingClientRect(); }
+
+for (const [n] of LAYERS) {
+  const d = document.createElement("div"); d.className = "layer";
+  d.innerHTML = `<input type=checkbox id=on-${n}><label for=on-${n} style="width:110px">${n}</label><input type=range id=a-${n} min=0.1 max=1 step=0.05>`;
+  $("layers").appendChild(d);
+  $("on-" + n).checked = on[n]; $("a-" + n).value = alpha[n];
+  $("on-" + n).onchange = e => { on[n] = e.target.checked; tiles.clear(); draw(); };
+  $("a-" + n).onchange = e => { alpha[n] = +e.target.value; tiles.clear(); draw(); };
+}
+
+function tile(i, j, s, lp) {
+  const url = `/tile?seed=${seed}&layers=${encodeURIComponent(lp)}&x=${i * T * s}&z=${j * T * s}&scale=${s}&size=${T}`;
+  let t = tiles.get(url);
+  if (!t) {
+    t = new Image(); t.onload = draw; t.src = url; tiles.set(url, t);
+    if (tiles.size > 600) tiles.delete(tiles.keys().next().value);
+  }
+  return t;
+}
+
+function draw() {
+  const b = box(); c.width = b.width; c.height = b.height;
+  g.fillStyle = "#181818"; g.fillRect(0, 0, c.width, c.height);
+  const s = view.scale, lp = layerParam();
+  const x0 = view.x - c.width / 2 * s, z0 = view.z - c.height / 2 * s;
+  for (let j = Math.floor(z0 / (T * s)); j * T * s < z0 + c.height * s; j++)
+    for (let i = Math.floor(x0 / (T * s)); i * T * s < x0 + c.width * s; i++) {
+      const t = tile(i, j, s, lp);
+      if (t.complete && t.naturalWidth) g.drawImage(t, Math.round((i * T * s - x0) / s), Math.round((j * T * s - z0) / s));
+    }
+  $("scale").textContent = s; $("vx").value = Math.round(view.x); $("vz").value = Math.round(view.z);
+}
+
+const toWorld = e => { const b = box(); return [view.x + (e.clientX - b.left - b.width / 2) * view.scale, view.z + (e.clientY - b.top - b.height / 2) * view.scale]; };
+let drag = null;
+c.onmousedown = e => { drag = { sx: e.clientX, sy: e.clientY, x: view.x, z: view.z, moved: false }; };
+window.onmouseup = e => {
+  if (drag && !drag.moved && e.target === c) inspect(...toWorld(e));
+  drag = null;
+};
+window.onmousemove = e => {
+  if (drag) {
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (drag.moved) { view.x = drag.x - dx * view.scale; view.z = drag.z - dy * view.scale; draw(); }
+  }
+  if (e.target === c) { const [x, z] = toWorld(e); $("pos").textContent = `x ${Math.floor(x)}  z ${Math.floor(z)}`; }
+};
+c.onwheel = e => {
+  e.preventDefault();
+  const [wx, wz] = toWorld(e), old = view.scale;
+  view.scale = Math.min(256, Math.max(0.25, e.deltaY < 0 ? old / 2 : old * 2));
+  const k = view.scale / old, b = box();
+  view.x = wx - (wx - view.x) * k; view.z = wz - (wz - view.z) * k;
+  draw();
+};
+window.onresize = draw;
+$("go").onclick = () => { view.x = +$("vx").value; view.z = +$("vz").value; draw(); };
+$("gen").onclick = () => { seed = +$("seed").value; start(); };
+$("fit").onclick = () => { const b = box(); $("ew").value = Math.round(b.width); $("eh").value = Math.round(b.height); $("es").value = view.scale; };
+
+async function inspect(x, z) {
+  $("info").textContent = "...";
+  $("info").textContent = await (await fetch(`/info?seed=${seed}&x=${Math.floor(x)}&z=${Math.floor(z)}`)).text();
+}
+
+$("export").onclick = async () => {
+  const w = +$("ew").value, h = +$("eh").value, s = +$("es").value || view.scale;
+  const url = `/export?seed=${seed}&layers=${encodeURIComponent(layerParam())}&x=${view.x - w / 2 * s}&z=${view.z - h / 2 * s}&w=${w}&h=${h}&scale=${s}`;
+  $("exported").textContent = "rendering...";
+  const r = await fetch(url), path = r.headers.get("X-Path");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob());
+  a.download = path.split("/").pop(); a.click();
+  $("exported").textContent = "saved " + path;
+};
+
+async function start() {
+  $("status").textContent = "generating seed " + seed + " (a few seconds)...";
+  await fetch("/seed?seed=" + seed);
+  $("status").textContent = "seed " + seed; tiles.clear(); draw();
+}
+$("es").value = view.scale;
+start();
+</script>

@@ -6,7 +6,7 @@ use super::{WaterCell, WorldMap, NEIGHBOURS, NO_FLOW};
 
 // Cells searched round a point for river segments: a segment runs one cell, and a wide river
 // reaches further than a cell either side of its line.
-const SEARCH: i64 = 2;
+const SEARCH: i64 = 3;
 // Straight pieces a river's curve between two cells is measured as.
 const CURVE_PIECES: usize = 8;
 
@@ -22,15 +22,103 @@ pub struct RiverHit {
     pub bed: f32,
 }
 
+// Points a river's water level is worked out at along each stretch between two cells, which is
+// every few blocks: the ground it must lie under is looked at there, not once a cell.
+pub(super) const PROFILE_POINTS: usize = 8;
+// How far a river's level may sit over the lake or sea it runs into, a block of height for each
+// 20 blocks it runs back from them, and how far above that it may be and still be brought down.
+const MOUTH_SLOPE: f32 = 0.05;
+const MOUTH_DROP: f32 = 8.0;
+// The most, in blocks, a river is dug under the ground at its middle to stay under its banks.
+const MAX_CUT: f64 = 6.0;
+// Steps along a stretch a river into a lake looks for the shore in.
+const SHORE_STEPS: usize = 60;
+// How far, in cells, a river runs on past the centre of the water it drains into.
+const MOUTH_REACH: f64 = 0.75;
+// How many cells back from its mouth a river is brought down to the water it runs into.
+const MOUTH_CELLS: usize = 6;
+// Lakes beside each other within this many blocks in level are one water, at the lowest.
+const LAKE_LEVEL_MERGE: f32 = 2.0;
+// How steeply, in blocks of height a block, a river comes down from the lake it leaves.
+const OUTLET_SLOPE: f32 = 0.25;
+
+/// How far under the ground beside it a river's water lies, and its banks stand over it at its
+/// edge: up to a block, less for the narrowest streams, which would be cut far too deep.
+pub(super) fn freeboard(width: f32) -> f32 {
+    (width * 0.25).clamp(0.2, 1.0)
+}
+
 /// How deep, in blocks, a river `width` blocks across is.
 pub fn depth_for_width(width: f32) -> f32 {
     // depth grows with width the way `river_depth` does with `river_width`, near enough
     (0.6 + (width - 1.2).max(0.0) / 3.0).min(12.0)
 }
 
+/// A river's course between two cells: a smooth curve through their centres, see `river_tangents`.
+#[derive(Debug, Copy, Clone)]
+pub(super) struct Stretch {
+    from: usize,
+    to: usize,
+    a: (f64, f64),
+    b: (f64, f64),
+    m0: [f64; 2],
+    m1: [f64; 2],
+    width: f32,
+    end_width: f32,
+    into_river: bool,
+}
+
+impl Stretch {
+    /// The curve `t` of the way along, 0..1.
+    pub(super) fn point(&self, t: f64) -> (f64, f64) {
+        let (t2, t3) = (t * t, t * t * t);
+        let (h00, h10, h01, h11) = (
+            2.0 * t3 - 3.0 * t2 + 1.0,
+            t3 - 2.0 * t2 + t,
+            -2.0 * t3 + 3.0 * t2,
+            t3 - t2,
+        );
+        (
+            h00 * self.a.0 + h10 * self.m0[0] + h01 * self.b.0 + h11 * self.m1[0],
+            h00 * self.a.1 + h10 * self.m0[1] + h01 * self.b.1 + h11 * self.m1[1],
+        )
+    }
+
+    pub(super) fn width_at(&self, t: f64) -> f32 {
+        self.width + (self.end_width - self.width) * t as f32
+    }
+}
+
+/// Each river stretch's water level every few blocks along it, see `PROFILE_POINTS`.
+#[derive(Default)]
+pub struct RiverProfiles {
+    // the stretch's profile in `data` by the cell it starts in
+    index: Vec<u32>,
+    data: Vec<[f32; PROFILE_POINTS + 1]>,
+    // how far along the stretch, 0..1, a river that runs into a lake reaches: its curve goes on
+    // past the shore, over land, which would leave a stub of channel there
+    ends: Vec<f32>,
+}
+
+impl RiverProfiles {
+    const NONE: u32 = u32::MAX;
+
+    /// The level of the water `t` of the way along the stretch from `cell`, 0..1.
+    fn end(&self, cell: usize) -> f32 {
+        self.ends[self.index[cell] as usize]
+    }
+
+    fn level(&self, cell: usize, t: f32) -> f32 {
+        let profile = &self.data[self.index[cell] as usize];
+        let at = t.clamp(0.0, 1.0) * PROFILE_POINTS as f32;
+        let k = (at as usize).min(PROFILE_POINTS - 1);
+        profile[k] + (profile[k + 1] - profile[k]) * (at - k as f32)
+    }
+}
+
 impl WorldMap {
     // The cell a river cell drains into, if it has one.
-    fn downstream(&self, cx: usize, cz: usize) -> Option<(usize, usize)> {
+    pub(super) fn downstream(&self, cx: usize, cz: usize) -> Option<(usize, usize)> {
         match self.down[self.index(cx, cz)] {
             NO_FLOW => None,
             d => {
@@ -91,68 +179,349 @@ impl WorldMap {
     }
 
     /// The river whose water or banks are nearest (`x`, `z`), if one is within a few cells.
-    pub fn river_at(&self, tangents: &[[f32; 2]], x: f64, z: f64) -> Option<RiverHit> {
-        self.river_hits(tangents, x, z)[0]
+    pub fn river_at(
+        &self,
+        tangents: &[[f32; 2]],
+        profiles: &RiverProfiles,
+        x: f64,
+        z: f64,
+    ) -> Option<RiverHit> {
+        self.river_hits(tangents, profiles, x, z)[0]
+    }
+
+    /// The lake cell that drains into cell (`cx`, `cz`), if one does, or into a cell of dry land that
+    /// drains into it: the lake spills over a rim of ground, and the river starts below.
+    fn outlet_lake(&self, cx: usize, cz: usize) -> Option<(usize, usize)> {
+        let dim = self.dim() as i64;
+        let feeders = |x: usize, z: usize| {
+            NEIGHBOURS
+                .iter()
+                .map(move |&(nx, nz)| (x as i64 + nx, z as i64 + nz))
+                .filter(move |&(ux, uz)| (0..dim).contains(&ux) && (0..dim).contains(&uz))
+                .map(|(ux, uz)| (ux as usize, uz as usize))
+                .filter(move |&(ux, uz)| self.downstream(ux, uz) == Some((x, z)))
+        };
+        let kind = |(x, z): (usize, usize)| self.water_kind[self.index(x, z)];
+        feeders(cx, cz).find_map(|u| {
+            if kind(u) == WaterCell::Lake as u8 {
+                Some(u)
+            } else if kind(u) == WaterCell::None as u8 {
+                feeders(u.0, u.1).find(|&w| kind(w) == WaterCell::Lake as u8)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// The course from river cell `i` to the one it drains into, if it has one.
+    pub(super) fn stretch(&self, tangents: &[[f32; 2]], i: usize) -> Option<Stretch> {
+        let dim = self.dim();
+        let (cx, cz) = (i % dim, i / dim);
+        let width = self.river_width[i];
+        if width <= 0.0 {
+            return None;
+        }
+        let (dx, dz) = self.downstream(cx, cz)?;
+        let j = self.index(dx, dz);
+        // a river runs on into the lake or sea at its mouth, at its own width
+        let into_river = self.water_kind[j] == WaterCell::River as u8;
+        let end_width = if into_river {
+            self.river_width[j]
+        } else {
+            width
+        };
+        let (mut a, mut b) = (self.cell_centre(cx, cz), self.cell_centre(dx, dz));
+        // whether a lake drains into this cell: the river is its outlet, and starts at the lake
+        let outlet = self.outlet_lake(cx, cz);
+        let (sx, sz) = (b.0 - a.0, b.1 - a.1);
+        let mut length = (sx * sx + sz * sz).sqrt();
+        let along = [(sx / length) as f32, (sz / length) as f32];
+        // a river runs on past the centre of the lake or sea cell it drains into, which may be on
+        // the land at the water's edge, so it reaches the water the land really lets in
+        let extra = self.config.map_cell as f64 * MOUTH_REACH;
+        if !into_river {
+            b = (b.0 + along[0] as f64 * extra, b.1 + along[1] as f64 * extra);
+            length += extra;
+        }
+        if let Some((ux, uz)) = outlet {
+            // from the middle of the lake cell that drains into it, so the river starts in the lake's
+            // water and not short of it, on the rim's ground
+            let from = self.cell_centre(ux, uz);
+            length += ((a.0 - from.0).powi(2) + (a.1 - from.1).powi(2)).sqrt();
+            a = from;
+        }
+        let t0 = tangents[i];
+        let t1 = if into_river { tangents[j] } else { along };
+        Some(Stretch {
+            from: i,
+            to: j,
+            a,
+            b,
+            m0: [t0[0] as f64 * length, t0[1] as f64 * length],
+            m1: [t1[0] as f64 * length, t1[1] as f64 * length],
+            width,
+            end_width,
+            into_river,
+        })
+    }
+
+    /// Water levels as the map has them, a straight run between each stretch's cells: what rivers
+    /// are drawn at before `build_river_profiles` sets them to the ground.
+    pub fn flat_river_profiles(&self, tangents: &[[f32; 2]]) -> RiverProfiles {
+        let mut profiles = RiverProfiles {
+            index: vec![RiverProfiles::NONE; self.height.len()],
+            data: Vec::new(),
+            ends: Vec::new(),
+        };
+        for i in 0..self.height.len() {
+            let Some(stretch) = self.stretch(tangents, i) else {
+                continue;
+            };
+            let end = if stretch.into_river {
+                self.water_surface[stretch.to]
+            } else {
+                self.water_surface[i]
+            };
+            let start = self.water_surface[i];
+            let mut data = [0.0; PROFILE_POINTS + 1];
+            for (k, level) in data.iter_mut().enumerate() {
+                *level = start + (end - start) * k as f32 / PROFILE_POINTS as f32;
+            }
+            profiles.index[i] = profiles.data.len() as u32;
+            profiles.data.push(data);
+            profiles.ends.push(1.0);
+        }
+        profiles
+    }
+
+    /// Each river stretch's water level every few blocks along it, held under the lowest of the
+    /// `ground` round that point (in the river's own bed and banks, and where its banks end) and
+    /// never rising downstream, so water is dug into the ground it runs over and no bank has to be built
+    /// up to hold it. `centre` moves a point on a stretch's curve to where the river is really drawn.
+    pub fn build_river_profiles(
+        &self,
+        tangents: &[[f32; 2]],
+        ground: &(dyn Fn(f64, f64) -> f64 + Sync),
+        centre: &(dyn Fn(f64, f64) -> (f64, f64) + Sync),
+        in_still_water: &(dyn Fn(f64, f64) -> bool + Sync),
+    ) -> RiverProfiles {
+        let dim = self.dim();
+        let stretches: Vec<Stretch> = (0..self.height.len())
+            .filter_map(|i| self.stretch(tangents, i))
+            .collect();
+        // how high the ground allows the water at each point along each stretch
+        let mut caps: Vec<[f32; PROFILE_POINTS + 1]> =
+            vec![[0.0; PROFILE_POINTS + 1]; stretches.len()];
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let per_thread = stretches.len().div_ceil(threads).max(1);
+        std::thread::scope(|scope| {
+            for (chunk, out) in stretches
+                .chunks(per_thread)
+                .zip(caps.chunks_mut(per_thread))
+            {
+                scope.spawn(move || {
+                    for (stretch, cap) in chunk.iter().zip(out.iter_mut()) {
+                        for (k, level) in cap.iter_mut().enumerate() {
+                            let t = k as f64 / PROFILE_POINTS as f64;
+                            let width = stretch.width_at(t);
+                            let (x, z) = centre(stretch.point(t).0, stretch.point(t).1);
+                            let reach = width as f64 / 2.0 + 1.0;
+                            let middle = ground(x, z);
+                            let mut lowest = middle;
+                            for (dx, dz) in
+                                [(reach, 0.0), (-reach, 0.0), (0.0, reach), (0.0, -reach)]
+                            {
+                                lowest = lowest.min(ground(x + dx, z + dz));
+                            }
+                            // a bank much lower than the middle doesn't dig the river in after it: the
+                            // water stands that far over it, and the bank is built up a little
+                            *level = lowest.max(middle - MAX_CUT) as f32 - freeboard(width);
+                        }
+                    }
+                });
+            }
+        });
+        // a river that leaves a lake starts at the lake's level and comes down from it, through the
+        // rim, so the two waters are joined and not parted by a bank of the rim's ground
+        let cell_blocks = self.config.map_cell as f32;
+        let mut from_lake = vec![false; stretches.len()];
+        for (n, stretch) in stretches.iter().enumerate() {
+            let (cx, cz) = (stretch.from % dim, stretch.from / dim);
+            // the lake that drains into this river's first cell, if one does
+            let Some((fx, fz)) = self.outlet_lake(cx, cz) else {
+                continue;
+            };
+            let feeder = self.index(fx, fz);
+            // the lake's water is a whole block, floored: the river's never rounds to more than it
+            let top = self.water_surface[feeder].floor();
+            from_lake[n] = true;
+            for (k, level) in caps[n].iter_mut().enumerate() {
+                let back = k as f32 / PROFILE_POINTS as f32 * cell_blocks;
+                *level = level.max(top - back * OUTLET_SLOPE).min(top + 0.49);
+            }
+        }
+        // a river runs down to the lake or sea it drains into over its last few cells, if it comes
+        // down to it: one far above it ends in a cliff or a fall
+        let at: std::collections::HashMap<usize, usize> = stretches
+            .iter()
+            .enumerate()
+            .map(|(n, s)| (s.from, n))
+            .collect();
+        for n in 0..stretches.len() {
+            let mut hops = 0;
+            let mut end = stretches[n];
+            let (still, surface) = loop {
+                let to = end.to;
+                if self.water_kind[to] == WaterCell::Lake as u8
+                    || self.water_kind[to] == WaterCell::Ocean as u8
+                {
+                    break (true, self.water_surface[to]);
+                }
+                hops += 1;
+                match at.get(&to) {
+                    Some(&next) if hops < MOUTH_CELLS => end = stretches[next],
+                    _ => break (false, 0.0),
+                }
+            };
+            if !still {
+                continue;
+            }
+            let cell = self.config.map_cell as f32;
+            for (k, level) in caps[n].iter_mut().enumerate() {
+                // blocks back from the mouth: the cells between, and what's left of this stretch
+                let back = (hops as f32 + 1.0 - k as f32 / PROFILE_POINTS as f32) * cell - cell;
+                let ramp = surface + back.max(0.0) * MOUTH_SLOPE;
+                if *level - ramp <= MOUTH_DROP {
+                    *level = level.min(ramp);
+                }
+            }
+        }
+        // downstream of every stretch that runs into it, a river never rises: work from the
+        // sources down
+        let mut inflow = vec![0u32; stretches.len()];
+        for s in &stretches {
+            if let Some(&next) = at.get(&s.to) {
+                inflow[next] += 1;
+            }
+        }
+        let mut ready: Vec<usize> = (0..stretches.len()).filter(|&n| inflow[n] == 0).collect();
+        let mut envelope = vec![f32::MAX; stretches.len()];
+        let mut profiles = RiverProfiles {
+            index: vec![RiverProfiles::NONE; self.height.len()],
+            data: vec![[0.0; PROFILE_POINTS + 1]; stretches.len()],
+            ends: vec![1.0; stretches.len()],
+        };
+        // a river into a lake or the sea ends where the land last gives way to the water, with a
+        // rounded end, and goes no further over the land beside it: a pocket of low ground inland of
+        // the shore doesn't count
+        for (n, stretch) in stretches.iter().enumerate() {
+            let into = self.water_kind[stretch.to];
+            if into != WaterCell::Lake as u8 && into != WaterCell::Ocean as u8 {
+                continue;
+            }
+            let wet = |step: usize| {
+                let t = step as f64 / SHORE_STEPS as f64;
+                let (x, z) = centre(stretch.point(t).0, stretch.point(t).1);
+                in_still_water(x, z)
+            };
+            if wet(SHORE_STEPS) {
+                let shore = (0..=SHORE_STEPS)
+                    .rev()
+                    .find(|&step| !wet(step))
+                    .unwrap_or(0);
+                profiles.ends[n] = ((shore + 3) as f32 / SHORE_STEPS as f32).min(1.0);
+            }
+        }
+        let _ = dim;
+        while let Some(n) = ready.pop() {
+            let stretch = stretches[n];
+            let mut level = envelope[n];
+            for k in 0..=PROFILE_POINTS {
+                level = level.min(caps[n][k]);
+                profiles.data[n][k] = level;
+            }
+            profiles.index[stretch.from] = n as u32;
+            if let Some(&next) = at.get(&stretch.to) {
+                envelope[next] = envelope[next].min(level);
+                inflow[next] -= 1;
+                if inflow[next] == 0 {
+                    ready.push(next);
+                }
+            }
+        }
+        // a stream that runs into a river comes down to the river's level over its last cells, so
+        // its water isn't left standing at its own over the river's, as a step beside it
+        let mut feeders: Vec<Vec<usize>> = vec![Vec::new(); stretches.len()];
+        for (n, stretch) in stretches.iter().enumerate() {
+            if let Some(&next) = at.get(&stretch.to) {
+                feeders[next].push(n);
+            }
+        }
+        let cell = self.config.map_cell as f32;
+        for next in 0..stretches.len() {
+            let target = profiles.data[next][0];
+            let mut level = vec![(0usize, 0.0f32); 0];
+            for &feeder in &feeders[next] {
+                level.push((feeder, 0.0));
+            }
+            let mut hops = 0;
+            while !level.is_empty() && hops < MOUTH_CELLS {
+                let mut up = Vec::new();
+                for (n, run) in level {
+                    // one that leaves a lake keeps the lake's level at its start
+                    if from_lake[n] {
+                        continue;
+                    }
+                    let mut lowered = false;
+                    for k in 0..=PROFILE_POINTS {
+                        let back = run + (1.0 - k as f32 / PROFILE_POINTS as f32) * cell;
+                        let ramp = target + back * MOUTH_SLOPE;
+                        let here = profiles.data[n][k];
+                        if here > ramp && here - ramp <= MOUTH_DROP {
+                            profiles.data[n][k] = ramp;
+                            lowered = true;
+                        }
+                    }
+                    if lowered {
+                        up.extend(feeders[n].iter().map(|&f| (f, run + cell)));
+                    }
+                }
+                level = up;
+                hops += 1;
+            }
+        }
+        profiles
     }
 
     /// The two nearest rivers' water or banks: the nearest, and the nearest that isn't another
     /// stretch of the same river. Where a stream joins a river the river's bank is the nearer, and
     /// the stream's water would be dropped a few blocks short of it if only the nearest counted.
-    /// Each stretch is a smooth curve through its cell and the next, see `river_tangents`.
-    pub fn river_hits(&self, tangents: &[[f32; 2]], x: f64, z: f64) -> [Option<RiverHit>; 2] {
+    pub fn river_hits(
+        &self,
+        tangents: &[[f32; 2]],
+        profiles: &RiverProfiles,
+        x: f64,
+        z: f64,
+    ) -> [Option<RiverHit>; 2] {
         let (u, v) = self.to_cell(x, z);
         let (px, pz) = (u.round() as i64, v.round() as i64);
         let max = self.dim() as i64 - 1;
         // each stretch near the point, as (margin, hit, the cell it starts in, the cell it runs to)
-        let mut stretches: Vec<(f32, RiverHit, usize, usize)> = Vec::new();
+        let mut found: Vec<(f32, RiverHit, usize, usize)> = Vec::new();
         for cz in (pz - SEARCH).max(0)..=(pz + SEARCH).min(max) {
             for cx in (px - SEARCH).max(0)..=(px + SEARCH).min(max) {
                 let i = self.index(cx as usize, cz as usize);
-                let width = self.river_width[i];
-                if width <= 0.0 {
+                let Some(stretch) = self.stretch(tangents, i) else {
+                    continue;
+                };
+                if profiles.index[i] == RiverProfiles::NONE {
                     continue;
                 }
-                let Some((dx, dz)) = self.downstream(cx as usize, cz as usize) else {
-                    continue;
-                };
-                let j = self.index(dx, dz);
-                // a river runs on into the lake or sea at its mouth, at its own width
-                let into_river = self.water_kind[j] == WaterCell::River as u8;
-                let (end_width, end_surface) = if into_river {
-                    (self.river_width[j], self.water_surface[j])
-                } else {
-                    (width, self.water_surface[i])
-                };
-                let (ax, az) = self.cell_centre(cx as usize, cz as usize);
-                let (bx, bz) = self.cell_centre(dx, dz);
-                let (sx, sz) = (bx - ax, bz - az);
-                let length = (sx * sx + sz * sz).sqrt();
-                let along = [(sx / length) as f32, (sz / length) as f32];
-                let t0 = tangents[i];
-                let t1 = if into_river { tangents[j] } else { along };
-                let (m0, m1) = (
-                    [t0[0] as f64 * length, t0[1] as f64 * length],
-                    [t1[0] as f64 * length, t1[1] as f64 * length],
-                );
                 // the curve as short straight pieces, and the nearest point on them
-                let point = |t: f64| {
-                    let (t2, t3) = (t * t, t * t * t);
-                    let (h00, h10, h01, h11) = (
-                        2.0 * t3 - 3.0 * t2 + 1.0,
-                        t3 - 2.0 * t2 + t,
-                        -2.0 * t3 + 3.0 * t2,
-                        t3 - t2,
-                    );
-                    (
-                        h00 * ax + h10 * m0[0] + h01 * bx + h11 * m1[0],
-                        h00 * az + h10 * m0[1] + h01 * bz + h11 * m1[1],
-                    )
-                };
                 let (mut best_d2, mut best_t) = (f64::MAX, 0.0);
-                let mut last = point(0.0);
+                let mut last = stretch.point(0.0);
                 for k in 1..=CURVE_PIECES {
-                    let t_end = k as f64 / CURVE_PIECES as f64;
-                    let next = point(t_end);
+                    let next = stretch.point(k as f64 / CURVE_PIECES as f64);
                     let (ex, ez) = (next.0 - last.0, next.1 - last.1);
                     let len2 = (ex * ex + ez * ez).max(1e-9);
                     let f = (((x - last.0) * ex + (z - last.1) * ez) / len2).clamp(0.0, 1.0);
@@ -164,10 +533,21 @@ impl WorldMap {
                     }
                     last = next;
                 }
+                // a river into a lake stops at its shore, with a rounded end, not on over the land past it
+                let end = profiles.end(i) as f64;
+                if best_t > end {
+                    let (ex, ez) = stretch.point(end);
+                    best_d2 = (x - ex) * (x - ex) + (z - ez) * (z - ez);
+                    best_t = end;
+                    // and no banks round that end: they would be a bar across the mouth
+                    let half = stretch.width_at(end) as f64 / 2.0;
+                    if best_d2 > half * half {
+                        continue;
+                    }
+                }
                 let distance = best_d2.sqrt() as f32;
-                let t = best_t as f32;
-                let width = width + (end_width - width) * t;
-                let surface = self.water_surface[i] + (end_surface - self.water_surface[i]) * t;
+                let width = stretch.width_at(best_t);
+                let surface = profiles.level(i, best_t as f32);
                 // nearest the water first, not the centre line, so a wide river wins over a narrow one
                 let margin = distance - width / 2.0;
                 let hit = RiverHit {
@@ -182,15 +562,15 @@ impl WorldMap {
                             depth_for_width(width)
                         },
                 };
-                stretches.push((margin, hit, i, j));
+                found.push((margin, hit, i, stretch.to));
             }
         }
-        let nearest = stretches.iter().min_by(|a, b| a.0.total_cmp(&b.0)).copied();
+        let nearest = found.iter().min_by(|a, b| a.0.total_cmp(&b.0)).copied();
         let Some((_, first, from, to)) = nearest else {
             return [None, None];
         };
         // not the stretch before or after the nearest one, which is the same river
-        let other = stretches
+        let other = found
             .iter()
             .filter(|s| s.2 != from && s.2 != to && s.3 != from)
             .min_by(|a, b| a.0.total_cmp(&b.0))
@@ -198,22 +578,84 @@ impl WorldMap {
         [Some(first), other]
     }
 
-    /// The surface of the lake over (`x`, `z`) if the ground, `ground` high, is under it.
-    pub fn lake_at(&self, x: f64, z: f64, ground: f32) -> Option<f32> {
+    /// How much of what's round a point is sea cells, 0..1, smooth across cells.
+    pub fn ocean_cover(&self, x: f64, z: f64) -> f64 {
+        let (u, v) = self.to_cell(x, z);
+        let (cx, cz) = (u.floor() as i64, v.floor() as i64);
+        let (fx, fz) = (u - u.floor(), v - v.floor());
+        let max = self.dim() as i64 - 1;
+        let mut cover = 0.0;
+        for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let i = self.index(
+                (cx + dx).clamp(0, max) as usize,
+                (cz + dz).clamp(0, max) as usize,
+            );
+            if self.water_kind[i] == WaterCell::Ocean as u8 {
+                cover +=
+                    (if dx == 0 { 1.0 - fx } else { fx }) * (if dz == 0 { 1.0 - fz } else { fz });
+            }
+        }
+        cover
+    }
+
+    /// The lake with most say over (`x`, `z`): its surface, and how much of what's round the point
+    /// is lake cells of it, 0..1, so 0.5 is its shore.
+    /// The level of the lake whose cell is nearest a point, among the four cells round it: the water
+    /// there stands at it wherever the ground is under it. Further out, beyond a lake's rim, the
+    /// ground falls away, and water standing there would be a wall over it.
+    pub fn lake_level(&self, x: f64, z: f64) -> Option<f32> {
         let (u, v) = self.to_cell(x, z);
         let (cx, cz) = (u.floor() as i64, v.floor() as i64);
         let max = self.dim() as i64 - 1;
-        let mut surface = f32::MIN;
+        let mut lakes: Vec<(f64, f32)> = Vec::new();
+        for dz in 0..=1i64 {
+            for dx in 0..=1i64 {
+                let i = self.index(
+                    (cx + dx).clamp(0, max) as usize,
+                    (cz + dz).clamp(0, max) as usize,
+                );
+                if self.water_kind[i] == WaterCell::Lake as u8 {
+                    let (ox, oz) = ((cx + dx) as f64 - u, (cz + dz) as f64 - v);
+                    lakes.push((ox * ox + oz * oz, self.water_surface[i]));
+                }
+            }
+        }
+        let nearest = lakes.iter().min_by(|a, b| a.0.total_cmp(&b.0))?.1;
+        // lakes a little apart in level beside each other share the lowest: water over ground under both
+        // can't stand higher on one side of a cell's edge, as a step in the lake
+        lakes
+            .iter()
+            .map(|l| l.1)
+            .filter(|s| (s - nearest).abs() < LAKE_LEVEL_MERGE)
+            .reduce(f32::min)
+    }
+
+    pub fn lake_cover(&self, x: f64, z: f64) -> Option<(f32, f64)> {
+        let (u, v) = self.to_cell(x, z);
+        let (cx, cz) = (u.floor() as i64, v.floor() as i64);
+        let (fx, fz) = (u - u.floor(), v - v.floor());
+        let max = self.dim() as i64 - 1;
+        // the lake of the cell with most say here: another at another level beside it, over a
+        // rim, has its own water
+        let mut lakes = Vec::new();
         for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
             let i = self.index(
                 (cx + dx).clamp(0, max) as usize,
                 (cz + dz).clamp(0, max) as usize,
             );
             if self.water_kind[i] == WaterCell::Lake as u8 {
-                surface = surface.max(self.water_surface[i]);
+                let weight =
+                    (if dx == 0 { 1.0 - fx } else { fx }) * (if dz == 0 { 1.0 - fz } else { fz });
+                lakes.push((self.water_surface[i], weight));
             }
         }
-        (surface > f32::MIN && ground < surface).then_some(surface)
+        let surface = lakes.iter().max_by(|a, b| a.1.total_cmp(&b.1))?.0;
+        let cover = lakes
+            .iter()
+            .filter(|l| (l.0 - surface).abs() < 0.01)
+            .map(|l| l.1)
+            .sum();
+        Some((surface, cover))
     }
 }
 
@@ -264,7 +706,8 @@ mod tests {
         assert!(before[0] > 0.99);
         // the curve still passes through the corner's centre, so the river keeps its course
         let (cx, cz) = map.cell_centre(15, 10);
-        assert!(map.river_at(&tangents, cx, cz).unwrap().distance < 0.01);
+        let profiles = map.flat_river_profiles(&tangents);
+        assert!(map.river_at(&tangents, &profiles, cx, cz).unwrap().distance < 0.01);
     }
 
     #[test]
@@ -286,8 +729,11 @@ mod tests {
         map.water_kind[i] = WaterCell::Ocean as u8;
         let (x, z) = map.cell_centre(8, 10);
         let tangents = map.river_tangents();
-        let on = map.river_at(&tangents, x + 7.0, z + 3.0).unwrap();
+        let profiles = map.flat_river_profiles(&tangents);
+        let on = map
+            .river_at(&tangents, &profiles, x + 7.0, z + 3.0)
+            .unwrap();
         assert!((on.distance - 3.0).abs() < 1e-3 && on.width == 8.0);
-        assert!(map.river_at(&tangents, x, z + 200.0).is_none());
+        assert!(map.river_at(&tangents, &profiles, x, z + 200.0).is_none());
     }
 }

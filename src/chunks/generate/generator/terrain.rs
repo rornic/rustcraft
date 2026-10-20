@@ -122,7 +122,8 @@ pub(super) fn terrain_block(
             || (above_water >= 2 && combined_gradient >= 3.5)
         {
             BlockType::Stone
-        } else if above_water >= 2 {
+        } else if above_water >= 2 || water_top > WATER_LEVEL {
+            // only the sea has beaches: ground by a river or lake is grass
             if temperature < SNOWY_GRASS_TEMPERATURE && world_y == column_height - 1 {
                 BlockType::Snow
             } else {
@@ -197,6 +198,8 @@ pub(super) fn cut_cliff(
     water_top: i64,
 ) -> BlockType {
     match (solid, is_solid(block)) {
+        // cliffs build up only into air: water stays water
+        (true, false) if matches!(block, BlockType::Water | BlockType::Ice) => block,
         (true, false) => BlockType::Stone,
         (false, true) => {
             if y < water_top {
@@ -252,4 +255,18 @@ pub(in crate::chunks::generate) fn column_block(
         water_top,
     );
     biomes.block(biome, base, world_y - WATER_LEVEL, combined_gradient)
+}
+
+// The block on top of a column as chunk generation lays it, water and ice included: for tools that map the world.
+pub fn surface_block(
+    biomes: &Biomes,
+    biome: BiomeId,
+    seed: u32,
+    (x, z): (i64, i64),
+    (ground, water_top): (i64, i64),
+    gradient: f64,
+    temperature: f32,
+) -> BlockType {
+    let slope = block_gradient(biomes, biome, seed, x, z, gradient);
+    column_block(biomes, biome, ground.max(water_top) - 1, ground, slope, temperature, water_top)
 }
