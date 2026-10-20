@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::biome::BiomeId;
-use super::region_store::HeightSampler;
+use super::region_store::{bed_top, HeightSampler};
 use super::terrain_source::{TerrainSource, WaterKind};
 use super::WATER_LEVEL;
 use crate::chunks::chunk::CHUNK_SIZE;
@@ -110,6 +110,12 @@ impl ColumnGrid {
         self.heights[Self::index(cx, cz)] as f64
     }
 
+    /// The top block of the ground at the centre of the cell, kept under the water over it.
+    pub fn ground_top(&self, cx: i32, cz: i32) -> i64 {
+        let index = Self::index(cx, cz);
+        bed_top(self.heights[index], self.water[index])
+    }
+
     /// The slope there, as `terrain_block` takes it: the height change across two blocks
     /// each way, summed, measured between the cells either side.
     pub fn gradient(&self, cx: i32, cz: i32) -> f64 {
@@ -164,7 +170,7 @@ impl ChunkColumns {
         for cx in 0..size {
             for cz in 0..size {
                 let (world_x, world_z) = (x * size + cx, z * size + cz);
-                let height = heights.height(world_x, world_z).round() as i64;
+                let height = heights.ground_top(world_x, world_z);
                 let (gradient_x, gradient_z) = heights.gradient(world_x, world_z);
                 columns.heights.push(height);
                 columns.gradients.push(gradient_x.abs() + gradient_z.abs());

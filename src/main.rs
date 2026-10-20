@@ -3,6 +3,7 @@ use rustcraft::settings::Settings;
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
+use bevy::pbr::ScreenSpaceTransmission;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
 use bevy::prelude::*;
@@ -85,8 +86,8 @@ fn setup_scene(
             },
             // TAA for the thin faces and one-block steps that shimmer at a distance
             Msaa::Off,
-            DepthPrepass,
-            MotionVectorPrepass,
+            // the transmission copy of the scene is what fresh water refracts and reflects
+            (DepthPrepass, MotionVectorPrepass, ScreenSpaceTransmission::default()),
             TemporalAntiAliasing::default(),
             DistanceFog {
                 color: Color::NONE.with_alpha(FOG_MAX_OPACITY),

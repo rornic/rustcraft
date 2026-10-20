@@ -296,6 +296,12 @@ impl Material for WaterMaterial {
         }
     }
 
+    // fresh water shows the scene under it through ripples and reflects the world about it, so reads
+    // a copy of the opaque scene, and is drawn after it
+    fn reads_view_transmission_texture(&self) -> bool {
+        !self.solid
+    }
+
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,

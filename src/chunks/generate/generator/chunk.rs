@@ -9,7 +9,7 @@ use crate::chunks::chunk::ChunkData;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
-use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::region_store::{HeightSampler, RegionStore};
 use crate::chunks::generate::terrain_source::TerrainSource;
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
@@ -26,7 +26,31 @@ use std::sync::Arc;
 // dunes.
 const DESERT_CLIFFS_ABOVE: i64 = 90;
 
+// Which of the passes laid over the terrain's blocks run, so a tool can tell which one made a block.
+#[derive(Clone, Copy, Debug)]
+pub struct ChunkPasses {
+    pub cliffs: bool,
+    pub trees: bool,
+    pub flora: bool,
+}
+
+impl ChunkPasses {
+    pub const ALL: Self = Self {
+        cliffs: true,
+        trees: true,
+        flora: true,
+    };
+}
+
 pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> ChunkData {
+    generate_chunk_with(regions, chunk_pos, ChunkPasses::ALL)
+}
+
+pub fn generate_chunk_with(
+    regions: Arc<RegionStore>,
+    chunk_pos: ChunkCoordinate,
+    passes: ChunkPasses,
+) -> ChunkData {
     let mut heights = regions.sampler();
     let biomes = regions.terrain().biomes();
     // the same for every chunk stacked over these columns, so worked out once for them all
@@ -48,7 +72,28 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
             // dunes' steep faces are not cliffs: desert has them only up in its mountains
             let dunes = Some(columns.biome(x, z)) == desert
                 && column_height - WATER_LEVEL < DESERT_CLIFFS_ABOVE;
-            let cliff = if dunes { 0.0 } else { cliff_reach(gradient) };
+            // a river's or lake's bed isn't cut into cliffs either: rock would stand up through its water
+            let fresh_water = water_top > WATER_LEVEL && water_top > column_height;
+            let cliff = if !passes.cliffs || dunes || fresh_water {
+                0.0
+            } else {
+                cliff_reach(gradient)
+            };
+            // a bank's cliffs are only cut, not built up: built up they leave a dry ledge between the water and the ground
+            let water_by = if cliff > 0.0 {
+                fresh_water_near(&mut heights, chunk_pos.0.x * size + x, chunk_pos.0.z * size + z)
+            } else {
+                None
+            };
+            // and ground at the waterline isn't cut at all, or a shore's edge is lowered into ragged water
+            let cliff = if water_by.is_some_and(|top| column_height <= top + SHORE_HEIGHT) {
+                0.0
+            } else {
+                cliff
+            };
+            let bank = water_by.is_some();
+            // ground cut open beside fresh water floods to its level, not left as air under it
+            let flood_top = water_by.map_or(water_top, |top| top.max(water_top));
             let bulge = cliff.ceil() as i64;
             // above the ground and the water, the column is air here whatever its climate
             if world_y >= (ground_top(column_height) + bulge).max(water_top) {
@@ -93,12 +138,12 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
                     snowy,
                 );
                 // cliffs are cut from the ground before the water fills what they open
-                if cliff == 0.0 || (y - column_height).abs() > bulge {
+                if cliff == 0.0 || (y - column_height).abs() > bulge || bank && y >= column_height {
                     return block;
                 }
                 let density = (column_height - y) as f64 - 0.5
                     + cliff * cliff_density(seed, world_x, y, world_z);
-                cut_cliff(block, density > 0.0, y, temperature, water_top)
+                cut_cliff(block, density > 0.0, y, temperature, flood_top)
             }));
         }
     }
@@ -107,7 +152,7 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     let origin = chunk_pos.0 * size;
     // any ground in the chunk is within the trees' reach, so flora sees every tree over it
     let mut trees = Vec::new();
-    if trees_may_reach(origin.y, origin.y + size, lowest, highest) {
+    if passes.trees && trees_may_reach(origin.y, origin.y + size, lowest, highest) {
         let min = I64Vec2::new(origin.x, origin.z);
         trees = trees_near(regions.terrain(), &mut heights, min, min + size - 1);
         for tree in &trees {
@@ -127,6 +172,9 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     }
 
     // plants on the grass, in the air just over it, after the trees, so trunks keep their place
+    if !passes.flora {
+        return chunk_data;
+    }
     for x in 0..size {
         for z in 0..size {
             let column_height = columns.height(x, z);
@@ -173,6 +221,21 @@ pub fn generate_chunk(regions: Arc<RegionStore>, chunk_pos: ChunkCoordinate) -> 
     }
 
     chunk_data
+}
+
+// Blocks from fresh water within which ground's cliffs are cut but not built up.
+const BANK_REACH: i64 = 4;
+
+// Ground this many blocks or fewer over fresh water by it isn't cut into cliffs at all.
+const SHORE_HEIGHT: i64 = 2;
+
+// The highest river or lake water within `BANK_REACH` of the column, if any.
+fn fresh_water_near(heights: &mut HeightSampler, x: i64, z: i64) -> Option<i64> {
+    [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
+        .into_iter()
+        .map(|(dx, dz)| heights.water_top(x + dx * BANK_REACH, z + dz * BANK_REACH))
+        .filter(|&top| top > WATER_LEVEL)
+        .max()
 }
 
 // Whether trees on ground between `lowest` and `highest` could reach into blocks `bottom..top`.

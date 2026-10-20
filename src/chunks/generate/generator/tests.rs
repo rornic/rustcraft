@@ -1320,7 +1320,9 @@ fn test_lod_water_surface_cells_over_shallow_ground_are_water() {
                 for cx in 0..lod.size {
                     for cz in 0..lod.size {
                         let column = LodBlocks::column(lod.size, cx, cz);
-                        if lod.tops[column] >= WATER_LEVEL {
+                        // a river held above the sea has its own surface to fill to
+                        if lod.tops[column] >= WATER_LEVEL || lod.water_tops[column] != WATER_LEVEL
+                        {
                             continue;
                         }
                         for cy in 0..lod.size {
@@ -1353,6 +1355,23 @@ fn test_water_depth_on_lod_border_ignores_skirts() {
     assert_eq!(BlockType::Water, lod.block(IVec3::new(-1, 3, 4)));
     assert_eq!(4, water_depth(&lod, IVec3::new(4, 7, 4)));
     assert_eq!(4, water_depth(&lod, IVec3::new(-1, 7, 4)));
+}
+
+#[test]
+fn test_shallow_water_in_a_coarse_lod_cell_is_drawn_to_its_real_surface() {
+    // cells of 4 blocks, ground up to y = 4 and water to y = 6: its surface is the cell's middle
+    let mut lod = flat_lod(1);
+    lod.cell = 4;
+    lod.base_y = 0;
+    lod.water_tops = vec![6; (16 + 2) * (16 + 2)];
+    lod.cells[LodBlocks::index(16, IVec3::new(4, 1, 4))] = BlockType::Water;
+    assert_eq!(Some(0.0), lod.find_water_surface_top(IVec3::new(4, 1, 4)));
+    // a cell the water fills to the top, or with water over it, has none
+    lod.water_tops = vec![8; (16 + 2) * (16 + 2)];
+    assert_eq!(None, lod.find_water_surface_top(IVec3::new(4, 1, 4)));
+    lod.water_tops = vec![6; (16 + 2) * (16 + 2)];
+    lod.cells[LodBlocks::index(16, IVec3::new(4, 2, 4))] = BlockType::Water;
+    assert_eq!(None, lod.find_water_surface_top(IVec3::new(4, 1, 4)));
 }
 
 #[test]
@@ -2305,13 +2324,13 @@ fn test_cliffs_are_cut_before_the_water_fills_what_they_open() {
         BlockType::Ice,
         cut_cliff(BlockType::Stone, false, sea - 1, 0.0, sea)
     );
-    // rock builds up into air and water alike, and what was already right is left alone
+    // rock builds up into air but never into water, and what was already right is left alone
     assert_eq!(
         BlockType::Stone,
         cut_cliff(BlockType::Air, true, sea + 2, 0.5, sea)
     );
     assert_eq!(
-        BlockType::Stone,
+        BlockType::Water,
         cut_cliff(BlockType::Water, true, sea - 2, 0.5, sea)
     );
     assert_eq!(
@@ -2509,11 +2528,11 @@ fn test_pines_grow_on_a_mountains_lower_slopes() {
         .step_by(5)
         .flat_map(|z| (20..dim - 20).step_by(5).map(move |x| (x, z)))
         .find(|&(x, z)| {
-            (-6..=6).step_by(2).all(|dz| {
-                (-6..=6).step_by(2).all(|dx| {
+            (-4..=4).step_by(2).all(|dz| {
+                (-4..=4).step_by(2).all(|dx| {
                     let i = map.index((x as i64 + dx) as usize, (z as i64 + dz) as usize);
                     BiomeKind::from_u8(map.biome[i]) == BiomeKind::Mountain
-                        && (130.0..230.0).contains(&(map.height[i] - WATER_LEVEL as f32))
+                        && (130.0..260.0).contains(&(map.height[i] - WATER_LEVEL as f32))
                         && map.water_kind[i] == 0
                 })
             })

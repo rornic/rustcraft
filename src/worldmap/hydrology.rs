@@ -10,13 +10,35 @@ use crate::chunks::generate::WATER_LEVEL;
 /// Square blocks of land that must drain through a cell for it to be a stream, which starts a
 /// block or two wide and widens from there.
 pub const RIVER_MIN_AREA: f32 = 400_000.0;
+// No river is narrower, in blocks: one block wide doesn't fill with water reliably.
+const MIN_RIVER_WIDTH: f32 = 2.0;
+// Fewer cells than this in a river that never reaches water, and it is no river.
+const MIN_INLAND_RIVER_CELLS: usize = 30;
+
+// How far apart, in blocks, the hills and hollows of the noise that breaks ties in the flood are.
+const TIE_WAVELENGTH: f64 = 900.0;
+
+// Slopes (rise over run) between which ground goes from flat to steep enough for a river to start on, and how many times more catchment flat ground needs.
+const FLAT_SLOPE: (f64, f64) = (0.005, 0.08);
+const FLAT_START_FACTOR: f32 = 8.0;
+// Height over the sea and slope between which ground is bare rock, and how much rain a cell of soil and of rock sheds, 1 being the old even share.
+const ROCK_ABOVE: (f64, f64) = (60.0, 300.0);
+const ROCK_SLOPE: (f64, f64) = (0.1, 0.5);
+const SOIL_RUNOFF: f32 = 0.7;
+const ROCK_RUNOFF: f32 = 2.5;
+// How much of its rain the driest ground sheds no runoff of, and how much of the flow crossing a cell of it is lost.
+const DRY_RUNOFF_LOSS: f32 = 0.9;
+const DRY_FLOW_LOSS: f32 = 0.01;
+// And how many cells' worth of flow the driest ground evaporates from a river crossing it, so a
+// big river carries on across a desert that a stream can't.
+const DRY_EVAPORATION: f32 = 8.0;
 // A basin shallower than this is no lake, just a flat.
 const MIN_LAKE_DEPTH: f32 = 4.0;
 // Fewer cells than this is a pond, not worth a lake.
 const MIN_LAKE_CELLS: usize = 300;
 // A deeper basin is cut down to this depth, and one wider than MAX_LAKE_CELLS is drained, as a
-// range's rings would otherwise hold seas.
-const MAX_LAKE_DEPTH: f32 = 30.0;
+// range's rings would otherwise hold seas. Deep enough that the flood, not this, sets a lake's depth.
+const MAX_LAKE_DEPTH: f32 = 150.0;
 const MAX_LAKE_CELLS: usize = 60_000;
 // Rounds of cutting small basins' rims, each of which can open the next basin along.
 const BREACH_ROUNDS: usize = 6;
@@ -25,7 +47,7 @@ const MAX_RIVER_DEPTH: f32 = 12.0;
 /// Blocks across a river draining `area` square blocks of land: a stream a block or two wide where
 /// it starts, ten at a few square kilometres, close to a hundred where a whole range drains.
 pub fn river_width(area: f32) -> f32 {
-    1.5 * (area / RIVER_MIN_AREA).max(1.0).powf(0.78)
+    (1.5 * (area / RIVER_MIN_AREA).max(1.0).powf(0.9)).max(MIN_RIVER_WIDTH)
 }
 
 /// Blocks deep, at the middle of a river draining `area` square blocks of land.
@@ -47,9 +69,59 @@ pub(super) struct Flood {
 // Barnes' priority flood: start from the sea and the map's edge and always take the lowest cell
 // next, so each cell is reached from its lowest neighbour and a basin's floor is raised to its
 // spill point. A cell drains into the one it was reached from, so every path ends at the sea.
-pub(super) fn priority_flood(height: &[f32], dim: usize) -> Flood {
+/// What breaks ties in the flood, so water over flat ground, where every cell is as low as the next,
+/// runs along smooth noise's valleys: in first-in first-out order it runs in dead straight lines, and
+/// with each cell's tie of its own, in a jagged comb. The low bits are a hash, so no two tie.
+pub(super) fn flood_ties(map: &WorldMap) -> Vec<u32> {
+    let dim = map.dim();
+    (0..dim * dim)
+        .map(|i| {
+            let (x, z) = map.cell_centre(i % dim, i / dim);
+            let smooth = (super::noise::fbm(map.seed ^ 0x71E5, x, z, TIE_WAVELENGTH, 3) * 0.5
+                + 0.5)
+                .clamp(0.0, 1.0);
+            let hash = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 48;
+            (((smooth * 65_535.0) as u32) << 16) | hash as u32
+        })
+        .collect()
+}
+
+// The cells under the sea's level that join the map's edge, the open sea: a basin of them walled in by
+// higher land is not the sea, and is filled like any other.
+fn open_sea(height: &[f32], dim: usize) -> Vec<bool> {
+    let sea = WATER_LEVEL as f32;
+    let mut open = vec![false; height.len()];
+    let mut stack = Vec::new();
+    for z in 0..dim {
+        for x in 0..dim {
+            let i = z * dim + x;
+            if (x == 0 || z == 0 || x == dim - 1 || z == dim - 1) && height[i] < sea {
+                open[i] = true;
+                stack.push(i);
+            }
+        }
+    }
+    while let Some(i) = stack.pop() {
+        let (x, z) = ((i % dim) as i64, (i / dim) as i64);
+        for (dx, dz) in NEIGHBOURS {
+            let (nx, nz) = (x + dx, z + dz);
+            if nx < 0 || nz < 0 || nx >= dim as i64 || nz >= dim as i64 {
+                continue;
+            }
+            let n = nz as usize * dim + nx as usize;
+            if !open[n] && height[n] < sea {
+                open[n] = true;
+                stack.push(n);
+            }
+        }
+    }
+    open
+}
+
+pub(super) fn priority_flood(height: &[f32], dim: usize, ties: &[u32]) -> Flood {
     let cells = height.len();
     let sea = WATER_LEVEL as f32;
+    let open = open_sea(height, dim);
     let mut flood = Flood {
         filled: height.to_vec(),
         down: vec![NONE; cells],
@@ -57,17 +129,18 @@ pub(super) fn priority_flood(height: &[f32], dim: usize) -> Flood {
     };
     let mut seen = vec![false; cells];
     let mut heap = BinaryHeap::new();
-    let mut seq = 0u64;
-    let mut push = |heap: &mut BinaryHeap<_>, key: f32, i: usize| {
-        // positive floats order as their bits do, and the sequence keeps ties first in first out
-        heap.push((Reverse(((key.to_bits() as u64) << 32) | seq), i as u32));
-        seq += 1;
+    let push = |heap: &mut BinaryHeap<_>, key: f32, i: usize| {
+        // positive floats order as their bits do, then ties go by `ties`
+        heap.push((
+            Reverse(((key.to_bits() as u64) << 32) | ties[i] as u64),
+            i as u32,
+        ));
     };
     for z in 0..dim {
         for x in 0..dim {
             let i = z * dim + x;
             let edge = x == 0 || z == 0 || x == dim - 1 || z == dim - 1;
-            if height[i] < sea || edge {
+            if open[i] || edge {
                 seen[i] = true;
                 // open sea is never reached from the land, so only its shore needs the queue
                 let shore = edge
@@ -206,6 +279,29 @@ pub(super) fn accumulate(flood: &Flood) -> Vec<f32> {
     flow
 }
 
+/// The same, with each cell's own rain `supply` and the share `keep` of a cell's flow that gets
+/// through it to the next, less an `evaporated` amount: dry ground sheds little and loses what crosses it, so a river that
+/// leaves wet country thins out in a desert and may dry up, with every cell downstream of it.
+pub(super) fn accumulate_runoff(
+    flood: &Flood,
+    supply: &[f32],
+    keep: &[f32],
+    evaporated: &[f32],
+) -> Vec<f32> {
+    let mut flow = supply.to_vec();
+    for &i in flood.order.iter().rev() {
+        let d = flood.down[i as usize];
+        if d != NONE {
+            flow[d as usize] +=
+                (flow[i as usize] * keep[i as usize] - evaporated[i as usize]).max(0.0);
+        }
+    }
+    flow
+}
+
+// How far over the sea's level a walled-in basin of ground under it is filled: a lake's, which looks like one.
+const INLAND_SEA_ABOVE_SEA: f32 = 1.0;
+
 /// Works out lakes, drainage and rivers from the height layer, cutting open basins that are too
 /// small or big to be lakes and, with `carve`, the rivers' beds into the ground.
 pub fn run(map: &mut WorldMap, carve: bool) {
@@ -225,7 +321,8 @@ pub fn run(map: &mut WorldMap, carve: bool) {
     for (h, s) in original.iter_mut().zip(&scatter) {
         *h += s;
     }
-    let mut flood = priority_flood(&original, dim);
+    let ties = flood_ties(map);
+    let mut flood = priority_flood(&original, dim, &ties);
     let mut lakes = basins(&original, &flood, dim);
     for _ in 0..BREACH_ROUNDS {
         let mut cut = false;
@@ -235,7 +332,7 @@ pub fn run(map: &mut WorldMap, carve: bool) {
         if !cut {
             break;
         }
-        flood = priority_flood(&original, dim);
+        flood = priority_flood(&original, dim, &ties);
         lakes = basins(&original, &flood, dim);
     }
     // the cuts stay in the ground
@@ -252,8 +349,137 @@ pub fn run(map: &mut WorldMap, carve: bool) {
     for cell in lakes.iter().filter(|b| b.is_lake()).flat_map(|b| &b.cells) {
         kind[*cell] = WaterCell::Lake as u8;
     }
+    // ground under the sea's level that the sea doesn't reach, a basin walled in by higher land, is a
+    // lake, not an inland sea: it stands just over the sea's level, which is a lake's look
+    let mut walled = Vec::new();
+    let mut seen = vec![false; kind.len()];
+    for start in 0..kind.len() {
+        if kind[start] != WaterCell::Ocean as u8 || seen[start] {
+            continue;
+        }
+        let (mut stack, mut cells, mut edge) = (vec![start], Vec::new(), false);
+        seen[start] = true;
+        while let Some(i) = stack.pop() {
+            cells.push(i);
+            let (x, z) = ((i % dim) as i64, (i / dim) as i64);
+            edge |= x == 0 || z == 0 || x == dim as i64 - 1 || z == dim as i64 - 1;
+            for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (nx, nz) = (x + dx, z + dz);
+                if !(0..dim as i64).contains(&nx) || !(0..dim as i64).contains(&nz) {
+                    continue;
+                }
+                let j = nz as usize * dim + nx as usize;
+                if kind[j] == WaterCell::Ocean as u8 && !seen[j] {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+        if !edge {
+            for &i in &cells {
+                kind[i] = WaterCell::Lake as u8;
+            }
+            walled.extend(cells);
+        }
+    }
 
-    let flow = accumulate(&flood);
+    // rain runs off wet ground and soaks into dry ground, which also loses water crossing it
+    let (_, moisture) = super::climate::moisture_field(map);
+    let moisture = super::climate::blur_box(&moisture, dim, super::climate::FIELD_BLUR);
+    let dry: Vec<f32> = moisture
+        .iter()
+        .map(|&m| super::climate::dryness(m))
+        .collect();
+    // bare rock sheds rain where soil soaks it up: high and steep ground, thin soil on stone, runs
+    // off many times what the lowlands' deep soil does
+    let cell_len = map.config.map_cell as f32;
+    let rock: Vec<f32> = (0..original.len())
+        .map(|i| {
+            let (x, z) = (i % dim, i / dim);
+            let at = |x: usize, z: usize| original[z * dim + x];
+            let (xl, xr) = (x.saturating_sub(1), (x + 1).min(dim - 1));
+            let (zl, zr) = (z.saturating_sub(1), (z + 1).min(dim - 1));
+            let dx = (at(xr, z) - at(xl, z)) / ((xr - xl).max(1) as f32 * cell_len);
+            let dz = (at(x, zr) - at(x, zl)) / ((zr - zl).max(1) as f32 * cell_len);
+            let slope = (dx * dx + dz * dz).sqrt() as f64;
+            let high =
+                super::terrain::smoothstep(ROCK_ABOVE.0, ROCK_ABOVE.1, (original[i] - sea) as f64);
+            let steep = super::terrain::smoothstep(ROCK_SLOPE.0, ROCK_SLOPE.1, slope);
+            high.max(steep) as f32
+        })
+        .collect();
+    let supply: Vec<f32> = dry
+        .iter()
+        .zip(&rock)
+        .map(|(&d, &r)| {
+            (1.0 - DRY_RUNOFF_LOSS * d) * (SOIL_RUNOFF + (ROCK_RUNOFF - SOIL_RUNOFF) * r)
+        })
+        .collect();
+    let keep: Vec<f32> = dry.iter().map(|&d| 1.0 - DRY_FLOW_LOSS * d).collect();
+    let evaporated: Vec<f32> = dry.iter().map(|&d| DRY_EVAPORATION * d).collect();
+    let flow = accumulate_runoff(&flood, &supply, &keep, &evaporated);
+    // A river starts only where the ground is steep enough to hold a channel for the water it
+    // drains: flat lowlands need many times the catchment, so rivers rise in hills and mountains
+    // and not out of the plain, and once one has started it carries on across flat ground.
+    let cell_area = cell_len * cell_len;
+    let mut is_river = vec![false; original.len()];
+    let mut fed = vec![false; original.len()];
+    for &i in flood.order.iter().rev() {
+        let (i, d) = (i as usize, flood.down[i as usize]);
+        if d == NONE {
+            continue;
+        }
+        let d = d as usize;
+        let diagonal = i % dim != d % dim && i / dim != d / dim;
+        let run = cell_len
+            * if diagonal {
+                std::f32::consts::SQRT_2
+            } else {
+                1.0
+            };
+        let slope = (original[i] - original[d]).max(0.0) / run;
+        let flat =
+            1.0 - super::terrain::smoothstep(FLAT_SLOPE.0, FLAT_SLOPE.1, slope as f64) as f32;
+        let area = flow[i] * cell_area;
+        if area >= RIVER_MIN_AREA * (1.0 + FLAT_START_FACTOR * flat)
+            || (fed[i] && area >= RIVER_MIN_AREA)
+        {
+            is_river[i] = true;
+            fed[d] = true;
+        }
+    }
+    // a short river that dries up before reaching water, with nothing feeding it, is a scrap of
+    // stream out of nowhere: it goes
+    let mut end = vec![usize::MAX; original.len()];
+    let mut size = vec![0usize; original.len()];
+    for &i in &flood.order {
+        let i = i as usize;
+        if !is_river[i] {
+            continue;
+        }
+        let d = flood.down[i];
+        end[i] = if d != NONE && is_river[d as usize] {
+            end[d as usize]
+        } else {
+            i
+        };
+        size[end[i]] += 1;
+    }
+    for i in 0..original.len() {
+        if !is_river[i] || size[end[i]] >= MIN_INLAND_RIVER_CELLS {
+            continue;
+        }
+        let e = end[i];
+        let d = flood.down[e];
+        let into_water = d != NONE
+            && matches!(
+                WaterCell::from_u8(kind[d as usize]),
+                WaterCell::Ocean | WaterCell::Lake
+            );
+        if !into_water {
+            is_river[i] = false;
+        }
+    }
 
     map.down = flood
         .down
@@ -280,7 +506,7 @@ pub fn run(map: &mut WorldMap, carve: bool) {
         match WaterCell::from_u8(kind[i]) {
             WaterCell::Ocean => surface[i] = sea,
             WaterCell::Lake => surface[i] = flood.filled[i],
-            _ if flow[i] * cell_area >= RIVER_MIN_AREA && flood.down[i] != NONE => {
+            _ if is_river[i] => {
                 let depth = river_depth(flow[i] * cell_area);
                 let (x, z) = ((i % dim) as i64, (i / dim) as i64);
                 // the lowest ground beside the river, so the banks stand above the water
@@ -307,6 +533,9 @@ pub fn run(map: &mut WorldMap, carve: bool) {
             }
             _ => {}
         }
+    }
+    for &i in &walled {
+        surface[i] = surface[i].max(sea + INLAND_SEA_ABOVE_SEA);
     }
     map.flow = flow;
     map.water_kind = kind;
@@ -401,9 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rivers_widen_downstream_and_reach_water() {
-        // the hydrology stage on its own: rivers that dry up in deserts, see `climate`, are
-        // another stage's business
+    fn test_rivers_reach_water_or_dry_up_in_dry_ground() {
         let config = WorldConfig {
             size: 32_768,
             map_cell: 32,
@@ -412,6 +639,12 @@ mod tests {
         run(&mut map, false);
         run(&mut map, true);
         let dim = map.dim();
+        let (_, moisture) = crate::worldmap::climate::moisture_field(&map);
+        let moisture = crate::worldmap::climate::blur_box(
+            &moisture,
+            dim,
+            crate::worldmap::climate::FIELD_BLUR,
+        );
         let mut rivers = 0;
         for start in 0..map.height.len() {
             if map.water_kind[start] != WaterCell::River as u8 {
@@ -427,7 +660,16 @@ mod tests {
                 let next =
                     ((i / dim) as i64 + dz) as usize * dim + ((i % dim) as i64 + dx) as usize;
                 if map.water_kind[next] == WaterCell::River as u8 {
-                    assert!(map.river_width[next] >= map.river_width[i], "river narrows");
+                    // a river only narrows by losing water crossing dry ground
+                    assert!(
+                        map.river_width[next] >= map.river_width[i]
+                            // (the moisture here is of the final ground, a little off the one rivers ran on)
+                            || crate::worldmap::climate::dryness(moisture[i] - 0.05) > 0.0,
+                        "river narrows in wet ground at {i}: {} to {}, moisture {}",
+                        map.river_width[i],
+                        map.river_width[next],
+                        moisture[i]
+                    );
                     assert!(
                         map.water_surface[next] <= map.water_surface[i] + 1e-3,
                         "river runs uphill at {i}"
@@ -437,12 +679,14 @@ mod tests {
                 steps += 1;
                 assert!(steps < 4 * dim, "river loops");
             }
+            // it runs into water, or dries up in dry ground, where its last cell is
+            let wet_end = matches!(
+                WaterCell::from_u8(map.water_kind[i]),
+                WaterCell::Ocean | WaterCell::Lake
+            );
             assert!(
-                matches!(
-                    WaterCell::from_u8(map.water_kind[i]),
-                    WaterCell::Ocean | WaterCell::Lake
-                ),
-                "river ends on dry land"
+                wet_end || crate::worldmap::climate::dryness(moisture[i] - 0.05) > 0.0,
+                "river ends on wet land at {i}"
             );
         }
         assert!(rivers > 50, "only {rivers} river cells");

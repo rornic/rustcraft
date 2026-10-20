@@ -19,6 +19,12 @@ pub(super) trait BlockSource {
         None
     }
 
+    /// Where the surface of the water really is in a LOD cell it reaches only part of the way up,
+    /// in mesh units from the cell's centre, so shallow water isn't drawn up to the cell's top.
+    fn water_surface_top(&self, _coord: IVec3) -> Option<f32> {
+        None
+    }
+
     /// Whether any cell has a `surface_top`, so meshing can skip asking when none do.
     fn has_surface_tops(&self) -> bool {
         false

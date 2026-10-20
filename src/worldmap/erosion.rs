@@ -344,8 +344,9 @@ pub fn stream_power(map: &mut WorldMap) {
     let dim = map.dim();
     let sea = WATER_LEVEL as f32;
     let cell = map.config.map_cell as f32;
+    let ties = super::hydrology::flood_ties(map);
     for _ in 0..STREAM_PASSES {
-        let flood = priority_flood(&map.height, dim);
+        let flood = priority_flood(&map.height, dim, &ties);
         let flow = accumulate(&flood);
         let before = map.height.clone();
         for &i in &flood.order {
