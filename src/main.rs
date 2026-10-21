@@ -76,6 +76,8 @@ fn setup_scene(
             Camera3d { ..default() },
             atmosphere_camera(),
             Projection::Perspective(PerspectiveProjection {
+                // vertical, as Minecraft's field of view setting is
+                fov: 90f32.to_radians(),
                 far: fog_distance + world_height as f32,
                 ..default()
             }),
