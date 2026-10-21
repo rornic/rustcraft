@@ -11,7 +11,10 @@ use crate::block::{BlockType, Tile};
 use super::buffers::{ChunkMeshes, GrassTint, InnerLeaves, MeshStyle};
 use super::chunk::{generate_chunk, generate_chunk_mesh};
 use super::lod::LodBlocks;
-use super::shading::{vertex_ao, vertex_water_depth, AO_STRENGTH};
+use super::shading::{
+    spread_water_levels, vertex_ao, vertex_water_depth, water_corner, AO_STRENGTH,
+    WATER_SPREAD_REACH,
+};
 use super::source::{water_depth, BlockSource, ChunkNeighbourhood};
 use super::terrain::{freeze_cell, terrain_block, under_grass, FREEZE_TEMPERATURE};
 use crate::chunks::chunk::{neighbor_26_index, ChunkCoordinate, ChunkData, CHUNK_SIZE};
@@ -129,6 +132,56 @@ fn test_neighbouring_water_columns_agree_on_shared_corner_depth() {
     assert_eq!(deep, shallow);
     // averaged with the two dry columns on the +z side
     assert_eq!((5.0 + 2.0) / 4.0, deep);
+}
+
+#[test]
+fn test_a_rivers_surface_is_continuous_across_the_blocks_it_runs_down() {
+    // a river falling 0.3 a column along x, over blocks whose tops step as it passes whole numbers
+    let level = |x: i32, _z: i32| Some(10.4 - 0.3 * x as f32);
+    let corner = |x: i32, sign: f32| {
+        water_corner(
+            &mut |x, z| level(x, z),
+            (x, 0),
+            level(x, 0).unwrap(),
+            (if sign > 0.0 { 1 } else { -1 }, 1),
+        )
+        .height
+    };
+    // each corner is the same seen from the column either side of it
+    for x in 0..8 {
+        let (a, b) = (corner(x, 0.5), corner(x + 1, -0.5));
+        assert!((a - b).abs() < 1e-5, "{a} {b}");
+    }
+    // falling all the way down, with no step at the corners where the blocks' tops change
+    let heights: Vec<f32> = (0..8).map(|x| corner(x, 0.5)).collect();
+    assert!(heights.windows(2).all(|w| w[0] > w[1]), "{heights:?}");
+    // a curtain, two blocks apart, is not averaged across
+    let mut stepped = |x: i32, _z: i32| Some(if x <= 0 { 10.0 } else { 7.0 });
+    assert_eq!(
+        10.0,
+        water_corner(&mut stepped, (0, 0), 10.0, (1, 1)).height
+    );
+}
+
+#[test]
+fn test_a_step_in_the_water_ramps_over_the_columns_round_it() {
+    let reach = WATER_SPREAD_REACH;
+    let wide = 6 * reach;
+    // water 5 high for x < 3 * reach and 3 lower beyond
+    let raw: Vec<f32> = (0..wide * wide)
+        .map(|i| if i / wide < 3 * reach { 5.0 } else { 2.0 })
+        .collect();
+    let spread = spread_water_levels(&raw, wide);
+    let inner = wide - 2 * reach;
+    let at = |x: i32| spread[((x - reach) * inner + inner / 2) as usize];
+    let ramp: Vec<f32> = (reach..5 * reach).map(at).collect();
+    // falling all the way, by under a block a column, so it's one slope with no curtain
+    assert!(
+        ramp.windows(2).all(|w| w[0] >= w[1] && w[0] - w[1] < 1.0),
+        "{ramp:?}"
+    );
+    // and only near the step
+    assert_eq!((5.0, 2.0), (at(reach), at(5 * reach - 1)));
 }
 
 #[test]
@@ -541,7 +594,7 @@ fn mesh_chunk(chunk: ChunkData) -> ChunkMeshes {
         Arc::new(chunk),
         vec![None; 26],
         coord,
-        &*crate::worldmap::test_terrain(3),
+        &RegionStore::new(crate::worldmap::test_terrain(3)),
         false,
     )
 }
@@ -1208,7 +1261,7 @@ fn test_leaves_on_the_chunks_edge_keep_their_faces_with_the_rest() {
         Arc::new(chunk),
         neighbours,
         ChunkCoordinate(I64Vec3::new(0, 40, 0)),
-        &*crate::worldmap::test_terrain(3),
+        &RegionStore::new(crate::worldmap::test_terrain(3)),
         false,
     );
     assert!(meshes.inner_leaves.is_none());
@@ -1222,7 +1275,7 @@ fn test_full_detail_solid_leaves_hide_the_leaves_behind_them() {
         Arc::new(leaf_cube_chunk()),
         vec![None; 26],
         coord,
-        &*crate::worldmap::test_terrain(3),
+        &RegionStore::new(crate::worldmap::test_terrain(3)),
         true,
     );
     assert!(mesh.inner_leaves.is_none());
@@ -1396,7 +1449,7 @@ fn test_buried_chunk_has_no_geometry() {
         stone.clone(),
         vec![Some(stone); 26],
         ChunkCoordinate(I64Vec3::ZERO),
-        test_regions().terrain(),
+        &test_regions(),
         false,
     );
     assert!(!meshes.has_geometry());
@@ -2134,6 +2187,34 @@ fn test_lakes_and_rivers_above_the_sea_are_filled_to_their_own_surface() {
                 water(ground - 1)
             );
         }
+    }
+}
+
+#[test]
+fn test_ground_well_under_a_lake_is_under_its_water() {
+    use crate::chunks::generate::terrain_source::TerrainSource;
+    // seed 10 has mountain lakes whose terraces were cut dry pits into their floors
+    for seed in [5, 10] {
+        let terrain = crate::worldmap::test_terrain(seed);
+        let map = terrain.map();
+        let mut dry = Vec::new();
+        for cz in 0..map.dim() {
+            for cx in 0..map.dim() {
+                let (x, z) = map.cell_centre(cx, cz);
+                let Some((level, cover)) = map.lake_cover(x, z) else {
+                    continue;
+                };
+                let sample = terrain.sample(x, z);
+                if cover >= 0.99
+                    && (map.height_at(x, z) as f64) < level as f64
+                    && sample.height < level.floor() as f64 - 1.0
+                    && sample.water_surface == 0.0
+                {
+                    dry.push((x, z, sample.height, level));
+                }
+            }
+        }
+        assert!(dry.is_empty(), "seed {seed}: dry ground in lakes {dry:?}");
     }
 }
 

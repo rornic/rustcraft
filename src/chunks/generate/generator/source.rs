@@ -1,7 +1,12 @@
+use super::shading::{spread_water_levels, WATER_SPREAD_REACH};
 use crate::block::BlockType;
 use crate::chunks::chunk::{neighbor_26_index, ChunkData, CELLS, CHUNK_SIZE};
+use crate::chunks::generate::region_store::RegionStore;
+use crate::chunks::generate::terrain_source::SpringPart;
+use crate::chunks::generate::WATER_LEVEL;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 pub(super) trait BlockSource {
@@ -23,6 +28,22 @@ pub(super) trait BlockSource {
     /// in mesh units from the cell's centre, so shallow water isn't drawn up to the cell's top.
     fn water_surface_top(&self, _coord: IVec3) -> Option<f32> {
         None
+    }
+
+    /// The surface of the fresh water in the column at `x`, `z`, in blocks from the lowest block of the
+    /// chunk, where it isn't a whole block: a river's runs down its course.
+    fn water_level(&self, _x: i32, _z: i32) -> Option<f32> {
+        None
+    }
+
+    /// The fresh water's real surface, which its blocks are filled to, where `water_level` is spread out.
+    fn water_block_level(&self, _x: i32, _z: i32) -> Option<f32> {
+        None
+    }
+
+    /// Whether the column is in the pool of a spring a river rises in.
+    fn spring_pool(&self, _x: i32, _z: i32) -> bool {
+        false
     }
 
     /// Whether any cell has a `surface_top`, so meshing can skip asking when none do.
@@ -90,9 +111,19 @@ const SPAN: i32 = 3 * CHUNK_SIZE as i32;
 
 /// A chunk with its 26 neighbours decoded into one dense grid, so meshing reads any block near it
 /// without scanning a chunk's runs. Missing neighbours are air.
+// A column's fresh water, in blocks from the chunk's lowest: its real surface the blocks fill to, its spread one, and a spring's pool.
+#[derive(Clone, Copy)]
+struct FreshColumn {
+    block_level: f32,
+    level: f32,
+    pool: bool,
+}
+
 pub(super) struct ChunkNeighbourhood<'a> {
     pub(super) chunk: &'a ChunkData,
     blocks: Vec<BlockType>,
+    water: Option<(&'a RegionStore, IVec3)>,
+    levels: OnceCell<Vec<Option<FreshColumn>>>,
 }
 
 impl<'a> ChunkNeighbourhood<'a> {
@@ -125,7 +156,18 @@ impl<'a> ChunkNeighbourhood<'a> {
                 }
             }
         }
-        Self { chunk, blocks }
+        Self {
+            chunk,
+            blocks,
+            water: None,
+            levels: OnceCell::new(),
+        }
+    }
+
+    /// Reads fresh water's surface from `regions` for the chunk whose lowest block is at `origin`.
+    pub(super) fn with_water(mut self, regions: &'a RegionStore, origin: IVec3) -> Self {
+        self.water = Some((regions, origin));
+        self
     }
 
     // `coord` from the chunk's lowest block, -CHUNK_SIZE..2 * CHUNK_SIZE each way.
@@ -138,9 +180,61 @@ impl<'a> ChunkNeighbourhood<'a> {
         let size = CHUNK_SIZE as i32;
         coord.cmpge(IVec3::splat(-size)).all() && coord.cmplt(IVec3::splat(2 * size)).all()
     }
+    // The fresh water in the column at `x`, `z`, if it has any.
+    fn fresh_at(&self, x: i32, z: i32) -> Option<FreshColumn> {
+        let (regions, origin) = self.water?;
+        let size = CHUNK_SIZE as i32;
+        let span = size + 2;
+        if !(-1..=size).contains(&x) || !(-1..=size).contains(&z) {
+            return None;
+        }
+        // the sea is flat and over the chunks that can reach fresh water only
+        if (origin.y + size) as i64 <= WATER_LEVEL + 1 {
+            return None;
+        }
+        let levels = self.levels.get_or_init(|| {
+            let pad = 1 + WATER_SPREAD_REACH;
+            let wide = size + 2 * pad;
+            let mut sampler = regions.sampler();
+            let raw: Vec<f32> = (0..wide * wide)
+                .map(|i| {
+                    let (wx, wz) = (origin.x + i / wide - pad, origin.z + i % wide - pad);
+                    sampler
+                        .fresh_water(wx as i64, wz as i64)
+                        .map_or(f32::NAN, |surface| surface - origin.y as f32)
+                })
+                .collect();
+            let spread = spread_water_levels(&raw, wide);
+            (0..span * span)
+                .map(|i| {
+                    let (x, z) = (i / span, i % span);
+                    let at = ((x + WATER_SPREAD_REACH) * wide + z + WATER_SPREAD_REACH) as usize;
+                    (!raw[at].is_nan()).then(|| FreshColumn {
+                        block_level: raw[at],
+                        level: spread[i as usize],
+                        pool: sampler.spring((origin.x + x - 1) as i64, (origin.z + z - 1) as i64)
+                            == SpringPart::Pool,
+                    })
+                })
+                .collect()
+        });
+        levels[((x + 1) * span + z + 1) as usize]
+    }
 }
 
 impl BlockSource for ChunkNeighbourhood<'_> {
+    fn water_level(&self, x: i32, z: i32) -> Option<f32> {
+        self.fresh_at(x, z).map(|fresh| fresh.level)
+    }
+
+    fn water_block_level(&self, x: i32, z: i32) -> Option<f32> {
+        self.fresh_at(x, z).map(|fresh| fresh.block_level)
+    }
+
+    fn spring_pool(&self, x: i32, z: i32) -> bool {
+        self.fresh_at(x, z).is_some_and(|fresh| fresh.pool)
+    }
+
     fn block(&self, coord: IVec3) -> BlockType {
         if Self::contains(coord) {
             self.blocks[Self::index(coord)]

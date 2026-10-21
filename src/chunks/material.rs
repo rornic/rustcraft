@@ -214,6 +214,48 @@ pub struct TerrainMaterials {
     pub chunk: Handle<ChunkMaterial>,
     pub water: Handle<WaterMaterial>,
     pub solid_water: Handle<WaterMaterial>,
+    pub spray: Handle<SprayMaterial>,
+}
+
+/// White water thrown up where fresh water runs steeply or falls, as particles the shader moves.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct SprayMaterial {
+    // what the land bends around, see `curvature::Curvature`
+    #[storage(8, read_only)]
+    pub curvature: Handle<ShaderBuffer>,
+}
+
+impl Material for SprayMaterial {
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn vertex_shader() -> ShaderRef {
+        "shaders/spray.wesl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        "shaders/spray.wesl".into()
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
+    }
+
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // each particle is turned to face the camera in the shader, whichever way it was wound
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]

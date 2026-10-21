@@ -10,7 +10,7 @@ use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::generate::light::SkyLight;
 use crate::chunks::generate::light::MAX_LIGHT;
 use crate::chunks::generate::region_store::{HeightSampler, RegionStore};
-use crate::chunks::generate::terrain_source::TerrainSource;
+use crate::chunks::generate::terrain_source::SpringPart;
 use crate::chunks::generate::trees::grows_into;
 use crate::chunks::generate::trees::trees_near;
 use crate::chunks::generate::trees::TreeTints;
@@ -81,7 +81,11 @@ pub fn generate_chunk_with(
             };
             // a bank's cliffs are only cut, not built up: built up they leave a dry ledge between the water and the ground
             let water_by = if cliff > 0.0 {
-                fresh_water_near(&mut heights, chunk_pos.0.x * size + x, chunk_pos.0.z * size + z)
+                fresh_water_near(
+                    &mut heights,
+                    chunk_pos.0.x * size + x,
+                    chunk_pos.0.z * size + z,
+                )
             } else {
                 None
             };
@@ -121,7 +125,12 @@ pub fn generate_chunk_with(
                 water_top,
             ) == BlockType::Snow;
             let (world_x, world_z) = (chunk_pos.0.x * size + x, chunk_pos.0.z * size + z);
+            // a spring's rim and the bed of its pool are the biome's own block
+            let spring = (columns.spring(x, z) != SpringPart::None).then(|| biomes.spring_block(biome));
             cells.extend((world_y..world_y + size).map(|y| {
+                if let Some(block) = spring.filter(|_| y == column_height - 1) {
+                    return block;
+                }
                 let block = under_grass(
                     column_block(
                         biomes,
@@ -231,11 +240,20 @@ const SHORE_HEIGHT: i64 = 2;
 
 // The highest river or lake water within `BANK_REACH` of the column, if any.
 fn fresh_water_near(heights: &mut HeightSampler, x: i64, z: i64) -> Option<i64> {
-    [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]
-        .into_iter()
-        .map(|(dx, dz)| heights.water_top(x + dx * BANK_REACH, z + dz * BANK_REACH))
-        .filter(|&top| top > WATER_LEVEL)
-        .max()
+    [
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (1, 1),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+    ]
+    .into_iter()
+    .map(|(dx, dz)| heights.water_top(x + dx * BANK_REACH, z + dz * BANK_REACH))
+    .filter(|&top| top > WATER_LEVEL)
+    .max()
 }
 
 // Whether trees on ground between `lowest` and `highest` could reach into blocks `bottom..top`.
@@ -249,10 +267,12 @@ pub fn generate_chunk_mesh(
     chunk: Arc<ChunkData>,
     adjacent_chunks: Vec<Option<Arc<ChunkData>>>,
     coord: ChunkCoordinate,
-    noise: &dyn TerrainSource,
+    regions: &RegionStore,
     solid_leaves: bool,
 ) -> ChunkMeshes {
-    let source = ChunkNeighbourhood::new(&chunk, &adjacent_chunks);
+    let noise = regions.terrain();
+    let source = ChunkNeighbourhood::new(&chunk, &adjacent_chunks)
+        .with_water(regions, (coord.0 * CHUNK_SIZE as i64).as_ivec3());
     let tint = GrassTint::new(noise, (coord.0 * CHUNK_SIZE as i64).as_vec3(), 1.0);
     // worked out only once there's a face to light: buried and empty chunks have none
     let light = LazyCell::new(|| neighbourhood_light(&source, coord));

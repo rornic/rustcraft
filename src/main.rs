@@ -11,7 +11,10 @@ use rustcraft::birds::BirdPlugin;
 use rustcraft::chunks::{
     fade::FULLY_VISIBLE,
     insert_terrain_resources,
-    material::{block_atlas, see_through_reach, ChunkMaterial, TerrainMaterials, WaterMaterial},
+    material::{
+        block_atlas, see_through_reach, ChunkMaterial, SprayMaterial, TerrainMaterials,
+        WaterMaterial,
+    },
     task_pool_plugin, TerrainPlugin,
 };
 use rustcraft::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
@@ -35,6 +38,7 @@ fn setup_scene(
     mut commands: Commands,
     mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
     mut water_materials: ResMut<Assets<WaterMaterial>>,
+    mut spray_materials: ResMut<Assets<SprayMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut murk_materials: ResMut<Assets<MurkMaterial>>,
@@ -61,7 +65,7 @@ fn setup_scene(
     let player = commands
         .spawn((
             Player,
-            Transform::from_translation(spawn).looking_to(Vec3::Z, Vec3::Y),
+            Transform::from_translation(spawn).looking_to(look_direction(), Vec3::Y),
         ))
         .id();
 
@@ -151,6 +155,9 @@ fn setup_scene(
             chunk: chunk_material_handle,
             water: water_material_handle,
             solid_water: solid_water_material_handle,
+            spray: spray_materials.add(SprayMaterial {
+                curvature: curvature.buffer.clone(),
+            }),
         },
         &mut chunk_materials,
         &mut water_materials,
@@ -179,6 +186,18 @@ fn start_time() -> f32 {
         .unwrap_or(START_TIME)
 }
 
+// RC_LOOK=x,y,z points the camera that way at the start, for framing a place by its coordinates
+fn look_direction() -> Vec3 {
+    std::env::var("RC_LOOK")
+        .ok()
+        .and_then(|s| {
+            let mut parts = s.split(',').map(|p| p.trim().parse::<f32>().ok());
+            Some(Vec3::new(parts.next()??, parts.next()??, parts.next()??))
+        })
+        .filter(|v| v.length() > 0.0)
+        .unwrap_or(Vec3::Z)
+}
+
 fn main() {
     let renderer = Settings::read("assets/settings.toml")
         .expect("Failed to read settings.toml")
@@ -191,13 +210,15 @@ fn main() {
             .set(task_pool_plugin())
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    present_mode: bevy::window::PresentMode::AutoNoVsync,
+                    // uncapped, the GPU runs flat out and can starve the desktop's compositor until the PC stalls
+                    present_mode: bevy::window::PresentMode::AutoVsync,
                     ..default()
                 }),
                 ..default()
             }),
         MaterialPlugin::<ChunkMaterial>::default(),
         MaterialPlugin::<WaterMaterial>::default(),
+        MaterialPlugin::<SprayMaterial>::default(),
         MaterialPlugin::<MurkMaterial>::default(),
         TerrainPlugin,
         CloudPlugin,
@@ -236,3 +257,4 @@ fn main() {
         .add_systems(Update, move_sky)
         .run();
 }
+

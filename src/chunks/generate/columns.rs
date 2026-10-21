@@ -3,8 +3,8 @@ use std::hash::Hash;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use super::biome::BiomeId;
-use super::region_store::{bed_top, HeightSampler};
-use super::terrain_source::{TerrainSource, WaterKind};
+use super::region_store::{bed_top, water_block_top, HeightSampler};
+use super::terrain_source::{SpringPart, TerrainSource, WaterKind};
 use super::WATER_LEVEL;
 use crate::chunks::chunk::CHUNK_SIZE;
 use crate::chunks::lod::LodKey;
@@ -135,7 +135,7 @@ impl ColumnGrid {
     /// The height of the water's surface over the cell in whole blocks, or the sea's where it's dry.
     pub fn water_top(&self, cx: i32, cz: i32) -> i64 {
         match self.water[Self::index(cx, cz)] {
-            surface if surface > 0.0 => surface.round() as i64,
+            surface if surface > 0.0 => water_block_top(surface),
             _ => WATER_LEVEL,
         }
     }
@@ -149,6 +149,7 @@ pub struct ChunkColumns {
     biomes: Vec<BiomeId>,
     temperatures: Vec<f32>,
     water_tops: Vec<i64>,
+    springs: Vec<SpringPart>,
     /// The lowest and highest ground under the chunks.
     pub lowest: i64,
     pub highest: i64,
@@ -164,6 +165,7 @@ impl ChunkColumns {
             biomes: Vec::with_capacity(cells),
             temperatures: Vec::with_capacity(cells),
             water_tops: Vec::with_capacity(cells),
+            springs: Vec::with_capacity(cells),
             lowest: i64::MAX,
             highest: i64::MIN,
         };
@@ -176,6 +178,7 @@ impl ChunkColumns {
                 columns.gradients.push(gradient_x.abs() + gradient_z.abs());
                 columns.biomes.push(heights.biome(world_x, world_z));
                 columns.water_tops.push(heights.water_top(world_x, world_z));
+                columns.springs.push(heights.spring(world_x, world_z));
                 columns
                     .temperatures
                     .push(noise.temperature(world_x as f64, world_z as f64));
@@ -211,6 +214,10 @@ impl ChunkColumns {
     /// The height of the water's surface over the column, or the sea's where it's dry.
     pub fn water_top(&self, cx: i64, cz: i64) -> i64 {
         self.water_tops[Self::index(cx, cz)]
+    }
+
+    pub fn spring(&self, cx: i64, cz: i64) -> SpringPart {
+        self.springs[Self::index(cx, cz)]
     }
 }
 

@@ -6,7 +6,7 @@ use bevy::math::I64Vec2;
 use super::biome::BiomeId;
 use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
 use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
-use super::terrain_source::TerrainSource;
+use super::terrain_source::{SpringPart, TerrainSource};
 use super::trees::TreeGround;
 use super::WATER_LEVEL;
 use crate::chunks::lod::LodKey;
@@ -160,11 +160,17 @@ pub struct HeightSampler<'a> {
     recent: Vec<(RegionCoord, Arc<Region>)>,
 }
 
+/// The block the water's surface lies in, that block and the ones under it filled: the surface is somewhere in
+/// its top block, so a river sloping down its course is a slope across blocks, not steps.
+pub fn water_block_top(surface: f32) -> i64 {
+    (surface - 0.001).ceil() as i64
+}
+
 /// `ground` in whole blocks, kept a block under the water over it, if any.
 pub fn bed_top(ground: f32, surface: f32) -> i64 {
     let top = ground.round() as i64;
     if surface > ground {
-        top.min(surface.round() as i64 - 1)
+        top.min(water_block_top(surface) - 1)
     } else {
         top
     }
@@ -194,7 +200,7 @@ impl HeightSampler<'_> {
             .region(coord)
             .water_at(world_x - origin.x, world_z - origin.y);
         if surface > 0.0 {
-            surface.round() as i64
+            water_block_top(surface)
         } else {
             WATER_LEVEL
         }
@@ -208,6 +214,21 @@ impl HeightSampler<'_> {
         let region = self.region(coord);
         let (x, z) = (world_x - origin.x, world_z - origin.y);
         bed_top(region.height_at(x, z), region.water_at(x, z))
+    }
+
+    /// The surface of the river's or lake's water over the column, if it has any.
+    pub fn fresh_water(&mut self, world_x: i64, world_z: i64) -> Option<f32> {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .fresh_water_at(world_x - origin.x, world_z - origin.y)
+    }
+
+    pub fn spring(&mut self, world_x: i64, world_z: i64) -> SpringPart {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .spring_at(world_x - origin.x, world_z - origin.y)
     }
 
     pub fn trees(&mut self, world_x: i64, world_z: i64) -> f64 {

@@ -46,6 +46,11 @@ pub trait Biome: Send + Sync {
     fn block(&self, base: BlockType, _above_sea: i64, _gradient: f64) -> BlockType {
         base
     }
+
+    // What a spring's rim and pool bed are made of, where a river rises.
+    fn spring_block(&self) -> BlockType {
+        BlockType::Gravel
+    }
 }
 
 // Which biome a column is, as an index into `Biomes`, or the base terrain.
@@ -99,6 +104,14 @@ impl Biomes {
             Some(i) => self.biomes[i as usize]
                 .tree_density()
                 .unwrap_or(BASE_TREE_DENSITY),
+        }
+    }
+
+    /// What a spring's rim and pool bed are made of in `biome`.
+    pub fn spring_block(&self, biome: BiomeId) -> BlockType {
+        match biome.0.checked_sub(1) {
+            None => BlockType::Gravel,
+            Some(i) => self.biomes[i as usize].spring_block(),
         }
     }
 

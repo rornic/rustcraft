@@ -57,6 +57,22 @@ impl MeshBuffers {
         self.push_quad_indices(triangle_start);
     }
 
+    // A spray particle: four corners at `base` the shader spreads to face the camera, thrown along `flow` in blocks
+    // a second, `size` its width in blocks, a droplet scattering, `burst` the phase of its emitter's bursts and `seed`
+    // when in each burst it's thrown.
+    pub(super) fn push_particle(&mut self, base: Vec3, flow: Vec3, seed: f32, size: f32, droplet: bool, burst: f32) {
+        let start = self.vertices.len() as u32;
+        for uv in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]] {
+            self.vertices.push(Vertex {
+                position: base.to_array(),
+                normal: flow.to_array(),
+                uv,
+            });
+            self.colors.push([seed, size, if droplet { 1.0 } else { 0.0 }, burst]);
+        }
+        self.push_quad_indices(start);
+    }
+
     fn push_quad_indices(&mut self, start: u32) {
         self.indices.extend([0, 1, 2, 2, 1, 3].map(|i| start + i));
     }
@@ -237,6 +253,8 @@ pub(super) enum InnerLeaves {
 pub struct ChunkMeshes {
     pub opaque: Mesh,
     pub water: Option<Mesh>,
+    /// Fresh water's spray, see `SprayMaterial`.
+    pub spray: Option<Mesh>,
     /// The faces between leaves, drawn only within `INNER_LEAVES_REACH` of the camera.
     pub inner_leaves: Option<Mesh>,
 }
@@ -244,7 +262,7 @@ pub struct ChunkMeshes {
 impl ChunkMeshes {
     /// Whether there's anything to draw: buried chunks mesh to nothing.
     pub fn has_geometry(&self) -> bool {
-        self.opaque.count_vertices() > 0 || self.water.is_some() || self.inner_leaves.is_some()
+        self.opaque.count_vertices() > 0 || self.water.is_some() || self.inner_leaves.is_some() || self.spray.is_some()
     }
 }
 

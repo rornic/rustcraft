@@ -56,6 +56,12 @@ fn main() {
         let (x, z) = map.cell_centre(found.0, found.1);
         let h = noise.sample(x, z).height;
         (x as i64, z as i64, h)
+    } else if let Some((x, z)) = std::env::var("BENCH_AT").ok().and_then(|s| {
+        let (x, z) = s.split_once(',')?;
+        Some((x.trim().parse::<i64>().ok()?, z.trim().parse::<i64>().ok()?))
+    }) {
+        // BENCH_AT=x,z centres on a place, such as a river
+        (x, z, noise.sample(x as f64, z as f64).height)
     } else {
         noise.find_spawn()
     };
@@ -106,7 +112,7 @@ fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3) {
                 .map(|n| data.get(n).cloned())
                 .collect();
             let meshes =
-                generate_chunk_mesh(data[&c].clone(), neighbours, c, regions.terrain(), false);
+                generate_chunk_mesh(data[&c].clone(), neighbours, c, &regions, false);
             vertices += meshes.opaque.count_vertices();
         }
         best = best.min(start.elapsed());

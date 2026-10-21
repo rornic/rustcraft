@@ -18,6 +18,7 @@ import super::sky::{MOON_LIGHT, SUN_LIGHT};
 import super::stars::reflected_celestial;
 import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
 import super::curvature::{curved, uncurved};
+import super::hash::hash2;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> material_color: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(1) var material_color_texture: texture_2d<f32>;
@@ -246,17 +247,6 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     return out;
 }
 
-// 0..1 for the whole-number cell `p` is in. Integer mixing, since the usual fract(sin)
-// hash loses its precision at world coordinates in the thousands and turns into stripes.
-fn hash2(p: vec2<f32>) -> f32 {
-    let cell = vec2<i32>(floor(p));
-    var h = (bitcast<u32>(cell.x) * 0x8da6b343u) ^ (bitcast<u32>(cell.y) * 0xd8163841u);
-    h = (h ^ (h >> 15u)) * 0x2c1b3c6du;
-    h = (h ^ (h >> 12u)) * 0x297a2d39u;
-    h = h ^ (h >> 15u);
-    return f32(h) / 4294967295.0;
-}
-
 // Value noise, 0..1, smooth across whole-number cells.
 fn smooth_noise(p: vec2<f32>) -> f32 {
     let cell = floor(p);
@@ -443,6 +433,16 @@ const FRESH_TINT: f32 = 0.1;
 const REFRACTION: f32 = 0.035;
 // How strong fresh water's ripples are next to the ocean's: it's calmer.
 const FRESH_RIPPLES: f32 = 0.15;
+// Fresh water's speed downhill per unit of slope, in blocks a second, its most, and how much more rippled it is at that.
+const FLOW_SPEED: f32 = 12.0;
+const FLOW_MAX: f32 = 4.0;
+const FLOW_ROUGHEN: f32 = 1.5;
+// Seconds ripples are carried before fading to a fresh copy, so they never stretch.
+const FLOW_PERIOD: f32 = 1.2;
+// The cosine off straight up of the edge of what's seen out of the water from under it, by its refraction, and how
+// much of what's above shows past that edge and within it.
+const SNELL_WINDOW: f32 = 0.661;
+const BELOW_CLEAR: vec2<f32> = vec2<f32>(0.7, 0.95);
 // The reflection ray marches this many steps over up to this many blocks, and counts as having
 // reached a surface it has gone this far behind.
 const REFLECTION_STEPS: i32 = 20;
@@ -511,9 +511,27 @@ fn screen_reflection(origin: vec3<f32>, direction: vec3<f32>, frag_coord: vec4<f
 
 // Fresh water seen from above: what's under the surface, through ripples that bend it and a depth
 // of clear water that tints it, and the sky, the sun and the world about it reflected off the top.
-fn fresh_water(world_position: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f32>, depth: f32, footprint: f32, dist: f32, tint: vec3<f32>) -> vec3<f32> {
+fn fresh_water(world_position: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f32>, depth: f32, footprint: f32, dist: f32, tint: vec3<f32>) -> vec3<f32> {
     let time = view_bindings::globals.time;
-    let ripple = ripples(world_position.xz, time, footprint);
+    // ripples carried down the slope the normal leans to, as two copies half a period apart faded across each other
+    var flow = normal.xz / max(normal.y, 0.2) * FLOW_SPEED * f32(normal.y > 0.5);
+    flow *= min(1.0, FLOW_MAX / max(length(flow), 1e-4));
+    let speed = length(flow) / FLOW_MAX;
+    // still ripples only show where it barely runs
+    var ripple = vec3<f32>(0.0);
+    if speed < 0.1 {
+        ripple = ripples(world_position.xz, time, footprint);
+    }
+    if speed > 0.01 {
+        let t = fract(time / FLOW_PERIOD);
+        let a = ripples(world_position.xz - flow * FLOW_PERIOD * t, time, footprint);
+        let b = ripples(world_position.xz - flow * FLOW_PERIOD * fract(t + 0.5) + vec2<f32>(7.3, 3.1), time, footprint);
+        let wa = 1.0 - abs(1.0 - 2.0 * t);
+        let wb = 1.0 - wa;
+        let carried = vec3<f32>((a.xy * wa + b.xy * wb) / sqrt(wa * wa + wb * wb), a.z * wa + b.z * wb);
+        ripple = mix(ripple, carried, smoothstep(0.01, 0.1, speed));
+        ripple *= 1.0 + FLOW_ROUGHEN * speed;
+    }
     let slope = ripple.xy * FRESH_RIPPLES;
     let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
     let variance = CALM_SLOPE_VARIANCE + ripple.z * FRESH_RIPPLES * FRESH_RIPPLES;
@@ -557,6 +575,24 @@ fn fresh_water(world_position: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f3
     let reflection = mix(sky, world.rgb, world.a);
     let sun = glint(surface, to_eye, variance, world_position, frag_coord.xy) * cloud_shadow(uncurved(world_position));
     return body * (1.0 - share) + reflection * share + sun;
+}
+
+// Fresh water's surface seen from under it: what's above, bent by the ripples, clearest through Snell's window straight
+// up and tinted more past it, where real water would only mirror what's under it.
+fn fresh_water_below(world_position: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f32>, footprint: f32) -> vec3<f32> {
+    let time = view_bindings::globals.time;
+    let slope = ripples(world_position.xz, time, footprint).xy * FRESH_RIPPLES;
+    let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
+    let scatter = scene_colour(FRESH_SCATTER) * daylight(uncurved(world_position));
+    // light from above leaves the water only within this cosine of straight up, 1 / 1.33 its sine
+    let window = smoothstep(SNELL_WINDOW - 0.04, SNELL_WINDOW + 0.04, dot(-to_eye, surface));
+    var above = scatter;
+@if(VIEW_TRANSMISSION_TEXTURE) {
+    let uv = frag_coord.xy / view_bindings::view.viewport.zw;
+    let bent = clamp(uv + slope * REFRACTION * 3.0, vec2<f32>(0.001), vec2<f32>(0.999));
+    above = textureSampleLevel(view_bindings::view_transmission_texture, view_bindings::view_transmission_sampler, bent, 0.0).rgb;
+}
+    return mix(scatter, above, mix(BELOW_CLEAR.x, BELOW_CLEAR.y, window));
 }
 
 @fragment
@@ -648,7 +684,9 @@ fn fragment(
     let to_eye = -view_to_world / dist;
     // blocks a pixel spans across the water here, worked out where every fragment does
     let footprint = max(length(dpdx(world_position.xz)), length(dpdy(world_position.xz)));
-    let above = view_position.y > world_position.y && normal.y > 0.5;
+    // which side of the surface's plane the eye is on, as a slope rising away from it is seen from above though over the eye
+    let outside = dot(view_position - world_position, normal) > 0.0;
+    let above = outside && normal.y > 0.5;
 @if(SOLID_WATER) {
     // nothing shows through, so it's all the water's own colour that isn't reflected
     alpha = 1.0;
@@ -688,13 +726,18 @@ fn fragment(
 
     // fresh water is its own sight of what's under it, so is drawn over it, not blended, and keeps
     // its look at any distance, LODs included
-    if above && fresh_surface {
+    // a fall's side seen from out of the water is fresh water's outside too
+    if outside && fresh_surface {
         // LOD water has no depth to go by and a coarse bed under it shows in squares, so is deep enough to hide it
         var depth = 10.0;
 @if(VERTEX_COLORS) {
         depth = max(in.color.g * CHUNK_SIZE, 0.25);
 }
-        scene = fresh_water(world_position, to_eye, in.position, depth, footprint, dist, scene_colour(color.rgb) * daylight(uncurved(world_position)));
+        scene = fresh_water(world_position, normal, to_eye, in.position, depth, footprint, dist, scene_colour(color.rgb) * daylight(uncurved(world_position)));
+        alpha = 1.0;
+    } else if fresh_surface && normal.y > 0.5 {
+        // seen from under it, clear, not tinted
+        scene = fresh_water_below(world_position, to_eye, in.position, footprint);
         alpha = 1.0;
     }
 

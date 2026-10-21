@@ -29,6 +29,18 @@ pub struct TerrainSample {
     /// Where the water's surface is over the column, or 0 if it's dry: sea, lake or river.
     pub water_surface: f32,
     pub water_kind: WaterKind,
+    pub spring: SpringPart,
+}
+
+/// The part of a spring, where a river rises, a column is in.
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
+pub enum SpringPart {
+    #[default]
+    None,
+    /// The ring of ground round the pool.
+    Rim,
+    /// The pool the river rises in.
+    Pool,
 }
 
 /// Where the ground, its biomes and its water come from. Chunk generation and LOD read terrain
