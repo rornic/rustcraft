@@ -3,6 +3,7 @@ pub mod birds;
 pub mod block;
 pub mod chunks;
 pub mod clouds;
+pub mod collision;
 pub mod critters;
 pub mod curvature;
 pub mod debug;
