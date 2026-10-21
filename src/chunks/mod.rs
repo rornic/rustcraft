@@ -113,5 +113,6 @@ pub fn insert_terrain_resources(
         debug.solid_leaves,
         materials.chunk,
         materials.water,
+        materials.spray,
     ));
 }

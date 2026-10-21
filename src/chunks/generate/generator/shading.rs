@@ -29,6 +29,8 @@ pub(super) const AO_GAMMA: f32 = 2.2;
 
 // Height of the water surface within a full-detail block, whose cube spans -0.5..0.5.
 pub(super) const WATER_TOP: f32 = 0.4;
+// How far under a block's top water's surface sits.
+pub(super) const WATER_DROP: f32 = 0.5 - WATER_TOP;
 
 // The axis a unit offset runs along.
 pub(super) fn axis_of(v: IVec3) -> usize {
@@ -112,14 +114,16 @@ pub(super) fn vertex_shore_factor(
     vertex_local_pos: [f32; 3],
 ) -> f32 {
     let (offset_a, offset_b) = tangent_offsets(face_index, vertex_local_pos);
+    // a sloped top's columns are land where they have no fresh water, so blocks either side of a step agree
+    let sloped = source.water_level(block_coord.x, block_coord.z).is_some();
+    let is_land = |c: IVec3| match sloped {
+        true => source.water_level(c.x, c.z).is_none(),
+        false => is_solid(source.block(c)),
+    };
 
-    let side_a = source.block(block_coord + offset_a);
-    let side_b = source.block(block_coord + offset_b);
-    let corner = source.block(block_coord + offset_a + offset_b);
-
-    let land_count = [side_a, side_b, corner]
-        .iter()
-        .filter(|&&b| is_solid(b))
+    let land_count = [offset_a, offset_b, offset_a + offset_b]
+        .into_iter()
+        .filter(|&offset| is_land(block_coord + offset))
         .count();
     land_count as f32 / 3.0
 }
@@ -172,4 +176,120 @@ pub(super) fn vertex_water_depth(
         .map(|offset| depth_of(block_coord + offset))
         .sum();
     total / 4.0
+}
+
+// Columns whose surfaces differ by more than this are a curtain between them, not one slope.
+pub(super) const WATER_SLOPE_MAX_STEP: f32 = 1.0;
+
+// The x and z signs, -1 or 1, of the top-face corner a vertex at `vertex_local_pos` is over.
+pub(super) fn corner_signs(vertex_local_pos: [f32; 3]) -> (i32, i32) {
+    let (a, b) = tangent_offsets(4, vertex_local_pos);
+    ((a + b).x, (a + b).z)
+}
+
+// A top-face corner of a water column: the surface's height there, its slope in x and z, and the columns joining it.
+#[derive(Clone, Copy)]
+pub(super) struct WaterCorner {
+    pub(super) height: f32,
+    pub(super) slope: [f32; 2],
+    joined: [(i32, i32); 4],
+    count: usize,
+}
+
+impl WaterCorner {
+    pub(super) fn joins(&self, column: (i32, i32)) -> bool {
+        self.joined[..self.count].contains(&column)
+    }
+}
+
+// The corner `signs` of `column`, joined by the columns round it until sorted levels gap a block, so a group agrees on it.
+pub(super) fn water_corner(
+    level_at: &mut impl FnMut(i32, i32) -> Option<f32>,
+    column: (i32, i32),
+    own: f32,
+    (dx, dz): (i32, i32),
+) -> WaterCorner {
+    let mut levels = [(own, column); 4];
+    let mut count = 1;
+    for (ox, oz) in [(dx, 0), (0, dz), (dx, dz)] {
+        let c = (column.0 + ox, column.1 + oz);
+        if let Some(level) = level_at(c.0, c.1) {
+            levels[count] = (level, c);
+            count += 1;
+        }
+    }
+    let levels = &mut levels[..count];
+    levels.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let at = levels.iter().position(|&(_, c)| c == column).unwrap();
+    let start = (0..at)
+        .rev()
+        .find(|&i| levels[i + 1].0 - levels[i].0 >= WATER_SLOPE_MAX_STEP)
+        .map_or(0, |i| i + 1);
+    let end = (at..count - 1)
+        .find(|&i| levels[i + 1].0 - levels[i].0 >= WATER_SLOPE_MAX_STEP)
+        .map_or(count, |i| i + 1);
+    let group = &levels[start..end];
+    let height = group.iter().map(|&(level, _)| level).sum::<f32>() / group.len() as f32;
+    // the far side's average less the near side's, along each axis, where the group has both
+    let rise = |far: &dyn Fn((i32, i32)) -> bool| {
+        let (mut sums, mut counts) = ([0.0; 2], [0.0; 2]);
+        for &(level, c) in group {
+            let side = far(c) as usize;
+            sums[side] += level;
+            counts[side] += 1.0;
+        }
+        if counts[0] > 0.0 && counts[1] > 0.0 {
+            sums[1] / counts[1] - sums[0] / counts[0]
+        } else {
+            0.0
+        }
+    };
+    let slope = [
+        rise(&|c| c.0 == column.0.max(column.0 + dx)),
+        rise(&|c| c.1 == column.1.max(column.1 + dz)),
+    ];
+    let mut joined = [(0, 0); 4];
+    for (slot, &(_, c)) in joined.iter_mut().zip(group) {
+        *slot = c;
+    }
+    WaterCorner {
+        height,
+        slope,
+        joined,
+        count: group.len(),
+    }
+}
+
+// Columns a step in the water's surface is spread out over, each side of it.
+pub(super) const WATER_SPREAD_REACH: i32 = 5;
+// The most the spread moves a surface: a drop past twice it keeps a curtain for the rest.
+const WATER_SPREAD_MAX_MOVE: f32 = 1.5;
+// How far under a bank's ground a water corner beside it is held, so raised water never stands over it.
+pub(super) const WATER_BANK_MARGIN: f32 = 0.05;
+
+// `raw` (NaN where dry) averaged over the water within reach of each column of the grid `WATER_SPREAD_REACH` inside it
+// shortcut: the spread is only drawn, the blocks under it aren't moved; fill them at generation if swimming in it matters
+pub(super) fn spread_water_levels(raw: &[f32], wide: i32) -> Vec<f32> {
+    let reach = WATER_SPREAD_REACH;
+    let inner = wide - 2 * reach;
+    (0..inner * inner)
+        .map(|i| {
+            let (x, z) = (i / inner + reach, i % inner + reach);
+            let own = raw[(x * wide + z) as usize];
+            if own.is_nan() {
+                return own;
+            }
+            let (mut total, mut count) = (0.0, 0.0);
+            for dx in -reach..=reach {
+                for dz in -reach..=reach {
+                    let level = raw[((x + dx) * wide + z + dz) as usize];
+                    if dx * dx + dz * dz <= reach * reach && !level.is_nan() {
+                        total += level;
+                        count += 1.0;
+                    }
+                }
+            }
+            own + (total / count - own).clamp(-WATER_SPREAD_MAX_MOVE, WATER_SPREAD_MAX_MOVE)
+        })
+        .collect()
 }

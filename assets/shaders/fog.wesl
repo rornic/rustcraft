@@ -19,7 +19,8 @@ const EDGE_FADE_START: f32 = 0.9;
 fn fogged(color: vec4<f32>, world_position: vec3<f32>, frag_coord: vec2<f32>) -> vec4<f32> {
     let fog = view_bindings::fog;
     let view_position = view_bindings::view.world_position.xyz;
-    if view_position.y < f32(constants::WATER_LEVEL) {
+    // under a river or lake too, over the sea's level: only the underwater fog starts at the camera
+    if view_position.y < f32(constants::WATER_LEVEL) || fog.be.x <= 0.0 {
         return apply_fog(fog, color, world_position, view_position, frag_coord);
     }
     let half = fog.be.x;

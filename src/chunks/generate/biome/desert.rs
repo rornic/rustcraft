@@ -10,6 +10,10 @@ impl Biome for Desert {
         "desert"
     }
 
+    fn spring_block(&self) -> BlockType {
+        BlockType::Sandstone
+    }
+
     fn tree_density(&self) -> Option<f64> {
         Some(0.0)
     }

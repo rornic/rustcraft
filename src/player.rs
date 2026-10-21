@@ -30,7 +30,9 @@ use bevy::{
     time::Time,
 };
 
-use crate::{block::BlockType, tonemap::scene_colour, world::World};
+use crate::{
+    block::BlockType, chunks::generate::WATER_LEVEL, tonemap::scene_colour, world::World,
+};
 
 #[derive(Component, Default)]
 pub struct Player;
@@ -109,6 +111,8 @@ static UNDERWATER_COLOR: LazyLock<Color> =
 // How far round the camera the murk hangs, in blocks: past the underwater fog's end, where
 // everything is already its colour, so it only hides the sky.
 const MURK_DISTANCE: f32 = 48.0;
+// Where the fog underwater in a river or lake is thick enough to hide everything, in blocks.
+const FRESH_FOG_END: f32 = 160.0;
 
 /// The sky isn't fogged, so underwater it's hidden behind a sphere of the fog's colour hung
 /// round the camera. It's always drawn, and only shows when its alpha is 1, so going under
@@ -191,6 +195,7 @@ pub fn update_underwater_effects(
         With<Camera>,
     >,
     mut dry_defaults: Local<Option<DryDefaults>>,
+    mut murk_shown: Local<Option<bool>>,
 ) {
     let (parent, camera_transform, mut fog, mut dof, mut color_grading) =
         camera_query.single_mut().expect("camera does not exist");
@@ -207,7 +212,12 @@ pub fn update_underwater_effects(
                 color_grading: color_grading.clone(),
                 clear_color: clear_color.0,
             });
-            show_murk(&murk, &mut murk_materials, true);
+        }
+        // rivers and lakes are clear: the sky's seen out of them, and things farther off sharp
+        let fresh = eye.y > WATER_LEVEL as f32 + 1.0;
+        if *murk_shown != Some(!fresh) {
+            show_murk(&murk, &mut murk_materials, !fresh);
+            *murk_shown = Some(!fresh);
         }
         // Matches ClearColor to the fog color, same trick setup_scene uses above water (its
         // ClearColor equals the dry fog's color) - otherwise empty/unloaded space shows the old
@@ -217,14 +227,14 @@ pub fn update_underwater_effects(
             color: underwater_color,
             falloff: FogFalloff::Linear {
                 start: 0.0,
-                end: 32.0,
+                end: if fresh { FRESH_FOG_END } else { 32.0 },
             },
             ..default()
         };
         *dof = DepthOfField {
             mode: DepthOfFieldMode::Gaussian,
-            focal_distance: 1.5,
-            aperture_f_stops: 0.5,
+            focal_distance: if fresh { 4.0 } else { 1.5 },
+            aperture_f_stops: if fresh { 8.0 } else { 0.5 },
             ..default()
         };
         // The fog's colour is already the water's: a white balance shift on top, like the
@@ -238,6 +248,7 @@ pub fn update_underwater_effects(
         *color_grading = dry.color_grading;
         clear_color.0 = dry.clear_color;
         show_murk(&murk, &mut murk_materials, false);
+        *murk_shown = None;
     }
 }
 

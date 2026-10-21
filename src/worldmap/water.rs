@@ -191,26 +191,28 @@ impl WorldMap {
 
     /// The lake cell that drains into cell (`cx`, `cz`), if one does, or into a cell of dry land that
     /// drains into it: the lake spills over a rim of ground, and the river starts below.
-    fn outlet_lake(&self, cx: usize, cz: usize) -> Option<(usize, usize)> {
-        let dim = self.dim() as i64;
-        let feeders = |x: usize, z: usize| {
-            NEIGHBOURS
-                .iter()
-                .map(move |&(nx, nz)| (x as i64 + nx, z as i64 + nz))
-                .filter(move |&(ux, uz)| (0..dim).contains(&ux) && (0..dim).contains(&uz))
-                .map(|(ux, uz)| (ux as usize, uz as usize))
-                .filter(move |&(ux, uz)| self.downstream(ux, uz) == Some((x, z)))
-        };
+    pub(super) fn outlet_lake(&self, cx: usize, cz: usize) -> Option<(usize, usize)> {
         let kind = |(x, z): (usize, usize)| self.water_kind[self.index(x, z)];
-        feeders(cx, cz).find_map(|u| {
+        self.feeders(cx, cz).find_map(|u| {
             if kind(u) == WaterCell::Lake as u8 {
                 Some(u)
             } else if kind(u) == WaterCell::None as u8 {
-                feeders(u.0, u.1).find(|&w| kind(w) == WaterCell::Lake as u8)
+                self.feeders(u.0, u.1).find(|&w| kind(w) == WaterCell::Lake as u8)
             } else {
                 None
             }
         })
+    }
+
+    /// The cells round (`x`, `z`) that drain into it.
+    pub(super) fn feeders(&self, x: usize, z: usize) -> impl Iterator<Item = (usize, usize)> + '_ {
+        let dim = self.dim() as i64;
+        NEIGHBOURS
+            .iter()
+            .map(move |&(nx, nz)| (x as i64 + nx, z as i64 + nz))
+            .filter(move |&(ux, uz)| (0..dim).contains(&ux) && (0..dim).contains(&uz))
+            .map(|(ux, uz)| (ux as usize, uz as usize))
+            .filter(move |&(ux, uz)| self.downstream(ux, uz) == Some((x, z)))
     }
 
     /// The course from river cell `i` to the one it drains into, if it has one.
@@ -352,12 +354,12 @@ impl WorldMap {
                 continue;
             };
             let feeder = self.index(fx, fz);
-            // the lake's water is a whole block, floored: the river's never rounds to more than it
+            // the lake's water is a whole block, floored: the river's never lies in a block over it
             let top = self.water_surface[feeder].floor();
             from_lake[n] = true;
             for (k, level) in caps[n].iter_mut().enumerate() {
                 let back = k as f32 / PROFILE_POINTS as f32 * cell_blocks;
-                *level = level.max(top - back * OUTLET_SLOPE).min(top + 0.49);
+                *level = level.max(top - back * OUTLET_SLOPE).min(top);
             }
         }
         // a river runs down to the lake or sea it drains into over its last few cells, if it comes
@@ -433,7 +435,10 @@ impl WorldMap {
             }
         }
         let _ = dim;
+        // sources first, every stretch after all that run into it
+        let mut order = Vec::with_capacity(stretches.len());
         while let Some(n) = ready.pop() {
+            order.push(n);
             let stretch = stretches[n];
             let mut level = envelope[n];
             for k in 0..=PROFILE_POINTS {
@@ -460,10 +465,16 @@ impl WorldMap {
         let cell = self.config.map_cell as f32;
         for next in 0..stretches.len() {
             let target = profiles.data[next][0];
-            let mut level = vec![(0usize, 0.0f32); 0];
-            for &feeder in &feeders[next] {
-                level.push((feeder, 0.0));
-            }
+            // the widest feeder is the river itself running on, which already comes down to its own next stretch
+            let main = feeders[next]
+                .iter()
+                .copied()
+                .max_by(|&a, &b| stretches[a].width.total_cmp(&stretches[b].width));
+            let mut level: Vec<(usize, f32)> = feeders[next]
+                .iter()
+                .filter(|&&feeder| Some(feeder) != main)
+                .map(|&feeder| (feeder, 0.0))
+                .collect();
             let mut hops = 0;
             while !level.is_empty() && hops < MOUTH_CELLS {
                 let mut up = Vec::new();
@@ -483,11 +494,24 @@ impl WorldMap {
                         }
                     }
                     if lowered {
+                        // lowered a point at a time, a stretch never rises again further down it
+                        for k in 1..=PROFILE_POINTS {
+                            profiles.data[n][k] = profiles.data[n][k].min(profiles.data[n][k - 1]);
+                        }
                         up.extend(feeders[n].iter().map(|&f| (f, run + cell)));
                     }
                 }
                 level = up;
                 hops += 1;
+            }
+        }
+        // streams lowered toward a river further on may now end under the one they run into: it comes down with them
+        for &n in &order {
+            if let Some(&next) = at.get(&stretches[n].to) {
+                let end = profiles.data[n][PROFILE_POINTS];
+                for level in profiles.data[next].iter_mut() {
+                    *level = level.min(end);
+                }
             }
         }
         profiles
@@ -630,6 +654,27 @@ impl WorldMap {
             .reduce(f32::min)
     }
 
+    /// The lowest level of any lake within a cell past where `lake_level` reaches, and how many blocks past that
+    /// reach the point is: ground out there is held over the water, so a lake never meets ground under its level
+    /// at the square edge of its reach.
+    pub fn lake_level_near(&self, x: f64, z: f64) -> Option<(f32, f64)> {
+        let (u, v) = self.to_cell(x, z);
+        let (cx, cz) = (u.floor() as i64, v.floor() as i64);
+        let max = self.dim() as i64 - 1;
+        let mut nearest: Option<(f32, f64)> = None;
+        for (x, z) in (-1..=2i64).flat_map(|dz| (-1..=2i64).map(move |dx| (cx + dx, cz + dz))) {
+            let i = self.index(x.clamp(0, max) as usize, z.clamp(0, max) as usize);
+            if self.water_kind[i] != WaterCell::Lake as u8 {
+                continue;
+            }
+            // `lake_level` reaches a cell each way from a lake's cell
+            let out = ((x as f64 - u).abs().max((z as f64 - v).abs()) - 1.0).max(0.0);
+            let (level, nearer) = nearest.unwrap_or((f32::MAX, f64::MAX));
+            nearest = Some((level.min(self.water_surface[i]), nearer.min(out)));
+        }
+        nearest.map(|(level, out)| (level, out * self.config.map_cell as f64))
+    }
+
     pub fn lake_cover(&self, x: f64, z: f64) -> Option<(f32, f64)> {
         let (u, v) = self.to_cell(x, z);
         let (cx, cz) = (u.floor() as i64, v.floor() as i64);
@@ -735,5 +780,28 @@ mod tests {
             .unwrap();
         assert!((on.distance - 3.0).abs() < 1e-3 && on.width == 8.0);
         assert!(map.river_at(&tangents, &profiles, x, z + 200.0).is_none());
+    }
+
+    #[test]
+    fn test_a_river_never_rises_along_its_course() {
+        for seed in [3, 5, 10] {
+            let terrain = crate::worldmap::test_terrain(seed);
+            let (map, (tangents, profiles)) = (terrain.map(), terrain.rivers());
+            for i in 0..map.height.len() {
+                let (Some(stretch), n) = (map.stretch(tangents, i), profiles.index[i]) else {
+                    continue;
+                };
+                if n == RiverProfiles::NONE {
+                    continue;
+                }
+                let levels = profiles.data[n as usize];
+                assert!(levels.windows(2).all(|w| w[1] <= w[0]), "seed {seed} cell {i}: {levels:?}");
+                let next = profiles.index[stretch.to];
+                if next != RiverProfiles::NONE {
+                    let on = profiles.data[next as usize][0];
+                    assert!(on <= levels[PROFILE_POINTS] + 1e-3, "seed {seed} cell {i} rises into {on}: {levels:?}");
+                }
+            }
+        }
     }
 }

@@ -93,6 +93,7 @@ impl FadeMaterials {
             chunk,
             water,
             solid_water,
+            ..
         } = materials.clone();
         let base_chunk = chunk_materials.get(&chunk).unwrap().clone();
         let base_water = water_materials.get(&water).unwrap().clone();

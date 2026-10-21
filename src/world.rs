@@ -69,17 +69,15 @@ impl World {
     pub fn with_terrain(seed: u32, region_distance: u32, terrain: Arc<dyn TerrainSource>) -> Self {
         let height = WORLD_HEIGHT;
         let (mut spawn_x, mut spawn_z, mut spawn_height) = terrain.find_spawn();
-        // RC_SPAWN=x,z starts the player there, for looking at a place by its coordinates
-        if let Some((x, z)) = std::env::var("RC_SPAWN")
-            .ok()
-            .and_then(|s| {
-                s.split_once(',')
-                    .map(|(x, z)| (x.trim().parse().ok(), z.trim().parse().ok()))
-            })
-            .and_then(|(x, z): (Option<i64>, Option<i64>)| Some((x?, z?)))
-        {
-            (spawn_x, spawn_z) = (x, z);
-            spawn_height = terrain.sample(x as f64, z as f64).height;
+        // RC_SPAWN=x,z[,lift] starts the player there, lift blocks over the ground (20 by default)
+        let mut lift = 20.0;
+        if let Some((x, z, up)) = std::env::var("RC_SPAWN").ok().and_then(|s| {
+            let mut parts = s.split(',').map(|p| p.trim().parse::<f64>().ok());
+            Some((parts.next()??, parts.next()??, parts.next().flatten()))
+        }) {
+            (spawn_x, spawn_z) = (x as i64, z as i64);
+            spawn_height = terrain.sample(x, z).height;
+            lift = up.unwrap_or(lift);
         }
         let region_distance_blocks = region_distance as i64 * CHUNK_SIZE as i64;
         Self {
@@ -95,7 +93,11 @@ impl World {
                 RegionStore::new(terrain)
                     .with_resident_cap(resident_cap_for(region_distance_blocks)),
             ),
-            spawn: Vec3::new(spawn_x as f32, spawn_height as f32 + 20.0, spawn_z as f32),
+            spawn: Vec3::new(
+                spawn_x as f32,
+                spawn_height as f32 + lift as f32,
+                spawn_z as f32,
+            ),
         }
     }
 

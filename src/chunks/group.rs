@@ -178,6 +178,17 @@ pub fn load_groups(
                     ));
                 });
             }
+            if let Some(spray) = merged.spray {
+                let spray_material = loader.spray_material.clone();
+                commands.entity(entity).with_children(|parent| {
+                    parent.spawn((
+                        Mesh3d(meshes.add(spray)),
+                        MeshMaterial3d(spray_material),
+                        Transform::default(),
+                        group_aabb(),
+                    ));
+                });
+            }
             if let Some(inner_leaves) = merged.inner_leaves {
                 let material = loader.material.clone();
                 commands.entity(entity).with_children(|parent| {
@@ -280,7 +291,9 @@ pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
     let mut opaque = Vec::new();
     let mut water = Vec::new();
     let mut inner_leaves = Vec::new();
+    let mut spray = Vec::new();
     for (offset, meshes) in parts {
+        spray.extend(meshes.spray.map(|mesh| (offset, mesh)));
         opaque.push((offset, meshes.opaque));
         water.extend(meshes.water.map(|mesh| (offset, mesh)));
         inner_leaves.extend(meshes.inner_leaves.map(|mesh| (offset, mesh)));
@@ -294,6 +307,7 @@ pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
             )
         }),
         water: merge_meshes(water),
+        spray: merge_meshes(spray),
         inner_leaves: merge_meshes(inner_leaves),
     }
 }
@@ -301,6 +315,7 @@ pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use crate::chunks::generate::region_store::RegionStore;
 
     use bevy::math::{I64Vec3, U16Vec3, Vec3};
     use bevy::render::mesh::{Indices, Mesh};
@@ -319,7 +334,7 @@ mod tests {
             Arc::new(chunk),
             vec![None; 26],
             ChunkCoordinate(I64Vec3::ZERO),
-            &*crate::worldmap::test_terrain(1),
+            &RegionStore::new(crate::worldmap::test_terrain(1)),
             false,
         )
     }
@@ -382,7 +397,7 @@ mod tests {
             Arc::new(chunk),
             vec![None; 26],
             ChunkCoordinate(I64Vec3::ZERO),
-            &*crate::worldmap::test_terrain(1),
+            &RegionStore::new(crate::worldmap::test_terrain(1)),
             false,
         );
         let inner = meshes.inner_leaves.as_ref().unwrap().count_vertices();

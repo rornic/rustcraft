@@ -8,7 +8,7 @@ use super::water::{freeboard, RiverHit, RiverProfiles};
 use super::FeatureKind;
 use super::WorldMap;
 use crate::chunks::generate::biome::{BiomeId, Biomes, Climate};
-use crate::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
+use crate::chunks::generate::terrain_source::{SpringPart, TerrainSample, TerrainSource, WaterKind};
 use crate::chunks::generate::WATER_LEVEL;
 
 // How much of a point lake cells must cover for any river there to be the lake's, whatever its level.
@@ -64,6 +64,13 @@ const INLAND_LAKE_ABOVE_SEA: f64 = 0.6;
 
 // Cells at least this wide leave a river's channel to the map's own carving.
 const RIVER_DETAIL_CELL: f64 = 16.0;
+// A river rises in a round pool this many blocks across its middle, deepening from the first to the second
+// under its level, in a rim of ground this wide held over it.
+const SPRING_POOL: f32 = 2.6;
+const SPRING_DEPTH: (f64, f64) = (0.8, 2.2);
+const SPRING_RIM: f32 = 1.6;
+// Past the rim the ground falls away from it a block for each block out, over this far, so it stands in a mound.
+const SPRING_MOUND: f32 = 4.0;
 
 // The ground over a river's channel: a parabolic bed up to the water's edge, then the bank
 // easing out into the ground beside it.
@@ -75,7 +82,8 @@ fn channel(ground: f32, river: RiverHit) -> f32 {
     // the ground at the water's edge is a block over it, whatever the land is there, and eases to
     // the land's own height across the banks: cut down where it's higher, and built up a little
     // where a dip would leave the water standing over it, so the water is always held in by ground
-    let rim = river.surface + freeboard(river.width);
+    // and over the block the water's surface lies in by at least half of it, or the water stands over the bank
+    let rim = (river.surface + freeboard(river.width)).max(river.surface.ceil() - 0.4);
     let t = ((river.distance - half) / bank_width(river)).clamp(0.0, 1.0);
     // eased out, so the bank climbs from the water at once instead of lying as a dry shelf beside it
     rim + (ground - rim) * t * (2.0 - t)
@@ -135,6 +143,8 @@ pub struct WorldTerrain {
     tangents: Vec<[f32; 2]>,
     // each river stretch's water level every few blocks along it, under the ground it runs over
     profiles: RiverProfiles,
+    // by map cell, where a river rises in it: the spring's middle and level
+    springs: Vec<Option<(f64, f64, f32)>>,
 }
 
 impl WorldTerrain {
@@ -157,9 +167,48 @@ impl WorldTerrain {
             near_water,
             tangents,
             profiles: RiverProfiles::default(),
+            springs: Vec::new(),
         };
         terrain.profiles = terrain.river_profiles();
+        terrain.springs = terrain.springs();
         terrain
+    }
+
+    // Where each river rises: a river cell no river drains into and no lake spills into.
+    fn springs(&self) -> Vec<Option<(f64, f64, f32)>> {
+        let map = &self.map;
+        let dim = map.dim();
+        (0..dim * dim)
+            .map(|i| {
+                if map.river_width[i] <= 0.0 {
+                    return None;
+                }
+                let (cx, cz) = (i % dim, i / dim);
+                let fed = map
+                    .feeders(cx, cz)
+                    .any(|(ux, uz)| map.river_width[map.index(ux, uz)] > 0.0);
+                if fed || map.outlet_lake(cx, cz).is_some() {
+                    return None;
+                }
+                let (x, z) = map.cell_centre(cx, cz);
+                let surface = map.river_at(&self.tangents, &self.profiles, x, z)?.surface;
+                Some((x, z, surface))
+            })
+            .collect()
+    }
+
+    // How far the nearest spring is from (`x`, `z`), in the meandered space rivers are laid in, and its level.
+    fn spring_near(&self, x: f64, z: f64) -> Option<(f32, f32)> {
+        let map = &self.map;
+        let (u, v) = map.to_cell(x, z);
+        let max = map.dim() as i64 - 1;
+        let (u, v) = (u.round() as i64, v.round() as i64);
+        (-1..=1)
+            .flat_map(|dz| (-1..=1).map(move |dx| (u + dx, v + dz)))
+            .filter(|&(cx, cz)| (0..=max).contains(&cx) && (0..=max).contains(&cz))
+            .filter_map(|(cx, cz)| self.springs[map.index(cx as usize, cz as usize)])
+            .map(|(sx, sz, surface)| ((((x - sx).powi(2) + (z - sz).powi(2)).sqrt()) as f32, surface))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
     }
 
     // Each river's water level every few blocks along it, under the map's smooth ground, which is
@@ -206,23 +255,24 @@ impl WorldTerrain {
     fn ground_dry(&self, x: f64, z: f64, cell: f64, base: f64, near_water: bool) -> f64 {
         let map = &self.map;
         let sea = WATER_LEVEL as f64;
-        let mut detail =
-            self.detail_at(x, z, cell, base) * smoothstep(0.0, SHORE_SMOOTH, base - sea);
+        let detail = self.detail_at(x, z, cell, base) * smoothstep(0.0, SHORE_SMOOTH, base - sea);
         // lake floors and shores stay as the map has them, or the detail would stripe the water's edge
+        let mut kept = 1.0;
         if near_water {
             if let Some((surface, cover)) = map.lake_cover(x, z) {
                 // eased in with the lake's cover, which is smooth across cells: all at once at the edge
                 // of the cells that hold it would step the ground at their squares' sides
                 let calm = smoothstep(0.0, 6.0, base - surface as f64);
-                detail *= 1.0 - smoothstep(0.0, 0.5, cover) * (1.0 - calm);
+                kept *= 1.0 - smoothstep(0.0, 0.5, cover) * (1.0 - calm);
                 // and near the lake's level either side of it, so a hollow in the ground there doesn't leave
                 // water standing in a part of it, with walls, where the smooth ground crosses the level
                 let near = 1.0 - smoothstep(0.0, LAKE_CALM_BAND, (base - surface as f64).abs());
-                detail *= 1.0 - smoothstep(0.0, 0.25, cover) * near;
+                kept *= 1.0 - smoothstep(0.0, 0.25, cover) * near;
             }
         }
-        let smooth = base + detail;
-        let mountain = self.kind_cover(BiomeKind::Mountain, x, z);
+        let smooth = base + detail * kept;
+        // terraces are calmed with the detail: one cut more than `LAKE_PIT` into a lake's floor stands dry
+        let mountain = self.kind_cover(BiomeKind::Mountain, x, z) * kept;
         let ground = if mountain > 0.0 {
             smooth + (terraced(map.seed, x, z, true, smooth, base - sea) - smooth) * mountain
         } else {
@@ -348,6 +398,11 @@ impl WorldTerrain {
         self.kinds[self.map.biome[i] as usize]
     }
 
+    #[cfg(test)]
+    pub(super) fn rivers(&self) -> (&[[f32; 2]], &RiverProfiles) {
+        (&self.tangents, &self.profiles)
+    }
+
     pub fn map(&self) -> &Arc<WorldMap> {
         &self.map
     }
@@ -376,12 +431,22 @@ impl TerrainSource for WorldTerrain {
                 v.round().clamp(0.0, max) as usize,
             )]
         };
-        // the nearest river and, where one joins another, the other too
-        let rivers = if near_water && cell <= RIVER_DETAIL_CELL {
+        // where rivers are laid, drawn off the map's lines by the meander
+        let meandered = (near_water && cell <= RIVER_DETAIL_CELL).then(|| {
             let (mx, mz) = meander(seed, x, z);
-            map.river_hits(&self.tangents, &self.profiles, x + mx, z + mz)
-        } else {
-            [None, None]
+            (x + mx, z + mz)
+        });
+        // the nearest river and, where one joins another, the other too
+        let rivers = meandered.map_or([None, None], |(mx, mz)| {
+            map.river_hits(&self.tangents, &self.profiles, mx, mz)
+        });
+        let spring = meandered
+            .and_then(|(mx, mz)| self.spring_near(mx, mz))
+            .filter(|&(distance, _)| distance < SPRING_POOL + SPRING_RIM + SPRING_MOUND);
+        let spring_part = match spring {
+            Some((distance, _)) if distance < SPRING_POOL => SpringPart::Pool,
+            Some((distance, _)) if distance < SPRING_POOL + SPRING_RIM => SpringPart::Rim,
+            _ => SpringPart::None,
         };
         // how much lake cells cover a point, wobbled so a shore is not a straight line of the cells' squares
         // the level of the lake whose cells are by a point, which its water stands at wherever the ground is
@@ -391,8 +456,11 @@ impl TerrainSource for WorldTerrain {
         // water stands over ground under the level by the lake's cells
         // and only where the map's smooth ground is under it too, or a gorge cut deep beside the lake
         // would stand full of its water, a wall at the edge of the lake's cells
-        let lake_wet =
-            |g: f64| lake_core.is_some_and(|s| g < s as f64 && base < s as f64 + LAKE_BASE_SLACK && g > base - LAKE_PIT);
+        let lake_wet = |g: f64| {
+            lake_core.is_some_and(|s| {
+                g < s as f64 && base < s as f64 + LAKE_BASE_SLACK && g > base - LAKE_PIT
+            })
+        };
         let lake = near_water
             .then(|| map.lake_cover(x, z))
             .flatten()
@@ -435,7 +503,8 @@ impl TerrainSource for WorldTerrain {
         // on through shallow ground by it in a channel with banks, not into a wider inlet of the sea
         // a lake's bed may lie far under the sea's level while its water stands well over it: that
         // water is the lake's, not the sea's, wherever its bed is
-        let inland_lake = lake_level.is_some_and(|surface| surface as f64 > sea + INLAND_LAKE_ABOVE_SEA);
+        let inland_lake =
+            lake_level.is_some_and(|surface| surface as f64 > sea + INLAND_LAKE_ABOVE_SEA);
         let under_sea = ground < sea
             && !inland_lake
             && !(ground >= sea - MARSH_DEPTH
@@ -481,18 +550,35 @@ impl TerrainSource for WorldTerrain {
                 ground = surface - 0.6;
             }
         }
+        // dry ground at a lake's edge but under its level, a dip its water doesn't flood, is built up flush with the
+        // water, or the lake's edge stands as a wall of water over it
+        let shore = near_water && !flooded && !by_river && !by_mouth;
+        if let Some((surface, out)) = shore.then(|| map.lake_level_near(x, z)).flatten() {
+            // and past where its water can reach, eased down a block a block, so the ground doesn't end in a line
+            ground = ground.max(surface.floor() as f64 + 0.1 - out);
+        }
         // the lake's water is a whole block, floored: ground under the lake's real level but over that
         // block is dug just under it, or it would stand as a strip of dry shore between the water and a
         // river running into it
         if let Some(surface) = lake_level.filter(|_| !by_river && lake_wet(ground)) {
             ground = ground.min(surface.floor() as f64 - 0.01);
         }
+        // a river rises in a bowl, held in a rim of ground over its level, but where the river runs out
+        if let Some((distance, surface)) = spring {
+            if spring_part == SpringPart::Pool {
+                let t = (distance / SPRING_POOL) as f64;
+                ground = ground.min(surface as f64 - (SPRING_DEPTH.0 + (SPRING_DEPTH.1 - SPRING_DEPTH.0) * (1.0 - t * t)));
+            } else if !rivers[0].is_some_and(|r| r.distance < r.width / 2.0 + 1.0) {
+                let out = (distance - SPRING_POOL - SPRING_RIM).max(0.0) as f64;
+                ground = ground.max(surface.ceil() as f64 + 0.2 - out);
+            }
+        }
         let ground = ground.max(0.0);
 
         // a river's water by a lake never stands over the lake's whole block by more than half a block, or
         // a river just over the lake's level floods its shore at a level over the lake's
         let by_lake = |surface: f32| match lake_level {
-            Some(level) if surface > level.floor() + 0.49 && surface < level + 2.0 => level.floor() + 0.49,
+            Some(level) if surface > level.floor() && surface < level + 2.0 => level.floor(),
             _ => surface,
         };
         // a river held above the sea in a trench cut below it is still the river's water there
@@ -502,7 +588,11 @@ impl TerrainSource for WorldTerrain {
             .filter(|r| r.distance < r.width / 2.0 && ground < r.surface as f64)
             // where two meet, the wider river's level is the water's
             .max_by(|a, b| a.width.total_cmp(&b.width));
-        let (water_surface, water_kind) = if let Some(river) =
+        let (water_surface, water_kind) = if let Some((_, surface)) =
+            spring.filter(|_| spring_part == SpringPart::Pool)
+        {
+            (surface, WaterKind::River)
+        } else if let Some(river) =
             river_water.filter(|r| r.surface >= WATER_LEVEL as f32 - SEA_MARGIN)
         {
             (by_lake(river.surface), WaterKind::River)
@@ -522,13 +612,14 @@ impl TerrainSource for WorldTerrain {
             height: ground,
             biome,
             // nothing grows in water
-            trees: if wet {
+            trees: if wet || spring_part != SpringPart::None {
                 0.0
             } else {
                 map.bilinear_bytes(&map.trees, x, z) as f64 / 255.0
             },
             water_surface,
             water_kind,
+            spring: spring_part,
         }
     }
 

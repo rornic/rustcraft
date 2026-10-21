@@ -165,7 +165,7 @@ mod tests {
                             data[&c].clone(),
                             neighbours,
                             c,
-                            regions.terrain(),
+                            &regions,
                             false,
                         );
                         parts.push((Vec3::new(dx as f32, dy as f32, dz as f32) * 16.0, meshes));

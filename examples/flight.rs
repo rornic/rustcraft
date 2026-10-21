@@ -83,6 +83,7 @@ fn setup(
             chunk,
             water,
             solid_water,
+            spray: Default::default(),
         },
         &mut chunk_materials,
         &mut water_materials,

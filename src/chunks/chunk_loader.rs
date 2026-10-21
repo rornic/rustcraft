@@ -23,7 +23,7 @@ use super::{
     generate::generator::{generate_chunk, generate_chunk_mesh, ChunkMeshes},
     group::{GroupedChunk, MeshedChunk},
     lod::{GenerateLodMesh, LodKey, LodLayout, LodLoader},
-    material::{ChunkMaterial, WaterMaterial},
+    material::{ChunkMaterial, SprayMaterial, WaterMaterial},
 };
 use crate::world::World;
 
@@ -62,6 +62,7 @@ pub struct ChunkLoader {
     spawn_queue: ChunkSpawnQueue,
     pub(super) material: Handle<ChunkMaterial>,
     pub(super) water_material: Handle<WaterMaterial>,
+    pub(super) spray_material: Handle<SprayMaterial>,
     max_in_flight_generating: usize,
     // see `DebugSettings::solid_leaves`
     solid_leaves: bool,
@@ -99,6 +100,7 @@ impl ChunkLoader {
         solid_leaves: bool,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
+        spray_material: Handle<SprayMaterial>,
     ) -> Self {
         let render_distance = layout.full_detail_reach();
         Self {
@@ -109,6 +111,7 @@ impl ChunkLoader {
                 .with_layers(World::layers(world_height)),
             material,
             water_material,
+            spray_material,
             max_in_flight_generating: max_in_flight(render_distance),
             solid_leaves,
             groups: HashMap::new(),
@@ -261,7 +264,7 @@ pub fn load_chunks(
                                 data,
                                 adjacent,
                                 coord,
-                                regions.terrain(),
+                                &regions,
                                 solid_leaves,
                             )
                         }));

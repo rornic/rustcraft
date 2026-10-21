@@ -14,6 +14,10 @@ impl Biome for Mountain {
         "mountain"
     }
 
+    fn spring_block(&self) -> BlockType {
+        BlockType::Stone
+    }
+
     fn tree_density(&self) -> Option<f64> {
         Some(0.04)
     }
