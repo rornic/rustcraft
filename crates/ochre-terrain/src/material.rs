@@ -17,10 +17,8 @@ use bevy::{
     shader::{ShaderDefVal, ShaderRef},
 };
 
-use crate::chunk::CHUNK_SIZE;
 use crate::fade::FULLY_VISIBLE;
 use crate::generate::generator::{INNER_LEAVES_BAND, INNER_LEAVES_REACH};
-use crate::lod::{LodLayout, SOLID_WATER_LEVEL};
 use crate::settings::DebugSettings;
 use ochre_base::block::Tile;
 use ochre_base::WATER_LEVEL;
@@ -220,12 +218,7 @@ pub struct TerrainMaterials {
 }
 
 impl TerrainMaterials {
-    pub fn new(
-        layout: LodLayout,
-        debug: DebugSettings,
-        inputs: &ShaderInputs,
-        assets: &mut TerrainAssets,
-    ) -> Self {
+    pub fn new(debug: DebugSettings, inputs: &ShaderInputs, assets: &mut TerrainAssets) -> Self {
         let clouds = &inputs.clouds;
         let chunk = assets.chunk.add(ChunkMaterial {
             color: LinearRgba::WHITE,
@@ -243,7 +236,6 @@ impl TerrainMaterials {
             cloud_pattern: clouds.pattern.clone(),
             cloud_layer: clouds.layer,
             cloud_target: clouds.target.clone(),
-            see_through: see_through_reach(layout),
             curvature: inputs.curvature.clone(),
             solid: false,
         };
@@ -329,7 +321,6 @@ impl Material for SprayMaterial {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-#[bind_group_data(WaterKey)]
 pub struct WaterMaterial {
     #[uniform(0)]
     pub color: LinearRgba,
@@ -345,10 +336,6 @@ pub struct WaterMaterial {
     pub cloud_pattern: Handle<Image>,
     #[uniform(6)]
     pub cloud_layer: Vec4,
-    // between these distances in blocks, x to y, see-through water turns opaque, so it
-    // matches the opaque water LODs draw farther out, see `see_through_reach`
-    #[uniform(7)]
-    pub see_through: Vec4,
     // what the land bends around, see `curvature::Curvature`
     #[storage(8, read_only)]
     pub curvature: Handle<ShaderBuffer>,
@@ -358,31 +345,6 @@ pub struct WaterMaterial {
     pub cloud_target: Handle<Image>,
     // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
     pub solid: bool,
-}
-
-/// Where see-through water turns opaque for `WaterMaterial::see_through`: by the nearest
-/// LOD water drawn opaque can be, where a node of `lod::SOLID_WATER_LEVEL` is no longer
-/// split, see `LodLayout::splits`. None at all if no level is that coarse.
-pub fn see_through_reach(layout: LodLayout) -> Vec4 {
-    if layout.max_level < SOLID_WATER_LEVEL {
-        return Vec4::new(f32::MAX, f32::MAX, 0.0, 0.0);
-    }
-    let opaque = layout.reach(SOLID_WATER_LEVEL - 1) * CHUNK_SIZE as f32;
-    Vec4::new(0.5 * opaque, 0.95 * opaque, 0.0, 0.0)
-}
-
-// Compiled into water's shaders, see `WaterMaterial::specialize`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct WaterKey {
-    solid: bool,
-}
-
-impl From<&WaterMaterial> for WaterKey {
-    fn from(material: &WaterMaterial) -> Self {
-        Self {
-            solid: material.solid,
-        }
-    }
 }
 
 impl Material for WaterMaterial {
@@ -422,17 +384,12 @@ impl Material for WaterMaterial {
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
-        key: MaterialPipelineKey<Self>,
+        _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         // unlike ChunkMaterial, water has no back-face culling: the player can swim
         // underneath the lowered surface and must still see it rendered from below.
         descriptor.primitive.cull_mode = None;
-        let mut defs = vec![water_level()];
-        // drawn opaque, so it shows the sea as it is, not blended over what's under it
-        if key.bind_group_data.solid {
-            defs.push("SOLID_WATER".into());
-        }
-        push_shader_defs(descriptor, &defs);
+        push_shader_defs(descriptor, &[water_level()]);
         Ok(())
     }
 }
@@ -440,21 +397,6 @@ impl Material for WaterMaterial {
 #[cfg(test)]
 mod tests {
     use bevy::color::{LinearRgba, Srgba};
-
-    #[test]
-    fn test_see_through_water_is_opaque_before_lods_draw_it_opaque() {
-        use crate::lod::{LodLayout, SOLID_WATER_LEVEL};
-        let layout = LodLayout::new(16, 512, 2);
-        let reach = super::see_through_reach(layout);
-        // the nearest a node drawing opaque water can be, in blocks
-        let opaque = layout.reach(SOLID_WATER_LEVEL - 1) * 16.0;
-        assert!(
-            reach.x < reach.y && reach.y < opaque,
-            "{reach} for opaque from {opaque}"
-        );
-        // with no level that coarse, water stays see-through however far out
-        assert!(super::see_through_reach(LodLayout::new(16, 16, 2)).x > 1e30);
-    }
 
     // the workspace's assets, wherever the tests run from
     fn asset(path: &str) -> String {
