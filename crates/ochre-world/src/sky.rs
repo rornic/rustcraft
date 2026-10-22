@@ -14,7 +14,7 @@ use bevy::{
         atmosphere::ScatteringMedium, Atmosphere, AtmosphereEnvironmentMapLight,
         CascadeShadowConfigBuilder, DirectionalLight, SunDisk,
     },
-    math::{UVec2, UVec3, Vec3},
+    math::{Quat, UVec2, UVec3, Vec3},
     pbr::{AtmosphereSettings, DistanceFog, FogFalloff},
     time::Time,
     transform::components::{GlobalTransform, Transform},
@@ -22,6 +22,7 @@ use bevy::{
 
 use std::f32::consts::{PI, TAU};
 
+use ochre_base::math::smoothstep;
 use ochre_terrain::curvature::WORLD_CURVE;
 
 /// How opaque fog gets at its far end.
@@ -88,6 +89,7 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
             ..Default::default()
         },
         Sun,
+        SunShadows(shining_from(sun_direction(START_TIME)).rotation),
         SunDisk {
             angular_size: SUN_DISC_SIZE,
             intensity: SUN_DISC_INTENSITY,
@@ -106,6 +108,14 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
 /// On the sun, see `move_sky`.
 #[derive(Component)]
 pub struct Sun;
+
+/// Which way the sun casts its shadows: turned in steps, see `aim_sun_shadows`.
+#[derive(Component)]
+pub struct SunShadows(Quat);
+
+// The sun's shadows turn once every this many ticks, sliding over the last this share of each.
+const SHADOW_STEP_TICKS: u64 = 2 * TICKS_PER_SECOND;
+const SHADOW_SLIDE: f32 = 0.15;
 
 /// On the moon, see `move_sky`. Without shadows, so Bevy puts it before the sun among the
 /// lights, matching `MOON_LIGHT` and `SUN_LIGHT` in `sky.wesl`.
@@ -175,7 +185,7 @@ pub fn move_sky(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut clock: ResMut<TimeOfDay>,
-    mut sun: Query<&mut Transform, (With<Sun>, Without<Moon>)>,
+    mut sun: Query<(&mut Transform, &mut SunShadows), Without<Moon>>,
     mut moon: Query<&mut Transform, (With<Moon>, Without<Sun>)>,
     // the part of a tick not yet counted
     mut carry: Local<f32>,
@@ -186,11 +196,36 @@ pub fn move_sky(
     let whole = carry.floor();
     *carry -= whole;
     clock.0 = clock.0.saturating_add_signed(whole as i64);
-    if let Ok(mut transform) = sun.single_mut() {
-        *transform = shining_from(sun_direction(clock.days()));
+    // on between ticks too: stepped 20 times a second, the sun's shadow-map texels jump and shadows crawl
+    let days = clock.days() + *carry / DAY_TICKS as f32;
+    if let Ok((mut transform, mut shadows)) = sun.single_mut() {
+        *transform = shining_from(sun_direction(days));
+        shadows.0 = shining_from(sun_direction(shadow_days(clock.0, *carry))).rotation;
     }
     if let Ok(mut transform) = moon.single_mut() {
-        *transform = shining_from(moon_direction(clock.days()));
+        *transform = shining_from(moon_direction(days));
+    }
+}
+
+/// The day fraction the sun's shadows follow: held at the last step, then slid to the next at its end.
+fn shadow_days(ticks: u64, carry: f32) -> f32 {
+    let step = ticks - ticks % SHADOW_STEP_TICKS;
+    let into = ((ticks - step) as f32 + carry) / SHADOW_STEP_TICKS as f32;
+    let slid = smoothstep(1.0 - SHADOW_SLIDE, 1.0, into);
+    ((step % DAY_TICKS) as f32 + slid * SHADOW_STEP_TICKS as f32) / DAY_TICKS as f32
+}
+
+/// Turns the sun to `SunShadows` while its shadow maps fit, as turning them every frame makes the texels crawl.
+pub fn aim_sun_shadows(mut sun: Query<(&mut GlobalTransform, &SunShadows)>) {
+    for (mut transform, shadows) in &mut sun {
+        *transform = GlobalTransform::from_rotation(shadows.0);
+    }
+}
+
+/// Turns the sun back once its shadow maps are fitted, so its light and disc still move smoothly.
+pub fn aim_sun_light(mut sun: Query<(&mut GlobalTransform, &Transform), With<SunShadows>>) {
+    for (mut global, transform) in &mut sun {
+        *global = GlobalTransform::from(*transform);
     }
 }
 
@@ -267,6 +302,17 @@ pub fn match_sky_horizon(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_shadows_hold_then_slide_on_to_the_next_step() {
+        let step = super::SHADOW_STEP_TICKS;
+        let day = super::DAY_TICKS as f32;
+        let start = super::shadow_days(3 * step, 0.0);
+        assert_eq!(start, super::shadow_days(3 * step + step / 2, 0.3));
+        let end = super::shadow_days(4 * step - 1, 0.999);
+        assert!((end - 4.0 * step as f32 / day).abs() < 1e-5, "{end}");
+        assert!((super::shadow_days(4 * step, 0.0) - end).abs() < 1e-5);
+    }
+
     use super::*;
 
     #[test]

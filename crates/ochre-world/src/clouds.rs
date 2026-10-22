@@ -2,97 +2,138 @@ use std::f64::consts::TAU;
 
 use bevy::{
     asset::{Asset, RenderAssetUsages},
+    core_pipeline::{schedule::Core3d, Core3dSystems, FullscreenShader},
+    diagnostic::FrameCount,
     image::{ImageAddressMode, ImageFilterMode, ImageSampler, ImageSamplerDescriptor},
-    light::{NotShadowCaster, NotShadowReceiver},
     pbr::{MaterialPipeline, MaterialPipelineKey},
     prelude::*,
     reflect::TypePath,
     render::{
-        mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology},
+        diagnostic::RecordDiagnostics,
+        extract_resource::{ExtractResource, ExtractResourcePlugin},
+        mesh::MeshVertexBufferLayoutRef,
+        render_asset::RenderAssets,
         render_resource::{
-            AsBindGroup, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
-            TextureDimension, TextureFormat,
+            binding_types::{sampler, storage_buffer_read_only_sized, texture_2d, uniform_buffer},
+            encase::UniformBuffer,
+            AsBindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
+            BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState,
+            ColorWrites, CompareFunction, Extent3d, FragmentState, Operations, PipelineCache,
+            RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor,
+            SamplerBindingType, ShaderStages, ShaderType,
+            SpecializedMeshPipelineError, TextureDimension, TextureFormat, TextureSampleType,
+            TextureUsages,
         },
-        storage::ShaderBuffer,
+        renderer::{RenderContext, RenderDevice},
+        storage::{GpuShaderBuffer, ShaderBuffer},
+        texture::GpuImage,
+        RenderApp, RenderStartup,
     },
-    shader::ShaderRef,
+    shader::{ShaderDefVal, ShaderRef},
+    transform::TransformSystems,
+    window::PrimaryWindow,
 };
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use crate::sky::Sun;
+use crate::sky_dome::dome;
 use ochre_terrain::curvature::Curvature;
-use ochre_terrain::material::{push_shader_defs, water_level};
+use ochre_terrain::material::{push_shader_defs, water_level, WaterMaterial};
 
-/// Height of the clouds' undersides: above most land, so only the tallest peaks reach them.
-pub const CLOUD_BASE: f32 = 720.0;
-// Clouds are blocks this wide, stacked in layers this tall.
+/// Height of the clouds' undersides, far above the highest land; matches `BASE` in `cloud_march.wesl`.
+pub const CLOUD_BASE: f32 = 1500.0;
+// Height the tallest clouds' tops reach; matches `TOP` in `cloud_march.wesl`.
+const CLOUD_TOP: f32 = 2100.0;
+// The pattern's cells, in blocks, and how many it has each way: it repeats seamlessly.
 const CELL: f32 = 48.0;
-const LAYER: f32 = 16.0;
-// The most layers a cloud is stacked, at its middle.
-const MAX_LAYERS: u8 = 5;
-// How many layers a cloud climbs for each cell in from its edge, so it domes up.
-const LAYERS_PER_CELL: f64 = 0.6;
-// How many layers lumps add or take away, and roughly how many cells across one is.
-const LUMPS: f64 = 1.6;
-const LUMP_CELLS: f64 = 3.0;
-// Cells across the pattern, which repeats seamlessly.
 const PATTERN: usize = 256;
-// How much of the sky is cloud, before the small ones are dropped.
-const COVER: f64 = 0.14;
-// Clouds under this many cells are dropped, leaving only big ones.
-const MIN_CLOUD_CELLS: usize = 80;
-// Roughly how many cells across a cloud is.
-const CLOUD_CELLS: f64 = 16.0;
-// Copies of the pattern drawn out from the one over the camera, each way: enough to reach
-// the fog from high up, where the render distance has grown to tens of thousands of blocks.
-const COPIES: i32 = 3;
 // The pattern's width in blocks.
 const SPAN: f32 = PATTERN as f32 * CELL;
+// Share of the sky with any cloud over it, from wisps at the edges to full cover in the middle.
+const CLOUDY: f64 = 0.45;
+// Cells across a cloud and a cluster of them, and how much clustering counts against single clouds.
+const CLOUD_CELLS: f64 = 24.0;
+const CLUSTER_CELLS: f64 = 80.0;
+const CLUSTERING: f64 = 0.8;
 // Which way and how fast clouds drift, in blocks a second: a whole number of patterns an
 // hour each way, so they carry on seamlessly when the shaders' clock, Bevy's `globals.time`,
 // wraps back to zero on the hour.
 const WIND: Vec2 = Vec2::new(SPAN * 2.0 / 3600.0, SPAN / 3600.0);
-// Each level of detail's cells, in the finest's, and how far out it starts, in patterns
-// from the camera to the nearest edge of a copy: far copies are coarser, as there are many
-// and every one is drawn in full.
-const LODS: [(usize, f32); 3] = [(1, 0.0), (2, 0.5), (4, 1.5)];
-// Slightly warm white, as sunlight leaves them.
-const CLOUD_COLOR: LinearRgba = LinearRgba::rgb(0.95, 0.95, 0.92);
+// The clouds are marched at this fraction of the screen's width and height, and blended up to it.
+const TARGET_SCALE: u32 = 4;
 
 pub struct CloudPlugin;
 
 impl Plugin for CloudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<CloudMaterial>::default())
-            .add_systems(Startup, spawn_clouds)
-            .add_systems(Update, drift_clouds);
+        app.add_plugins((
+            MaterialPlugin::<CloudMaterial>::default(),
+            ExtractResourcePlugin::<CloudMarch>::default(),
+        ))
+        .add_systems(Startup, spawn_clouds)
+        // once the camera's spawned
+        .add_systems(PostStartup, spawn_cloud_dome)
+        .add_systems(Update, fit_cloud_target)
+        .add_systems(PostUpdate, aim_cloud_march.after(TransformSystems::Propagate));
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app
+                .add_systems(RenderStartup, init_cloud_pipeline)
+                // nothing it draws depends on the scene, so before any of it
+                .add_systems(
+                    Core3d,
+                    march_clouds
+                        .after(Core3dSystems::Prepass)
+                        .before(Core3dSystems::MainPass),
+                );
+        }
     }
 }
 
+/// The clouds drawn into the target, lit and blended up to the screen, see `cloud_dome.wesl`.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct CloudMaterial {
-    #[uniform(0)]
-    color: LinearRgba,
-    // the clouds' base and greatest height, for shading them darker lower down
-    #[uniform(1)]
-    shape: Vec4,
-    // what the clouds bend around with the land, see `curvature::Curvature`
+    #[texture(4)]
+    #[sampler(5)]
+    pattern: Handle<Image>,
+    #[uniform(6)]
+    layer: Vec4,
+    // the share of light they scatter, in x, less in a storm
+    #[uniform(7)]
+    shade: Vec4,
+    // what the land bends around, which the clouds bend with, see `curvature::Curvature`
     #[storage(8, read_only)]
     curvature: Handle<ShaderBuffer>,
+    #[texture(9)]
+    #[sampler(10)]
+    target: Handle<Image>,
 }
 
 impl CloudMaterial {
     /// Darkens the clouds to `shade` of their colour, as storm clouds, see `weather.rs`.
     pub fn set_shade(&mut self, shade: f32) {
-        self.color = LinearRgba::rgb(
-            CLOUD_COLOR.red * shade,
-            CLOUD_COLOR.green * shade,
-            CLOUD_COLOR.blue * shade,
-        );
+        self.shade.x = shade;
     }
 }
 
 impl Material for CloudMaterial {
-    // clouds are far above anything they could shade, see `CLOUD_BASE`
+    fn vertex_shader() -> ShaderRef {
+        "shaders/cloud_dome.wesl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        "shaders/cloud_dome.wesl".into()
+    }
+
+    // blended over the scene drawn before it
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Premultiplied
+    }
+
+    // over the stars and sun glare, under rain and every other blended thing, see `sky_dome::SKY_DEPTH_BIAS`
+    fn depth_bias(&self) -> f32 {
+        -1.0e9
+    }
+
     fn enable_prepass() -> bool {
         false
     }
@@ -101,381 +142,106 @@ impl Material for CloudMaterial {
         false
     }
 
-    // curves them away with the land
-    fn vertex_shader() -> ShaderRef {
-        "shaders/clouds.wesl".into()
-    }
-
-    fn fragment_shader() -> ShaderRef {
-        "shaders/clouds.wesl".into()
-    }
-
-    // blended, stacked layers would show through one another in whatever order they were drawn
-    fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Opaque
-    }
-
+    // seen from inside, over every pixel: the shader stops each ray at the scene itself
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        descriptor.primitive.cull_mode = None;
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_compare = Some(CompareFunction::Always);
+        }
         push_shader_defs(descriptor, &[water_level()]);
         Ok(())
     }
 }
 
-/// The cloud pattern, for the land's shader to cast clouds' shadows with, see
-/// `cloud_shadow.wesl`. Spawned by `spawn_clouds`.
+/// Draws the unlit clouds into the low-res target before the main passes, see `cloud_target.wesl`.
+#[derive(Resource, Clone, ExtractResource)]
+#[extract_app(RenderApp)]
+struct CloudMarch {
+    target: Handle<Image>,
+    // last frame's target, which the march blends into, so few steps a frame add up to many
+    history: Handle<Image>,
+    pattern: Handle<Image>,
+    layer: Vec4,
+    curvature: Handle<ShaderBuffer>,
+    view: CloudView,
+}
+
+/// How the main camera looks and where the sun is, for the march, which has no view of its own.
+#[derive(ShaderType, Clone, Copy, Debug, Default)]
+struct CloudView {
+    // the view's right and up, as far across as the screen's edges are a block ahead
+    right: Vec4,
+    up: Vec4,
+    forward: Vec4,
+    // the camera's position in xyz, and the shaders' clock, Bevy's `globals.time`, in w
+    eye: Vec4,
+    // toward the sun in xyz, and the frame count in w
+    sun: Vec4,
+    // last frame's axes for reprojecting the history, with the share of each frame kept over it in `last_forward.w`
+    last_right: Vec4,
+    last_up: Vec4,
+    last_forward: Vec4,
+}
+
+// Share of each frame kept over the history when still, and more per block moved as clouds shift against the sky.
+const HISTORY_BLEND: f32 = 0.12;
+const HISTORY_BLEND_PER_BLOCK: f32 = 0.02;
+
+/// The cloud pattern shared by the cloud, water and land shaders, see `cloud_bindings.wesl`.
 #[derive(Resource, Clone)]
 pub struct CloudLayer {
-    /// The pattern, one texel a cell, more the thicker the cloud there, 0 where clear.
+    /// How much cloud is over each cell, 0 where clear to 1 where thickest.
     pub pattern: Handle<Image>,
     /// The middle of the layer's height, the pattern's width in blocks, and the wind.
     pub layer: Vec4,
+    /// The clouds as seen, unlit, at a fraction of the screen's resolution, see `CloudMarch`.
+    pub target: Handle<Image>,
 }
 
-// One copy of the pattern, `offset` patterns from the one over the camera.
-#[derive(Component)]
-struct CloudTile {
-    offset: IVec2,
-}
-
-// The clouds' mesh at each of `LODS`, finest first.
-#[derive(Resource)]
-struct CloudMeshes(Vec<Handle<Mesh>>);
-
-// Where pattern cell `i` lies round a torus in 4D, for noise with features about `cells` across
+// Where cell (`x`, `z`) lies round a torus in 4D, for noise with features about `cells` across
 // that wraps at the pattern's edges without a seam.
-fn torus(i: usize, cells: f64) -> [f64; 4] {
+fn torus(x: usize, z: usize, cells: f64) -> [f64; 4] {
     let radius = PATTERN as f64 / (TAU * cells);
     let angle = |c: usize| TAU * c as f64 / PATTERN as f64;
-    let (x, z) = (angle(i / PATTERN), angle(i % PATTERN));
+    let (x, z) = (angle(x), angle(z));
     [x.cos(), x.sin(), z.cos(), z.sin()].map(|v| v * radius)
 }
 
-// The four cells edge to edge with pattern cell `i`, round the wrap.
-fn neighbours(i: usize) -> [usize; 4] {
-    let n = PATTERN;
-    let (x, z) = (i / n, i % n);
-    [(1, 0), (n - 1, 0), (0, 1), (0, n - 1)].map(|(dx, dz)| ((x + dx) % n) * n + (z + dz) % n)
-}
-
-/// Which cells of the pattern are cloud, `PATTERN` x `PATTERN`, row-major [x][z].
-fn cloud_pattern(seed: u32) -> Vec<bool> {
-    let noise = Fbm::<Perlin>::new(seed)
-        .set_octaves(2)
-        .set_persistence(0.35);
+/// Cloud cover per cell, row-major [z][x]: clear over `1 - CLOUDY` of the sky, rising evenly to 1 over the rest.
+fn cloud_pattern(seed: u32) -> Vec<f32> {
+    let noise = Fbm::<Perlin>::new(seed).set_octaves(3).set_persistence(0.45);
+    let clusters = Perlin::new(seed.wrapping_add(1));
     let values: Vec<f64> = (0..PATTERN * PATTERN)
-        .map(|i| noise.get(torus(i, CLOUD_CELLS)))
-        .collect();
-    let mut sorted = values.clone();
-    sorted.sort_by(f64::total_cmp);
-    let threshold = sorted[((1.0 - COVER) * sorted.len() as f64) as usize];
-    let mut pattern: Vec<bool> = values.into_iter().map(|v| v > threshold).collect();
-    drop_small_clouds(&mut pattern);
-    pattern
-}
-
-// Clears every cloud of fewer than `MIN_CLOUD_CELLS` cells, where cells touch edge to edge, and
-// round the pattern's wrap like the clouds themselves do.
-fn drop_small_clouds(pattern: &mut [bool]) {
-    let n = PATTERN;
-    let mut seen = vec![false; n * n];
-    for start in 0..n * n {
-        if !pattern[start] || seen[start] {
-            continue;
-        }
-        let mut cloud = vec![start];
-        seen[start] = true;
-        let mut next = 0;
-        while next < cloud.len() {
-            for neighbour in neighbours(cloud[next]) {
-                if pattern[neighbour] && !seen[neighbour] {
-                    seen[neighbour] = true;
-                    cloud.push(neighbour);
-                }
-            }
-            next += 1;
-        }
-        if cloud.len() < MIN_CLOUD_CELLS {
-            for cell in cloud {
-                pattern[cell] = false;
-            }
-        }
-    }
-}
-
-// One column of cloud: the layers it fills, from `bottom` up to but not including `top`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Column {
-    bottom: u8,
-    top: u8,
-}
-
-// Clouds as columns, `n` x `n` cells `cell` blocks wide, row-major [x][z], wrapping at the edges.
-struct Columns {
-    n: usize,
-    cell: f32,
-    cells: Vec<Option<Column>>,
-}
-
-impl Columns {
-    fn get(&self, x: usize, z: usize) -> Option<Column> {
-        self.cells[(x % self.n) * self.n + z % self.n]
-    }
-}
-
-/// The pattern piled up into clouds: domed, higher the farther in from their edges, with
-/// lumps on top, and the odd lip at the edge lifted off the base so they bulge out underneath.
-fn cloud_columns(pattern: &[bool], seed: u32) -> Columns {
-    let n = PATTERN;
-    // cells in from the nearest clear sky, 1 at a cloud's edge, flooded out from the sky
-    let mut inside = vec![0u32; n * n];
-    let mut queue: Vec<usize> = (0..n * n).filter(|&i| !pattern[i]).collect();
-    let mut next = 0;
-    while next < queue.len() {
-        let cell = queue[next];
-        next += 1;
-        for neighbour in neighbours(cell) {
-            if pattern[neighbour] && inside[neighbour] == 0 {
-                inside[neighbour] = inside[cell] + 1;
-                queue.push(neighbour);
-            }
-        }
-    }
-    let noise = Perlin::new(seed.wrapping_add(1));
-    let cells = (0..n * n)
         .map(|i| {
-            if !pattern[i] {
-                return None;
-            }
-            let lump = noise.get(torus(i, LUMP_CELLS));
-            let top = (inside[i] as f64 * LAYERS_PER_CELL + lump * LUMPS)
-                .round()
-                .clamp(1.0, MAX_LAYERS as f64) as u8;
-            let lifted = inside[i] == 1 && top >= 2 && lump > 0.15;
-            Some(Column {
-                bottom: lifted as u8,
-                top,
-            })
+            let (x, z) = (i % PATTERN, i / PATTERN);
+            noise.get(torus(x, z, CLOUD_CELLS)) + CLUSTERING * clusters.get(torus(x, z, CLUSTER_CELLS))
         })
         .collect();
-    Columns {
-        n,
-        cell: CELL,
-        cells,
+    let mut order: Vec<usize> = (0..values.len()).collect();
+    order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
+    let mut cover = vec![0.0; values.len()];
+    for (rank, i) in order.into_iter().enumerate() {
+        let share = rank as f64 / values.len() as f64;
+        cover[i] = ((share - (1.0 - CLOUDY)) / CLOUDY).max(0.0) as f32;
     }
+    cover
 }
 
-// Coarser clouds, `factor` cells merged into one each way: cloud where at least half of
-// them are, as high as they are on average.
-fn coarsen(columns: &Columns, factor: usize) -> Columns {
-    let n = columns.n / factor;
-    let mut cells = Vec::with_capacity(n * n);
-    for x in 0..n {
-        for z in 0..n {
-            let merged: Vec<Column> = (0..factor * factor)
-                .filter_map(|i| columns.get(x * factor + i / factor, z * factor + i % factor))
-                .collect();
-            if merged.len() * 2 < factor * factor {
-                cells.push(None);
-                continue;
-            }
-            let mean = |f: fn(&Column) -> u8| {
-                (merged.iter().map(|c| f(c) as f32).sum::<f32>() / merged.len() as f32).round()
-                    as u8
-            };
-            let bottom = mean(|c| c.bottom);
-            cells.push(Some(Column {
-                bottom,
-                top: mean(|c| c.top).max(bottom + 1),
-            }));
-        }
-    }
-    Columns {
-        n,
-        cell: columns.cell * factor as f32,
-        cells,
-    }
-}
-
-#[derive(Default)]
-struct CloudMesh {
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    indices: Vec<u32>,
-}
-
-impl CloudMesh {
-    // A quad facing `normal`, wound so it's seen from that side.
-    fn quad(&mut self, mut corners: [Vec3; 4], normal: Vec3) {
-        if (corners[1] - corners[0])
-            .cross(corners[2] - corners[0])
-            .dot(normal)
-            < 0.0
-        {
-            corners.reverse();
-        }
-        let start = self.positions.len() as u32;
-        self.positions.extend(corners.map(|c| c.to_array()));
-        self.normals.extend([normal.to_array(); 4]);
-        self.indices.extend([0, 1, 2, 0, 2, 3].map(|i| start + i));
-    }
-}
-
-// The fewest rectangles covering the cells where `height` is the same, as
-// (x0, z0, x1, z1, height), ends exclusive.
-fn rectangles(
-    n: usize,
-    height: impl Fn(usize, usize) -> Option<u8>,
-) -> Vec<(usize, usize, usize, usize, u8)> {
-    let mut taken = vec![false; n * n];
-    let mut found = vec![];
-    for x0 in 0..n {
-        for z0 in 0..n {
-            let Some(h) = height(x0, z0).filter(|_| !taken[x0 * n + z0]) else {
-                continue;
-            };
-            let same = |x: usize, z: usize| height(x, z) == Some(h) && !taken[x * n + z];
-            let mut x1 = x0 + 1;
-            while x1 < n && same(x1, z0) {
-                x1 += 1;
-            }
-            let mut z1 = z0 + 1;
-            while z1 < n && (x0..x1).all(|x| same(x, z1)) {
-                z1 += 1;
-            }
-            for x in x0..x1 {
-                for z in z0..z1 {
-                    taken[x * n + z] = true;
-                }
-            }
-            found.push((x0, z0, x1, z1, h));
-        }
-    }
-    found
-}
-
-// The layers of `column`'s side left open by `neighbour`: below the neighbour, and above it.
-fn open_side(column: Option<Column>, neighbour: Option<Column>) -> [Option<(u8, u8)>; 2] {
-    let Some(c) = column else {
-        return [None, None];
-    };
-    let Some(b) = neighbour else {
-        return [Some((c.bottom, c.top)), None];
-    };
-    let below = (c.bottom < b.bottom).then(|| (c.bottom, c.top.min(b.bottom)));
-    let above = (c.top > b.top).then(|| (c.bottom.max(b.top), c.top));
-    [below, above]
-}
-
-/// The clouds as blocks: tops and bottoms merged into rectangles, and sides into runs.
-fn cloud_mesh(columns: &Columns) -> Mesh {
-    let (n, cell) = (columns.n, columns.cell);
-    let mut mesh = CloudMesh::default();
-    let corner = |x: usize, layer: u8, z: usize| {
-        Vec3::new(x as f32 * cell, layer as f32 * LAYER, z as f32 * cell)
-    };
-
-    let tops = rectangles(n, |x, z| columns.get(x, z).map(|c| c.top));
-    let bottoms = rectangles(n, |x, z| columns.get(x, z).map(|c| c.bottom));
-    for ((x0, z0, x1, z1, y), normal) in tops
-        .into_iter()
-        .map(|r| (r, Vec3::Y))
-        .chain(bottoms.into_iter().map(|r| (r, Vec3::NEG_Y)))
-    {
-        mesh.quad(
-            [
-                corner(x0, y, z0),
-                corner(x1, y, z0),
-                corner(x1, y, z1),
-                corner(x0, y, z1),
-            ],
-            normal,
-        );
-    }
-
-    // sides, where a column stands higher or lower than its neighbour, merged along each edge
-    for along_x in [true, false] {
-        for forward in [true, false] {
-            let normal = match (along_x, forward) {
-                (true, true) => Vec3::X,
-                (true, false) => Vec3::NEG_X,
-                (false, true) => Vec3::Z,
-                (false, false) => Vec3::NEG_Z,
-            };
-            let step = if forward { 1 } else { n - 1 };
-            // (across, along) to (x, z)
-            let xz = |u: usize, v: usize| if along_x { (u, v) } else { (v, u) };
-            let at = |u: usize, v: usize, layer: u8| {
-                let (x, z) = xz(u, v);
-                corner(x, layer, z)
-            };
-            for u in 0..n {
-                let edge = if forward { u + 1 } else { u };
-                for piece in 0..2 {
-                    let open = |v: usize| {
-                        let (x, z) = xz(u, v);
-                        let (nx, nz) = xz(u + step, v);
-                        open_side(columns.get(x, z), columns.get(nx, nz))[piece]
-                    };
-                    let mut v = 0;
-                    while v < n {
-                        let Some((lo, hi)) = open(v) else {
-                            v += 1;
-                            continue;
-                        };
-                        let start = v;
-                        while v < n && open(v) == Some((lo, hi)) {
-                            v += 1;
-                        }
-                        mesh.quad(
-                            [
-                                at(edge, start, lo),
-                                at(edge, start, hi),
-                                at(edge, v, hi),
-                                at(edge, v, lo),
-                            ],
-                            normal,
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, mesh.positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, mesh.normals)
-    .with_inserted_indices(Indices::U32(mesh.indices))
-}
-
-// The clouds as a texture that repeats, more where they're thicker, blended between cells
-// so shadows' edges are soft.
-fn pattern_image(columns: &Columns) -> Image {
-    let n = columns.n;
-    // u along x, v along z; even the thinnest cloud keeps off half as much sun as the thickest
-    let shade = |c: Column| 0.5 + 0.5 * (c.top - c.bottom) as f32 / MAX_LAYERS as f32;
-    let data = (0..n * n)
-        .map(|i| {
-            columns
-                .get(i % n, i / n)
-                .map_or(0, |c| (shade(c) * 255.0).round() as u8)
-        })
-        .collect();
+// The pattern as a texture that repeats, u along x and v along z.
+fn pattern_image(cover: &[f32]) -> Image {
     let mut image = Image::new(
         Extent3d {
-            width: n as u32,
-            height: n as u32,
+            width: PATTERN as u32,
+            height: PATTERN as u32,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        data,
+        cover.iter().map(|c| (c * 255.0).round() as u8).collect(),
         TextureFormat::R8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
@@ -491,78 +257,256 @@ fn pattern_image(columns: &Columns) -> Image {
 
 pub fn spawn_clouds(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<CloudMaterial>>,
     curvature: Res<Curvature>,
+    window: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let seed = rand::random();
-    let columns = cloud_columns(&cloud_pattern(seed), seed);
-    let height = MAX_LAYERS as f32 * LAYER;
-    commands.insert_resource(CloudLayer {
-        pattern: images.add(pattern_image(&columns)),
-        layer: Vec4::new(CLOUD_BASE + height / 2.0, SPAN, WIND.x, WIND.y),
-    });
-    let lods: Vec<Handle<Mesh>> = LODS
-        .iter()
-        .map(|&(factor, _)| meshes.add(cloud_mesh(&coarsen(&columns, factor))))
-        .collect();
-    let material = materials.add(CloudMaterial {
-        color: CLOUD_COLOR,
-        shape: Vec4::new(CLOUD_BASE, height, 0.0, 0.0),
+    let size = target_size(window.single().map_or(UVec2::ONE, Window::physical_size));
+    let mut target = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba16Float, None);
+    target.sampler = ImageSampler::linear();
+    let history = images.add(target.clone());
+    // copied on to the history each frame
+    target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    let clouds = CloudLayer {
+        pattern: images.add(pattern_image(&cloud_pattern(rand::random()))),
+        layer: Vec4::new((CLOUD_BASE + CLOUD_TOP) / 2.0, SPAN, WIND.x, WIND.y),
+        target: images.add(target),
+    };
+    commands.insert_resource(CloudMarch {
+        target: clouds.target.clone(),
+        history,
+        pattern: clouds.pattern.clone(),
+        layer: clouds.layer,
         curvature: curvature.buffer.clone(),
+        view: CloudView::default(),
     });
-    for x in -COPIES..=COPIES {
-        for z in -COPIES..=COPIES {
-            commands.spawn((
-                CloudTile {
-                    offset: IVec2::new(x, z),
-                },
-                Mesh3d(lods[LODS.len() - 1].clone()),
-                MeshMaterial3d(material.clone()),
-                Transform::default(),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
-        }
-    }
-    commands.insert_resource(CloudMeshes(lods));
+    commands.insert_resource(clouds);
 }
 
-/// Where the pattern copy `offset` copies from the one over `camera` starts, `elapsed`
-/// seconds into the wind.
-fn tile_origin(camera: Vec2, elapsed: f32, offset: IVec2) -> Vec2 {
-    let drift = (WIND * elapsed).rem_euclid(Vec2::splat(SPAN));
-    ((camera - drift) / SPAN).floor() * SPAN + drift + offset.as_vec2() * SPAN
+// The size of the clouds' target for a window `size` pixels across.
+fn target_size(size: UVec2) -> UVec2 {
+    (size / TARGET_SCALE).max(UVec2::ONE)
 }
 
-// Which of `LODS` a copy starting at `origin` is drawn at, seen from `camera`.
-fn tile_lod(camera: Vec2, origin: Vec2) -> usize {
-    let nearest = camera.clamp(origin, origin + Vec2::splat(SPAN));
-    let away = camera.distance(nearest) / SPAN;
-    LODS.iter()
-        .rposition(|&(_, start)| away >= start)
-        .unwrap_or(0)
-}
-
-fn drift_clouds(
-    time: Res<Time>,
-    lods: Res<CloudMeshes>,
-    camera: Query<&GlobalTransform, With<Camera3d>>,
-    mut tiles: Query<(&CloudTile, &mut Transform, &mut Mesh3d)>,
+/// Spawns the dome over the main camera blending the clouds' target up over the scene.
+fn spawn_cloud_dome(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<CloudMaterial>>,
+    clouds: Res<CloudLayer>,
+    curvature: Res<Curvature>,
+    camera: Query<Entity, With<Camera3d>>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
     };
-    let camera = camera.translation().xz();
-    for (tile, mut transform, mut mesh) in &mut tiles {
-        // the shaders' clock, so clouds and their shadows keep together
-        let origin = tile_origin(camera, time.elapsed_secs_wrapped(), tile.offset);
-        transform.translation = Vec3::new(origin.x, CLOUD_BASE, origin.y);
-        let lod = &lods.0[tile_lod(camera, origin)];
-        if mesh.0 != *lod {
-            mesh.0 = lod.clone();
+    let material = materials.add(CloudMaterial {
+        pattern: clouds.pattern.clone(),
+        layer: clouds.layer,
+        shade: Vec4::ONE,
+        curvature: curvature.buffer.clone(),
+        target: clouds.target.clone(),
+    });
+    commands.spawn(dome(&mut meshes, material, camera));
+}
+
+// Refits the cloud target on resize and rebinds its readers, whose bind groups would otherwise freeze the old texture on screen.
+fn fit_cloud_target(
+    window: Query<&Window, With<PrimaryWindow>>,
+    march: Option<Res<CloudMarch>>,
+    mut images: ResMut<Assets<Image>>,
+    mut clouds: ResMut<Assets<CloudMaterial>>,
+    mut waters: ResMut<Assets<WaterMaterial>>,
+) {
+    let (Ok(window), Some(march)) = (window.single(), march) else {
+        return;
+    };
+    let size = target_size(window.physical_size());
+    if images.get(&march.target).is_none_or(|image| image.size() == size) {
+        return;
+    }
+    for handle in [&march.target, &march.history] {
+        if let Some(mut image) = images.get_mut(handle) {
+            image.resize(Extent3d {
+                width: size.x,
+                height: size.y,
+                depth_or_array_layers: 1,
+            });
         }
+    }
+    let ids: Vec<_> = clouds.ids().collect();
+    for id in ids {
+        if let Some(material) = clouds.get_mut(id) {
+            material.into_inner();
+        }
+    }
+    let ids: Vec<_> = waters.ids().collect();
+    for id in ids {
+        if let Some(material) = waters.get_mut(id) {
+            material.into_inner();
+        }
+    }
+}
+
+// Tells the march how the main camera looks and where the sun is, once both have moved.
+fn aim_cloud_march(
+    time: Res<Time>,
+    frames: Res<FrameCount>,
+    camera: Query<(&GlobalTransform, &Projection), With<Camera3d>>,
+    sun: Query<&Transform, With<Sun>>,
+    march: Option<ResMut<CloudMarch>>,
+) {
+    let (Ok((camera, Projection::Perspective(projection))), Ok(sun), Some(mut march)) =
+        (camera.single(), sun.single(), march)
+    else {
+        return;
+    };
+    let up = (projection.fov / 2.0).tan();
+    let last = march.view;
+    let eye = camera.translation();
+    let moved = eye.distance(last.eye.truncate());
+    march.view = CloudView {
+        right: (camera.right() * up * projection.aspect_ratio).extend(0.0),
+        up: (camera.up() * up).extend(0.0),
+        forward: camera.forward().extend(0.0),
+        eye: eye.extend(time.elapsed_secs_wrapped()),
+        sun: sun.back().extend(frames.0 as f32),
+        last_right: last.right,
+        last_up: last.up,
+        last_forward: last
+            .forward
+            .truncate()
+            .extend((HISTORY_BLEND + HISTORY_BLEND_PER_BLOCK * moved).min(1.0)),
+    };
+}
+
+#[derive(Resource)]
+struct CloudPipeline {
+    layout: BindGroupLayoutDescriptor,
+    pipeline: CachedRenderPipelineId,
+}
+
+fn init_cloud_pipeline(
+    mut commands: Commands,
+    fullscreen_shader: Res<FullscreenShader>,
+    asset_server: Res<AssetServer>,
+    pipeline_cache: Res<PipelineCache>,
+) {
+    // as `cloud_bindings.wesl` and `curvature.wesl` lay them out for materials
+    let layout = BindGroupLayoutDescriptor::new(
+        "cloud_march_layout",
+        &BindGroupLayoutEntries::with_indices(
+            ShaderStages::FRAGMENT,
+            (
+                (4, texture_2d(TextureSampleType::Float { filterable: true })),
+                (5, sampler(SamplerBindingType::Filtering)),
+                (6, uniform_buffer::<Vec4>(false)),
+                (7, uniform_buffer::<CloudView>(false)),
+                (8, storage_buffer_read_only_sized(false, None)),
+                (9, texture_2d(TextureSampleType::Float { filterable: true })),
+                (10, sampler(SamplerBindingType::Filtering)),
+            ),
+        ),
+    );
+    let pipeline = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+        label: Some("cloud_march_pipeline".into()),
+        layout: vec![layout.clone()],
+        vertex: fullscreen_shader.to_vertex_state(),
+        fragment: Some(FragmentState {
+            shader: asset_server.load("shaders/cloud_target.wesl"),
+            shader_defs: vec![ShaderDefVal::UInt("MATERIAL_BIND_GROUP".into(), 0)],
+            targets: vec![Some(ColorTargetState {
+                format: TextureFormat::Rgba16Float,
+                blend: None,
+                write_mask: ColorWrites::ALL,
+            })],
+            ..default()
+        }),
+        ..default()
+    });
+    commands.insert_resource(CloudPipeline { layout, pipeline });
+}
+
+// A uniform buffer holding `value`.
+fn uniform<T: ShaderType + bevy::render::render_resource::encase::internal::WriteInto>(
+    device: &RenderDevice,
+    value: &T,
+) -> Option<bevy::render::render_resource::Buffer> {
+    let mut bytes = UniformBuffer::new(Vec::new());
+    bytes.write(value).ok()?;
+    Some(device.create_buffer_with_data(&BufferInitDescriptor {
+        label: Some("cloud_march_uniform"),
+        contents: &bytes.into_inner(),
+        usage: BufferUsages::UNIFORM,
+    }))
+}
+
+/// Draws the clouds, unlit, into their target, see `CloudMarch`.
+fn march_clouds(
+    march: Option<Res<CloudMarch>>,
+    pipeline: Option<Res<CloudPipeline>>,
+    pipeline_cache: Res<PipelineCache>,
+    images: Res<RenderAssets<GpuImage>>,
+    buffers: Res<RenderAssets<GpuShaderBuffer>>,
+    mut ctx: RenderContext,
+) {
+    let (Some(march), Some(pipeline)) = (march, pipeline) else {
+        return;
+    };
+    let (Some(render_pipeline), Some(target), Some(history), Some(pattern), Some(curvature)) = (
+        pipeline_cache.get_render_pipeline(pipeline.pipeline),
+        images.get(&march.target),
+        images.get(&march.history),
+        images.get(&march.pattern),
+        buffers.get(&march.curvature),
+    ) else {
+        return;
+    };
+    let device = ctx.render_device().clone();
+    let (Some(layer), Some(view)) = (uniform(&device, &march.layer), uniform(&device, &march.view))
+    else {
+        return;
+    };
+    let bind_group = device.create_bind_group(
+        "cloud_march_bind_group",
+        &pipeline_cache.get_bind_group_layout(&pipeline.layout),
+        &BindGroupEntries::with_indices((
+            (4, &pattern.texture_view),
+            (5, &pattern.sampler),
+            (6, layer.as_entire_binding()),
+            (7, view.as_entire_binding()),
+            (8, curvature.buffer.as_entire_binding()),
+            (9, &history.texture_view),
+            (10, &history.sampler),
+        )),
+    );
+    let diagnostics = ctx.diagnostic_recorder();
+    let diagnostics = diagnostics.as_deref();
+    let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
+        label: Some("cloud_march"),
+        color_attachments: &[Some(RenderPassColorAttachment {
+            view: &target.texture_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: Operations::default(),
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    let span = diagnostics.pass_span(&mut pass, "cloud_march");
+    pass.set_pipeline(render_pipeline);
+    pass.set_bind_group(0, &bind_group, &[]);
+    pass.draw(0..3, 0..1);
+    span.end(&mut pass);
+    drop(pass);
+    if target.texture.size() == history.texture.size() {
+        ctx.command_encoder().copy_texture_to_texture(
+            target.texture.as_image_copy(),
+            history.texture.as_image_copy(),
+            target.texture.size(),
+        );
     }
 }
 
@@ -571,243 +515,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pattern_covers_about_the_share_of_sky_asked() {
-        let pattern = cloud_pattern(3);
-        let cover = pattern.iter().filter(|&&c| c).count() as f64 / pattern.len() as f64;
-        // dropping the small clouds takes some of it
-        assert!(cover <= COVER + 0.005 && cover > COVER * 0.6, "{cover}");
-    }
-
-    #[test]
-    fn test_only_big_clouds_are_left() {
-        let pattern = cloud_pattern(3);
-        let mut dropped = pattern.clone();
-        drop_small_clouds(&mut dropped);
-        assert_eq!(pattern, dropped);
-    }
-
-    #[test]
-    fn test_small_clouds_are_dropped_and_wrapped_ones_kept_whole() {
-        let n = PATTERN;
-        let mut pattern = vec![false; n * n];
-        // a lone cell, and a cloud cut in two by the pattern's edge, each half under the minimum
-        pattern[10 * n + 10] = true;
-        for x in [n - 1, 0] {
-            for z in 100..100 + MIN_CLOUD_CELLS {
-                pattern[x * n + z] = true;
-            }
-        }
-        drop_small_clouds(&mut pattern);
-        assert!(!pattern[10 * n + 10]);
-        assert!(pattern[(n - 1) * n + 100] && pattern[100]);
+    fn test_pattern_covers_the_share_of_sky_asked() {
+        let cover = cloud_pattern(3);
+        let cloudy = cover.iter().filter(|&&c| c > 0.0).count() as f64 / cover.len() as f64;
+        assert!((cloudy - CLOUDY).abs() < 0.01, "{cloudy}");
+        assert!(cover.iter().all(|c| (0.0..=1.0).contains(c)));
     }
 
     #[test]
     fn test_pattern_wraps_without_a_seam() {
-        // across the wrap, neighbouring cells agree about as often as anywhere else
-        let pattern = cloud_pattern(3);
+        // across the wrap, neighbouring cells differ about as much as anywhere else
+        let cover = cloud_pattern(3);
         let n = PATTERN;
-        let agree = |a: usize, b: usize| {
+        let step = |a: usize, b: usize| -> f32 {
             (0..n)
-                .filter(|&z| pattern[a * n + z] == pattern[b * n + z])
-                .count()
+                .map(|z| (cover[z * n + a] - cover[z * n + b]).abs())
+                .sum()
         };
-        let inside = agree(n / 2, n / 2 + 1);
-        let across = agree(n - 1, 0);
+        let inside = step(n / 2, n / 2 + 1);
+        let across = step(n - 1, 0);
         assert!(
-            across as f64 > inside as f64 * 0.8,
+            across < inside * 1.5 + 1.0,
             "inside {inside}, across the wrap {across}"
         );
     }
 
-    type TestCell = ((usize, usize), (u8, u8));
-
-    fn columns(n: usize, cells: &[TestCell]) -> Columns {
-        let mut columns = Columns {
-            n,
-            cell: CELL,
-            cells: vec![None; n * n],
-        };
-        for &((x, z), (bottom, top)) in cells {
-            columns.cells[x * n + z] = Some(Column { bottom, top });
-        }
-        columns
-    }
-
-    fn triangles(mesh: &Mesh) -> Vec<([Vec3; 3], Vec3)> {
-        let Some(Indices::U32(indices)) = mesh.indices() else {
-            panic!()
-        };
-        let positions = mesh
-            .attribute(Mesh::ATTRIBUTE_POSITION)
-            .unwrap()
-            .as_float3()
-            .unwrap();
-        let normals = mesh
-            .attribute(Mesh::ATTRIBUTE_NORMAL)
-            .unwrap()
-            .as_float3()
-            .unwrap();
-        indices
-            .chunks(3)
-            .map(|tri| {
-                (
-                    tri.iter()
-                        .map(|&i| Vec3::from(positions[i as usize]))
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .unwrap(),
-                    Vec3::from(normals[tri[0] as usize]),
-                )
-            })
-            .collect()
-    }
-
-    // The volume a closed mesh wraps, which comes out right only when no face is missing,
-    // doubled up or facing the wrong way.
-    fn volume(mesh: &Mesh) -> f32 {
-        triangles(mesh)
-            .iter()
-            .map(|([a, b, c], _)| a.dot(b.cross(*c)) / 6.0)
-            .sum()
-    }
-
-    fn column_volume(columns: &Columns) -> f32 {
-        columns
-            .cells
-            .iter()
-            .flatten()
-            .map(|c| (c.top - c.bottom) as f32 * LAYER * columns.cell * columns.cell)
-            .sum()
-    }
-
     #[test]
-    fn test_faces_point_outward() {
-        let mesh = cloud_mesh(&columns(PATTERN, &[((5, 7), (0, 1))]));
-        let triangles = triangles(&mesh);
-        // a single cell is a box: six faces
-        assert_eq!(12, triangles.len());
-        for ([a, b, c], normal) in triangles {
-            assert!((b - a).cross(c - a).dot(normal) > 0.0);
-        }
-    }
-
-    #[test]
-    fn test_stacked_columns_are_closed() {
-        // a dome with a lip lifted off the base, a step down and a gap above a neighbour
-        let columns = columns(
-            8,
-            &[
-                ((2, 2), (0, 4)),
-                ((3, 2), (0, 2)),
-                ((2, 3), (1, 3)),
-                ((1, 2), (1, 2)),
-                ((3, 3), (2, 5)),
-                ((4, 3), (0, 1)),
-            ],
-        );
-        let mesh = cloud_mesh(&columns);
-        assert!(
-            (volume(&mesh) - column_volume(&columns)).abs() < 1.0,
-            "{} vs {}",
-            volume(&mesh),
-            column_volume(&columns)
-        );
-    }
-
-    #[test]
-    fn test_clouds_are_closed_and_domed() {
-        let pattern = cloud_pattern(3);
-        let mut columns = cloud_columns(&pattern, 3);
-        // the pattern wraps, so its edges are only closed by the next copy: clear a border
-        let n = columns.n;
-        for x in 0..n {
-            for z in 0..n {
-                if x == 0 || z == 0 || x == n - 1 || z == n - 1 {
-                    columns.cells[x * n + z] = None;
-                }
-            }
-        }
-        let mesh = cloud_mesh(&columns);
-        let expected = column_volume(&columns);
-        assert!(
-            (volume(&mesh) - expected).abs() < expected * 1e-4,
-            "{} vs {expected}",
-            volume(&mesh)
-        );
-        let tops: Vec<u8> = columns.cells.iter().flatten().map(|c| c.top).collect();
-        for layers in 1..=MAX_LAYERS {
-            assert!(tops.contains(&layers), "no cloud {layers} layers high");
-        }
-    }
-
-    #[test]
-    fn test_coarser_lods_keep_the_clouds_with_far_fewer_vertices() {
-        let columns = cloud_columns(&cloud_pattern(3), 3);
-        let cover = |c: &Columns| c.cells.iter().flatten().count() as f32 * c.cell * c.cell;
-        let mut vertices = vec![];
-        for &(factor, _) in &LODS {
-            let coarse = coarsen(&columns, factor);
-            assert!(
-                (cover(&coarse) / cover(&columns) - 1.0).abs() < 0.15,
-                "cover at {factor}"
-            );
-            assert!(
-                (column_volume(&coarse) / column_volume(&columns) - 1.0).abs() < 0.2,
-                "volume at {factor}"
-            );
-            vertices.push(cloud_mesh(&coarse).count_vertices());
-        }
-        println!("vertices a copy at each LOD: {vertices:?}");
-        assert!(vertices.windows(2).all(|w| w[1] * 2 < w[0]), "{vertices:?}");
-    }
-
-    #[test]
-    fn test_wind_carries_on_seamlessly_past_the_hour() {
-        let camera = Vec2::new(500.0, 900.0);
-        assert!(tile_origin(camera, 3600.0, IVec2::ZERO)
-            .abs_diff_eq(tile_origin(camera, 0.0, IVec2::ZERO), 0.05));
-    }
-
-    #[test]
-    fn test_image_puts_x_along_u_and_shades_thick_clouds_more() {
-        let image = pattern_image(&columns(
-            PATTERN,
-            &[((3, 200), (0, MAX_LAYERS)), ((4, 200), (1, 2))],
-        ));
-        let data = image.data.as_deref().unwrap();
-        assert_eq!(255, data[200 * PATTERN + 3]);
-        assert!(data[200 * PATTERN + 4] > 0 && data[200 * PATTERN + 4] < 255);
-        assert_eq!(2, data.iter().filter(|&&v| v > 0).count());
-    }
-
-    #[test]
-    fn test_nearby_copies_are_finest_and_far_ones_coarsest() {
-        let camera = Vec2::new(10_000.0, -3_000.0);
-        let origin = |offset| tile_origin(camera, 0.0, offset);
-        assert_eq!(0, tile_lod(camera, origin(IVec2::ZERO)));
-        assert_eq!(
-            LODS.len() - 1,
-            tile_lod(camera, origin(IVec2::new(COPIES, 0)))
-        );
-        assert_eq!(
-            LODS.len() - 1,
-            tile_lod(camera, origin(IVec2::new(-COPIES, COPIES)))
-        );
-    }
-
-    #[test]
-    fn test_tiles_cover_the_camera_and_drift_with_the_wind() {
-        let span = SPAN;
-        let camera = Vec2::new(10_000.0, -3_000.0);
-        for elapsed in [0.0, 100.0, 5_000.0] {
-            let origin = tile_origin(camera, elapsed, IVec2::ZERO);
-            assert!(
-                (camera - origin).cmpge(Vec2::ZERO).all()
-                    && (camera - origin).cmplt(Vec2::splat(span)).all()
-            );
-        }
-        let moved = tile_origin(camera, 1.0, IVec2::ZERO) - tile_origin(camera, 0.0, IVec2::ZERO);
-        assert!((moved - WIND).length() < 1e-3 || (moved - WIND).abs().max_element() > span * 0.5);
+    fn test_wind_carries_whole_patterns_an_hour() {
+        let patterns = WIND * 3600.0 / SPAN;
+        assert!(patterns.abs_diff_eq(patterns.round(), 1e-4), "{patterns}");
     }
 }

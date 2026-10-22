@@ -282,6 +282,10 @@ pub struct WaterMaterial {
     // what the land bends around, see `curvature::Curvature`
     #[storage(8, read_only)]
     pub curvature: Handle<ShaderBuffer>,
+    // the clouds as seen, for reflections of what's on screen, see `clouds::CloudLayer::target`
+    #[texture(9)]
+    #[sampler(10)]
+    pub cloud_target: Handle<Image>,
     // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
     pub solid: bool,
 }

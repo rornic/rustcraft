@@ -67,6 +67,7 @@ fn setup(
         fade: FULLY_VISIBLE,
         cloud_pattern: Default::default(),
         cloud_layer: Default::default(),
+        cloud_target: Default::default(),
         see_through: Default::default(),
         curvature: Default::default(),
         solid,
