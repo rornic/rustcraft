@@ -7,6 +7,7 @@ pub mod collision;
 pub mod critters;
 pub mod curvature;
 pub mod debug;
+pub mod flythrough;
 pub mod horizon;
 pub mod math;
 pub mod player;

@@ -213,7 +213,18 @@ fn main() {
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     // uncapped, the GPU runs flat out and can starve the desktop's compositor until the PC stalls
-                    present_mode: bevy::window::PresentMode::AutoVsync,
+                    // a recording runs unsynced, as the desktop throttles a hidden vsynced window to a crawl
+                    present_mode: if std::env::var_os("RC_FLYTHROUGH").is_some() {
+                        bevy::window::PresentMode::AutoNoVsync
+                    } else {
+                        bevy::window::PresentMode::AutoVsync
+                    },
+                    // a flythrough is recorded at video size
+                    resolution: if std::env::var_os("RC_FLYTHROUGH").is_some() {
+                        bevy::window::WindowResolution::new(1920, 1080)
+                    } else {
+                        default()
+                    },
                     ..default()
                 }),
                 ..default()
@@ -256,6 +267,7 @@ fn main() {
                 .chain(),
         )
         .insert_resource(TimeOfDay::from_days(start_time()))
+        .add_plugins(rustcraft::flythrough::FlythroughPlugin)
         .add_systems(Update, move_sky)
         .run();
 }
