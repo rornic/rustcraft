@@ -7,11 +7,11 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'rustcraft'",
+            "name": "Debug example 'planetary_sandbox'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=rustcraft"
+                    "--example=planetary_sandbox"
                 ]
             },
             "args": []
@@ -19,17 +19,17 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'rustcraft'",
+            "name": "Debug unit tests in 'ochre-terrain'",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=rustcraft",
-                    "--package=rustcraft"
+                    "--lib",
+                    "--package=ochre-terrain"
                 ],
                 "filter": {
-                    "name": "rustcraft",
-                    "kind": "bin"
+                    "name": "ochre_terrain",
+                    "kind": "lib"
                 }
             },
             "args": [],

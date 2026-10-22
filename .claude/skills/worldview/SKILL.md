@@ -1,6 +1,6 @@
 ---
 name: worldview
-description: Inspect rustcraft's generated world (terrain, water, rivers, lakes, biomes, blocks) with the browser world viewer and its PNG export, instead of hand-built probe scripts. Use when debugging world generation, checking a terrain or water fix, hunting artefacts near a coordinate, or sharing a map image.
+description: Inspect Ochre's generated world (terrain, water, rivers, lakes, biomes, blocks) with the browser world viewer and its PNG export, instead of hand-built probe scripts. Use when debugging world generation, checking a terrain or water fix, hunting artefacts near a coordinate, or sharing a map image.
 ---
 
 # Worldview

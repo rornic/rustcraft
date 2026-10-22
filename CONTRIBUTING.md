@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in rustcraft. It's a personal project with a direction I want to steer, so please read this before opening a pull request.
+Thanks for your interest in Ochre. It's a personal project with a direction I want to steer, so please read this before opening a pull request.
 
 ## Discuss first
 
@@ -19,7 +19,7 @@ If you're unsure whether your change counts as small, open an issue and ask.
 
 - Link the issue where the change was agreed.
 - Keep each PR focused on one change.
-- Make sure `cargo build` and `cargo clippy` pass.
+- Make sure `cargo build --workspace --all-targets` and `cargo clippy --workspace --all-targets` pass.
 
 ## License
 

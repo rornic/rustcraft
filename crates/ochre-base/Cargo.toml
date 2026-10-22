@@ -1,0 +1,12 @@
+[package]
+name = "ochre-base"
+description = "Shared types for the Ochre voxel engine: blocks, biomes, terrain sources and world constants"
+publish = false
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bevy.workspace = true

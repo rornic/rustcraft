@@ -5,12 +5,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use rustcraft::chunks::generate::terrain_source::{TerrainSource, WaterKind};
-use rustcraft::worldmap::{WorldConfig, WorldTerrain};
+use ochre_base::terrain_source::{TerrainSource, WaterKind};
+use ochre_world::worldmap::{WorldConfig, WorldTerrain};
 
 fn main() {
     let seed: u64 = std::env::args().nth(1).expect("a seed").parse().unwrap();
-    let map = Arc::new(rustcraft::worldmap::generate(
+    let map = Arc::new(ochre_world::worldmap::generate(
         seed as _,
         WorldConfig::default(),
     ));

@@ -9,15 +9,15 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
-use rustcraft::chunks::chunk_loader::{Chunk, GenerateChunkData};
-use rustcraft::chunks::fade::FULLY_VISIBLE;
-use rustcraft::chunks::group::ChunkGroup;
-use rustcraft::chunks::lod::{GenerateLodMesh, LodLoader, LodNode};
-use rustcraft::chunks::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
-use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
-use rustcraft::horizon::render_distance_at;
-use rustcraft::settings::{DebugSettings, RendererSettings, Settings};
-use rustcraft::worldmap::WorldConfig;
+use ochre_engine::settings::{DebugSettings, RendererSettings, Settings};
+use ochre_terrain::chunk_loader::{Chunk, GenerateChunkData};
+use ochre_terrain::fade::FULLY_VISIBLE;
+use ochre_terrain::group::ChunkGroup;
+use ochre_terrain::horizon::render_distance_at;
+use ochre_terrain::lod::{GenerateLodMesh, LodLoader, LodNode};
+use ochre_terrain::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
+use ochre_terrain::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
+use ochre_world::worldmap::WorldConfig;
 
 const FRAME: f32 = 1.0 / 60.0;
 const WALK_SPEED: f32 = 20.0;
@@ -39,8 +39,7 @@ fn setup(
 ) {
     let world_config = renderer.1;
     let renderer = &renderer.0;
-    let world =
-        rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32, world_config);
+    let world = ochre_world::load_world(renderer.lod_layout().region_reach() as u32, world_config);
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);
@@ -260,13 +259,13 @@ impl Flight {
 
     fn ground(&mut self, x: f32, z: f32) -> f32 {
         let world = self.app.world();
-        let world = world.resource::<rustcraft::world::World>();
+        let world = world.resource::<ochre_terrain::world::World>();
         let height = world
             .region_store
             .terrain()
             .sample(x as f64, z as f64)
             .height;
-        height.max(rustcraft::chunks::generate::WATER_LEVEL as f64) as f32
+        height.max(ochre_base::WATER_LEVEL as f64) as f32
     }
 
     // Along +x at `speed` for `secs` of game time, `above` the ground, or at a fixed height.
@@ -303,7 +302,7 @@ fn main() {
     let seed = arg("--seed").unwrap_or_else(|| "1".into());
     let secs: f32 = arg("--secs").map_or(30.0, |s| s.parse().expect("--secs is a number"));
     let out = arg("--out");
-    std::env::set_var("RC_SEED", &seed);
+    std::env::set_var("OCHRE_SEED", &seed);
 
     let settings = Settings::read("assets/settings.toml").expect("failed to read settings");
     let (renderer, world) = (settings.renderer, settings.world);

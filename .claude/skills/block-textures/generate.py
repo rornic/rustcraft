@@ -18,7 +18,7 @@ MIN_STD = 8  # floor on the reference contrast, so near-flat old tiles (sand, sn
 LUM = np.array([0.299, 0.587, 0.114])
 STYLE = "seamless tileable texture, extreme close-up of a flat surface filling the whole frame, pixel art, 8-bit, "
 
-# Order matches `Tile` in src/block.rs. Generated tiles take a prompt, `avoid` (negative prompt), and optionally
+# Order matches `Tile` in crates/ochre-base/src/block.rs. Generated tiles take a prompt, `avoid` (negative prompt), and optionally
 # `mean` (target sRGB colour, when reference.png has no tile), `std`, `smooth` and `colors` to tune their look.
 # grey: target mean sRGB value, the shader tints the tile. derive: built from picked tiles by `derive()`, not generated.
 TILES = [

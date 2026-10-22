@@ -1,0 +1,22 @@
+[package]
+name = "ochre-world"
+description = "World maps (erosion, hydrology, climate), sky, clouds, weather and ambience for the Ochre voxel engine"
+publish = false
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ochre-base.workspace = true
+ochre-terrain.workspace = true
+bevy.workspace = true
+noise.workspace = true
+rand.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[features]
+# exposes small cached test maps to other crates' tests
+test-support = []

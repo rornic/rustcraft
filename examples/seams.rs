@@ -1,12 +1,12 @@
 // Looks for steps in the ground beside rivers and lakes, where one block's change in height is far
 // more than its neighbours', and where they fall on the map's cells.
-use rustcraft::chunks::generate::terrain_source::{TerrainSource, WaterKind};
-use rustcraft::worldmap::{WorldConfig, WorldTerrain};
+use ochre_base::terrain_source::{TerrainSource, WaterKind};
+use ochre_world::worldmap::{WorldConfig, WorldTerrain};
 use std::sync::Arc;
 
 fn main() {
     let seed: u64 = std::env::args().nth(1).unwrap().parse().unwrap();
-    let map = Arc::new(rustcraft::worldmap::generate(
+    let map = Arc::new(ochre_world::worldmap::generate(
         seed as _,
         WorldConfig::default(),
     ));
