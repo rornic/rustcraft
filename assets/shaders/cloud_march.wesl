@@ -10,15 +10,16 @@ const TOP: f32 = 2100.0;
 const LAND_TOP: f32 = 1024.0;
 // Light lost a block into the thickest cloud.
 const EXTINCTION: f32 = 0.025;
-// The most of a ray through the slab marched, in blocks, so steps stay short along low rays.
-const MARCH_REACH: f32 = 3000.0;
+// How much of a ray through the slab is marched at full steps, in blocks, so they stay short along low rays, and how far on it's marched at fewer: past the clouds' fade nothing's left.
+const NEAR_REACH: f32 = 3000.0;
+const MARCH_REACH: f32 = 15000.0;
 // Where light toward the sun is looked for, in blocks, for how much cloud shades each sample.
 const LIGHT_REACH: vec2<f32> = vec2<f32>(50.0, 400.0);
 // Deep inside, some light still gets through, scattered on and on.
 const DEEP_LIGHT: f32 = 0.2;
 // Sunlight scattered to the eye, and how much of the sky's light reaches the clouds' undersides.
 const SUN_SCATTER: f32 = 1.6;
-const UNDERSIDE: f32 = 0.35;
+const UNDERSIDE: f32 = 0.5;
 // Clouds fade out between these many blocks away, and the haze takes half their colour by this far.
 const FADE: vec2<f32> = vec2<f32>(10000.0, 35000.0);
 const HAZE: f32 = 10000.0;
@@ -140,7 +141,7 @@ fn cloud_span(origin: vec3<f32>, direction: vec3<f32>, bend: f32) -> vec2<f32> {
     let first = vec2<f32>(start, min(end, base.x));
     let second = vec2<f32>(max(start, base.y), end);
     let span = vec2<f32>(select(second.x, first.x, first.y > first.x), select(first.y, second.y, second.y > second.x));
-    return vec2<f32>(span.x, min(span.y, span.x + MARCH_REACH));
+    return span;
 }
 
 // A march's gathering: sun, moon-and-sky and haze reaching the eye in xyz, and transmittance.
@@ -227,7 +228,11 @@ fn march_clouds(origin: vec3<f32>, direction: vec3<f32>, bend: f32, limit: f32, 
     if above {
         out = cirrus(out, origin, direction, sheet.x, limit, drift);
     }
-    out = march(out, origin, direction, bend, span, steps, octaves, jitter, drift, to_sun);
+    // low rays graze the slab for far longer than the near part, which would otherwise hide every cloud past it
+    let near = vec2<f32>(span.x, min(span.y, span.x + NEAR_REACH));
+    let far = vec2<f32>(near.y, min(span.y, span.x + MARCH_REACH));
+    out = march(out, origin, direction, bend, near, steps, octaves, jitter, drift, to_sun);
+    out = march(out, origin, direction, bend, far, steps * 2, octaves, jitter, drift, to_sun);
     if !above {
         out = cirrus(out, origin, direction, sheet.y, limit, drift);
     }
