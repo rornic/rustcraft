@@ -5,9 +5,9 @@ chunk throughput needs a recorded reason here.
 
 Tools:
 - `cargo bench --bench terrain`: criterion micro-benchmarks, then p50/p99 over 128 distinct chunks per kind.
-- `cargo run --release --example flight -- --seed 1 --secs 30 --out bench/flight-<phase>.txt`: scripted
+- `cargo run --release --example flight -- --seed 1 --secs 30 --out target/flight-<phase>.txt`: scripted
   camera flight (settle, walk 20 m/s, sprint 80 m/s, high fly-over at y=900), headless. Reports are
-  `key: value` lines, so `diff bench/flight-a.txt bench/flight-b.txt` works.
+  `key: value` lines, so `diff target/flight-a.txt target/flight-b.txt` works.
 - `cargo run --release --example bench`: single-thread stage timings, vertex counts must not change in a refactor.
 
 Flight throughput is wall-clock and varies run to run (the walk leg is limited by what the camera needs, not
@@ -24,15 +24,14 @@ by generation speed), so judge it by p99 frame time and by the sprint and high l
 | lod_node level 1 / 3 / 5 / 7 | 0.171 / 0.238 / 2.62 / 0.174 ms |
 | example bench | 664454 chunk vertices, 352454 lod vertices |
 
-Flight (`bench/flight-baseline.txt`): frame p99 3.0 / 5.2 / 5.7 / 4.7 ms for load / walk / sprint / high,
+Flight: frame p99 3.0 / 5.2 / 5.7 / 4.7 ms for load / walk / sprint / high,
 worst 84.9 ms in the high leg. Sprint and high generate about 13.4k chunks/s.
 
 ## Phase 0: `TerrainSource` trait
 
 Chunk generation and LOD read terrain through `Arc<dyn TerrainSource>` only (`RegionStore::terrain()`).
 Vertex counts unchanged (664454 / 352454). Criterion and percentiles within noise of the baseline
-(height sample 1.124 us, cold plains chunk p50 26.3 ms, level 5 node 2.65 ms). Flight
-(`bench/flight-phase0.txt`): frame p99 2.4 / 5.4 / 5.9 / 5.1 ms, high-leg throughput 13.4k chunks/s.
+(height sample 1.124 us, cold plains chunk p50 26.3 ms, level 5 node 2.65 ms). Flight: frame p99 2.4 / 5.4 / 5.9 / 5.1 ms, high-leg throughput 13.4k chunks/s.
 No regression. The one-off 77-85 ms worst frame in the high leg is in the baseline too.
 
 ## Phase 1: world map (not yet used by the game)
@@ -86,7 +85,7 @@ with earlier rows, only the per-sample and per-chunk numbers are.
 
 Level 1 and 3 nodes are slower because the spawn area is now jungle and forest with far more trees to place
 (tree placement dominates those levels), not because sampling got slower.
-Flight (`bench/flight-phase5a.txt`): frame p99 2.5 / 5.4 / 6.1 / 5.0 ms against 2.4 / 5.4 / 5.9 / 5.1,
+Flight: frame p99 2.5 / 5.4 / 6.1 / 5.0 ms against 2.4 / 5.4 / 5.9 / 5.1,
 throughput unchanged (it is capped by the loader's per-frame budget, not by generation). Worst frame in the
 high leg was 110 ms, against 77-85 ms in earlier runs; it is a single frame and varies run to run.
 
@@ -119,7 +118,7 @@ A cheap "water nearby" mask skips river and lake lookups for the columns that ha
 
 Cold plains p99 is level with the baseline (61.3 against 60.2 ms): it is the first region in an area plus
 columns, and it varies by about 10 ms between runs of the same build. The other five rows improved.
-Flight (`bench/flight-phase5.txt`, taken before the water mask, so the mask only helps): frame p99
+Flight (taken before the water mask, so the mask only helps): frame p99
 2.6 / 5.3 / 6.2 / 5.2 ms against baseline 3.0 / 5.2 / 5.7 / 4.7. Sprint is 0.5 ms over the baseline's p99, a
 run-to-run difference on a headless harness (the same build moved by 0.4 ms between two runs), and
 throughput is identical, as the loader's per-frame budget caps it. The high leg's worst frame was 73 ms
@@ -134,7 +133,7 @@ resource sites, caves and hotspots are generated and validated on world creation
 3.0 s (`worldmap_generate`). Smoothing, minimum biome size, riparian belts (big rivers and lakes only) and
 drying of narrow streams in dry ground were added after flying the game.
 
-Flight (`bench/flight-phase6.txt`): frame p99 3.2 / 5.1 / 7.1 / 6.3 ms against baseline 3.0 / 5.2 / 5.7 / 4.7.
+Flight: frame p99 3.2 / 5.1 / 7.1 / 6.3 ms against baseline 3.0 / 5.2 / 5.7 / 4.7.
 Sprint and high-altitude p99 are about 1.5 ms over the baseline. Not proven, but the likely reason is that the
 flight now crosses forest and jungle where the baseline crossed open land, so the main thread integrates more
 mesh per frame; the same build moved 0.4-0.5 ms between runs, which does not cover it. Treat it as a regression

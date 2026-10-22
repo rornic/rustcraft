@@ -5,5 +5,6 @@ pub mod birds;
 pub mod collision;
 pub mod critters;
 pub mod debug;
+pub mod flythrough;
 pub mod player;
 pub mod wings;
