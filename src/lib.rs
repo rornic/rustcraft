@@ -1,4 +1,4 @@
-//! Ochre, a planetary voxel engine for Bevy.
+//! Ochre, a voxel engine for Bevy.
 //!
 //! Each part is its own crate, re-exported here:
 //! - [`ochre_base`]: blocks, biomes, terrain sources and the world's fixed heights

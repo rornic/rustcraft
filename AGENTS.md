@@ -1,6 +1,6 @@
 # Ochre
 
-A planetary voxel engine on Bevy 0.20 (repo name `rustcraft`). Rust workspace, no binary: the game is the `sandbox` example.
+A voxel engine on Bevy 0.20. Rust workspace, no binary: the game is the `sandbox` example.
 
 ## Run
 

@@ -31,7 +31,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # The engine: re-exports the ochre crates, and holds the examples and benchmarks.
 [package]
 name = "ochre-engine"
-description = "A planetary voxel engine for Bevy"
+description = "A voxel engine for Bevy"
 publish = false
 version.workspace = true
 authors.workspace = true
