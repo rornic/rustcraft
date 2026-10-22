@@ -17,7 +17,7 @@ import super::lighting::{daylight, moon_radiance, sun_radiance};
 import super::sky::{MOON_LIGHT, SUN_LIGHT};
 import super::stars::reflected_celestial;
 import super::cloud_shadow::cloud_shadow;
-import super::clouds::{clouds, lit_clouds};
+import super::clouds::clouds;
 import super::curvature::{curved, uncurved};
 import super::hash::hash2;
 
@@ -26,24 +26,11 @@ import super::hash::hash2;
 @group(constants::MATERIAL_BIND_GROUP) @binding(2) var material_color_sampler: sampler;
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
-// between these distances, x to y, see-through water turns opaque, see `WaterMaterial`
-@group(constants::MATERIAL_BIND_GROUP) @binding(7) var<uniform> see_through: vec4<f32>;
-// the clouds as seen, unlit, see `clouds::CloudLayer::target`
-@group(constants::MATERIAL_BIND_GROUP) @binding(9) var cloud_target: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(10) var cloud_target_sampler: sampler;
 
-
-const TROPICAL_TINT: vec3<f32> = vec3<f32>(0.0, 0.85, 0.9);
-const TROPICAL_PUSH: f32 = 0.4;
-const DEEP_TINT: vec3<f32> = vec3<f32>(0.03, 0.18, 0.3);
-// Open ocean colour, shaded towards from tropical between these depths in blocks.
+// The open ocean's colour, which the sea's water darkens to between these depths in blocks.
 const DEEP_OCEAN_COLOR: vec3<f32> = vec3<f32>(0.004, 0.03, 0.16);
 const DEEP_OCEAN_START: f32 = 3.0;
 const DEEP_OCEAN_END: f32 = 14.0;
-// Beer-Lambert-style extinction: how many blocks of water it takes for the seafloor
-// to fade to invisible, rather than a flat translucency that stays see-through no
-// matter how deep the water gets.
-const EXTINCTION_DISTANCE: f32 = 3.0;
 const CHUNK_SIZE: f32 = 16.0;
 
 const FOAM_COLOR: vec3<f32> = vec3<f32>(0.95, 0.98, 0.97);
@@ -127,8 +114,8 @@ const REFLECT_STRAIGHT_DOWN: f32 = 0.02;
 const GLINT: f32 = 0.6;
 
 // Steps and octaves for reflecting off-screen clouds: few, as waves blur them and every water pixel marches.
-const REFLECTED_CLOUD_STEPS: i32 = 1;
-const REFLECTED_CLOUD_OCTAVES: i32 = 1;
+const REFLECTED_CLOUD_STEPS: i32 = 3;
+const REFLECTED_CLOUD_OCTAVES: i32 = 2;
 
 // Water's colours are picked as they should look on screen, so they're turned back into
 // the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
@@ -335,55 +322,14 @@ fn reflected_sky(direction: vec3<f32>) -> vec3<f32> {
     return sky_colour(up) * (1.0 - night.a) + night.rgb;
 }
 
-// `sky` with clouds over it: read from the cloud target where that way is on screen, marched cheaply where not.
-fn under_clouds(sky: vec3<f32>, origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    let up = skyward(direction);
-    let clip = view_bindings::view.unjittered_clip_from_world * vec4<f32>(view_bindings::view.world_position.xyz + up, 1.0);
-    let ndc = clip.xy / clip.w;
-    var cloud: vec4<f32>;
-    if clip.w > 0.0 && all(abs(ndc) < vec2<f32>(1.0)) {
-        let marched = textureSampleLevel(cloud_target, cloud_target_sampler, vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5), 0.0);
-        cloud = lit_clouds(marched, origin, up, 1.0);
-    } else {
-        cloud = clouds(origin, up, REFLECTED_CLOUD_STEPS, REFLECTED_CLOUD_OCTAVES);
+// `sky` with clouds over it. Always marched the same cheap way: reading the screen's cloud target where the
+// reflected way happens to be on screen and marching where not left a seam in the water fixed to the view.
+fn under_clouds(sky: vec3<f32>, origin: vec3<f32>, direction: vec3<f32>, keep: f32) -> vec3<f32> {
+    if keep <= 0.0 {
+        return sky;
     }
+    let cloud = clouds(origin, skyward(direction), REFLECTED_CLOUD_STEPS, REFLECTED_CLOUD_OCTAVES) * keep;
     return sky * (1.0 - cloud.a) + cloud.rgb;
-}
-
-// Where reflections are looked up across the spread of slopes waves too fine to draw would
-// have had, as offsets in standard deviations: a spiral through a disc.
-const REFLECTION_TAPS: i32 = 8;
-const REFLECTION_SPREAD: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
-    vec2<f32>(0.35, 0.0), vec2<f32>(-0.42, 0.55), vec2<f32>(-0.38, -0.78), vec2<f32>(0.98, -0.52),
-    vec2<f32>(0.21, 1.25), vec2<f32>(-1.37, 0.18), vec2<f32>(-0.06, -1.5), vec2<f32>(1.38, 0.9),
-);
-
-// The sky and clouds reflected towards `to_eye` off water at `origin` sloping by `slope`,
-// in rgb, and how much it reflects, in a. Where waves are too fine to draw, so `spread`
-// over their slopes is wide, it's the mean over that spread: clouds blur and smear
-// towards the eye, as they do on a real sea, instead of reflecting as off a mirror.
-fn rough_reflection(origin: vec3<f32>, slope: vec2<f32>, spread: f32, to_eye: vec3<f32>) -> vec4<f32> {
-    var light = vec3<f32>(0.0);
-    var reflected = 0.0;
-    var toward = vec3<f32>(0.0);
-    for (var i = 0; i < REFLECTION_TAPS; i++) {
-        let tilted = slope + REFLECTION_SPREAD[i] * spread;
-        let normal = normalize(vec3<f32>(-tilted.x, 1.0, -tilted.y));
-        // facets turned away from the eye aren't seen
-        let facing = dot(normal, to_eye);
-        if facing <= 0.0 {
-            continue;
-        }
-        let share = fresnel(facing);
-        let direction = reflect(-to_eye, normal);
-        light += reflected_sky(direction) * share;
-        toward += direction * share;
-        reflected += share;
-    }
-    let mean = reflected / f32(REFLECTION_TAPS);
-    // the clouds once, along the taps' mean, as marching them for each would cost too much
-    let sky = under_clouds(light / max(reflected, 1e-4), origin, normalize(toward + vec3<f32>(0.0, 1e-4, 0.0)));
-    return vec4<f32>(sky, mean);
 }
 
 // How much of the light arriving at an angle with cosine `cos_theta` off the normal water
@@ -432,18 +378,25 @@ fn glint(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, world_position: ve
     return sunlit * shaded + moonlit;
 }
 
-// Fresh water, a river's or a lake's, is clear: it takes a little of each colour out of the light that
+// Water is clear: it takes a little of each colour out of the light that
 // reaches the bed and back, red first and fastest, per block of depth it passes through, and adds a
 // faint scatter of its own, so a shallow bed shows true and a deep pool goes slowly green and blue.
 const FRESH_ABSORB: vec3<f32> = vec3<f32>(0.22, 0.07, 0.04);
 const FRESH_SCATTER: vec3<f32> = vec3<f32>(0.03, 0.10, 0.14);
-// The water must lie this far over the sea for its surface to be fresh: the sea's own is the ocean's.
+// The most of what's seen that the surface reflects, however slant, for a lake and for the sea, which
+// is rougher, and how much of the sun's glint the sea keeps.
+const LAKE_REFLECT_MAX: f32 = 0.5;
+const SEA_REFLECT_MAX: f32 = 0.18;
+const SEA_GLINT: f32 = 0.25;
+// How much of the clouds' reflection the sea keeps: none, as a rough sea smears them out, and drawn they're a mirror's copy of the sky.
+const SEA_CLOUDS: f32 = 0.0;
+// The water must lie this far over the sea for its surface to be fresh, which has no surf and none of the ocean's depth tint.
 const FRESH_ABOVE_SEA: f32 = 0.6;
-// How far, in screen heights, ripples bend what's seen through the surface, per block of depth.
 // How much of the water's own colour shows over the bed at any depth.
 const FRESH_TINT: f32 = 0.1;
+// How far, in screen heights, ripples bend what's seen through the surface, per block of depth.
 const REFRACTION: f32 = 0.035;
-// How strong fresh water's ripples are next to the ocean's: it's calmer.
+// How strong the ripples are.
 const FRESH_RIPPLES: f32 = 0.15;
 // Fresh water's speed downhill per unit of slope, in blocks a second, its most, and how much more rippled it is at that.
 const FLOW_SPEED: f32 = 12.0;
@@ -521,9 +474,11 @@ fn screen_reflection(origin: vec3<f32>, direction: vec3<f32>, frag_coord: vec4<f
     return vec4<f32>(0.0);
 }
 
-// Fresh water seen from above: what's under the surface, through ripples that bend it and a depth
-// of clear water that tints it, and the sky, the sun and the world about it reflected off the top.
-fn fresh_water(world_position: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f32>, depth: f32, footprint: f32, dist: f32, tint: vec3<f32>) -> vec3<f32> {
+// Water seen from above: what's under the surface, through ripples that bend it and a depth of clear
+// water that tints it, and the sky, the sun and the world about it reflected off the top. `sea` is 1 for
+// the sea and 0 for fresh water, `ocean` how far the sea's depth has darkened it to open ocean blue,
+// and `waves` the swell on the surface.
+fn water(world_position: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f32>, depth: f32, footprint: f32, dist: f32, tint: vec3<f32>, sea: f32, ocean: f32, waves: Swell) -> vec3<f32> {
     let time = view_bindings::globals.time;
     // ripples carried down the slope the normal leans to, as two copies half a period apart faded across each other
     var flow = normal.xz / max(normal.y, 0.2) * FLOW_SPEED * f32(normal.y > 0.5);
@@ -544,9 +499,9 @@ fn fresh_water(world_position: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, 
         ripple = mix(ripple, carried, smoothstep(0.01, 0.1, speed));
         ripple *= 1.0 + FLOW_ROUGHEN * speed;
     }
-    let slope = ripple.xy * FRESH_RIPPLES;
+    let slope = ripple.xy * FRESH_RIPPLES + waves.slope;
     let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
-    let variance = CALM_SLOPE_VARIANCE + ripple.z * FRESH_RIPPLES * FRESH_RIPPLES;
+    let variance = CALM_SLOPE_VARIANCE + ripple.z * FRESH_RIPPLES * FRESH_RIPPLES + waves.lost;
 
     // the bed shows only near, easing to a typical bed's grey past that, or where nothing can be read of it
     let far_bed = FAR_BED * daylight(uncurved(world_position));
@@ -574,11 +529,12 @@ fn fresh_water(world_position: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, 
     let transmitted = exp(-FRESH_ABSORB * path);
     let scatter = scene_colour(FRESH_SCATTER) * daylight(uncurved(world_position));
     // however shallow, a lake's water is plainly blue, not just the bed's colour
-    let body = mix(behind * transmitted + scatter * (1.0 - transmitted), tint, FRESH_TINT);
+    var body = mix(behind * transmitted + scatter * (1.0 - transmitted), tint, FRESH_TINT);
+    // the sea goes on darkening with depth, past where any bed shows
+    body = mix(body, scene_colour(DEEP_OCEAN_COLOR) * daylight(uncurved(world_position)), ocean);
 
     let reflect_dir = reflect(-to_eye, surface);
-    // a calm lake mirrors more than the plain fresnel says, enough to show the trees from above
-    let share = min(fresnel(dot(surface, to_eye)) * 1.6 + 0.03, 0.75);
+    let share = min(fresnel(dot(surface, to_eye)) + 0.03, mix(LAKE_REFLECT_MAX, SEA_REFLECT_MAX, sea));
     var world = vec4<f32>(0.0);
     if dist < REFLECTION_NEAR && share > 0.06 {
         world = screen_reflection(world_position, reflect_dir, frag_coord);
@@ -586,16 +542,16 @@ fn fresh_water(world_position: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, 
     // the sky and clouds only where the land's reflection leaves them showing
     var reflection = world.rgb;
     if world.a < 1.0 {
-        let sky = under_clouds(reflected_sky(reflect_dir), uncurved(world_position), reflect_dir);
+        let sky = under_clouds(reflected_sky(reflect_dir), uncurved(world_position), reflect_dir, mix(1.0, SEA_CLOUDS, sea));
         reflection = mix(sky, world.rgb, world.a);
     }
-    let sun = glint(surface, to_eye, variance, world_position, frag_coord.xy) * cloud_shadow(uncurved(world_position));
+    let sun = glint(surface, to_eye, variance, world_position, frag_coord.xy) * cloud_shadow(uncurved(world_position)) * mix(1.0, SEA_GLINT, sea);
     return body * (1.0 - share) + reflection * share + sun;
 }
 
-// Fresh water's surface seen from under it: what's above, bent by the ripples, clearest through Snell's window straight
+// Water's surface seen from under it: what's above, bent by the ripples, clearest through Snell's window straight
 // up and tinted more past it, where real water would only mirror what's under it.
-fn fresh_water_below(world_position: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f32>, footprint: f32) -> vec3<f32> {
+fn water_below(world_position: vec3<f32>, to_eye: vec3<f32>, frag_coord: vec4<f32>, footprint: f32) -> vec3<f32> {
     let time = view_bindings::globals.time;
     let slope = ripples(world_position.xz, time, footprint).xy * FRESH_RIPPLES;
     let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
@@ -623,48 +579,38 @@ fn fragment(
     let dist = length(view_to_world);
 
     let normal = normalize(in.world_normal);
+    let time = view_bindings::globals.time;
+    // LOD water has no depth to go by and a coarse bed under it shows in squares, so is deep enough to hide it
+    var depth = 10.0;
+    var ocean = 1.0;
+    var waves = Swell(0.0, vec2<f32>(0.0), 0.0);
     // where the surface would lie without the swell lifting it, which tells fresh water from the sea
     var flat_y = uncurved(world_position).y;
 @if(VERTEX_COLORS) {
-    let swell_depth = in.color.g * CHUNK_SIZE;
-    let swell_time = view_bindings::globals.time;
-    let lift = swell(world_position.xz, swell_time, dist, swell_size(in.color.r, swell_depth, world_position.xz, swell_time), deep_water(swell_depth)).height;
-    flat_y -= lift * in.color.b;
+    depth = max(in.color.g * CHUNK_SIZE, 0.25);
+    ocean = smoothstep(DEEP_OCEAN_START, DEEP_OCEAN_END, depth);
+    waves = swell(world_position.xz, time, dist, swell_size(in.color.r, depth, world_position.xz, time), deep_water(depth));
+    flat_y -= waves.height * in.color.b;
 }
     let fresh_surface = flat_y > f32(constants::WATER_LEVEL) + FRESH_ABOVE_SEA;
-    let brightness = dot(normal, normalize(vec3(-0.2, 0.7, 0.2)));
+    let sea = f32(!fresh_surface);
+    ocean *= sea;
+@if(!VERTEX_COLORS) {
+    // LOD water has no depth or shore to calm the swell by, and is far enough out to be deep, so is the sea at full size: left flat it's a mirror
+    if !fresh_surface {
+        waves = swell(world_position.xz, time, dist, 1.0, 1.0);
+    }
+}
 
-    let color_lit = material_color * textureSample(material_color_texture, material_color_sampler, in.uv);
-
-    let dark = color_lit * 0.7;
-    var color = mix(dark, color_lit, brightness);
-    color = vec4<f32>(mix(color.rgb, TROPICAL_TINT, TROPICAL_PUSH), color.a);
-    var alpha = 0.6;
-
-@if(VERTEX_COLORS) {
-    let shore_factor = in.color.r;
-    let raw_depth = in.color.g * CHUNK_SIZE;
-
-    // How much of the seafloor's light has been "absorbed" by this depth of water -
-    // 0 at the surface, approaching 1 within a few blocks, never quite reaching it.
-    let extinction = 1.0 - exp(-raw_depth / EXTINCTION_DISTANCE);
-
-    let shallow_color = color.rgb * 1.15;
-    let deep_color = mix(color.rgb, DEEP_TINT, 0.6);
-    color = vec4<f32>(mix(shallow_color, deep_color, extinction), color.a);
-    alpha = mix(0.3, 0.97, extinction);
-
-    let ocean = smoothstep(DEEP_OCEAN_START, DEEP_OCEAN_END, raw_depth);
-    let ocean_lit = DEEP_OCEAN_COLOR * mix(0.7, 1.0, brightness);
-    color = vec4<f32>(mix(color.rgb, ocean_lit, ocean), color.a);
-    // open ocean is solid, or the seabed's terraces show through its dark colour
-    alpha = mix(alpha, 1.0, ocean);
+    // its colour's tuned for midday, so follows the light from there
+    let tint = scene_colour((material_color * textureSample(material_color_texture, material_color_sampler, in.uv)).rgb) * daylight(uncurved(world_position));
 
     // Foam's noise sampling (up to 6 hash lookups per pixel between the 3 octaves
     // and the frame crossfade) is the most expensive part of this shader, for
     // detail that's imperceptible at distance anyway - branching around it entirely
     // beyond FOAM_FADE_END is a real cost saving, not just a visual fade.
     var foam = 0.0;
+@if(VERTEX_COLORS) {
     // fresh water is calm, with no surf
     if dist < FOAM_FADE_END && !fresh_surface {
         // Phase is driven by distance-to-shore (baked per vertex - see
@@ -673,9 +619,8 @@ fn fragment(
         // travelling envelope always advances toward the coast along its local
         // normal instead of sliding sideways along it like a fixed-direction wave.
         let shore_distance = in.color.a;
-        let time = view_bindings::globals.time;
         let phase = shore_distance * FOAM_PHASE_SCALE + time * FOAM_SPEED;
-        let lap = smoothstep(1.0 - FOAM_BAND, 1.0, sin(phase)) * shore_factor;
+        let lap = smoothstep(1.0 - FOAM_BAND, 1.0, sin(phase)) * in.color.r;
         let coverage = clamp(lap * FOAM_DENSITY, 0.0, 1.0);
 
         // Crossfade between this frame's cell pattern and the next, instead of
@@ -688,77 +633,27 @@ fn fragment(
         let fade = 1.0 - smoothstep(FOAM_FADE_START, FOAM_FADE_END, dist);
         foam = mix(foam_a, foam_b, fract(frame_t)) * fade;
     }
-
-    color = vec4<f32>(mix(color.rgb, FOAM_COLOR, foam), color.a);
-    alpha = mix(alpha, 1.0, foam);
 }
 
-    // What the water shows of itself, from below the surface, and the sky and sun it
-    // reflects. Looking up at it from underwater, only itself.
-    // its colour's tuned for midday, so follows the light from there
-    var scene = scene_colour(color.rgb) * daylight(uncurved(world_position));
     let to_eye = -view_to_world / dist;
     // blocks a pixel spans across the water here, worked out where every fragment does
     let footprint = max(length(dpdx(world_position.xz)), length(dpdy(world_position.xz)));
     // which side of the surface's plane the eye is on, as a slope rising away from it is seen from above though over the eye
     let outside = dot(view_position - world_position, normal) > 0.0;
-    let above = outside && normal.y > 0.5;
-@if(SOLID_WATER) {
-    // nothing shows through, so it's all the water's own colour that isn't reflected
-    alpha = 1.0;
-}
-@if(!SOLID_WATER) {
-    // and see-through water closes up before LODs draw it opaque, or where they take over
-    // the seabed would stop showing all at once, along the square edge of their nodes
-    if see_through.y > see_through.x {
-        alpha = mix(alpha, 1.0, smoothstep(see_through.x, see_through.y, dist));
-    }
-}
-    // fresh water has its own look, below, so is spared this one's cost
-    if above && !fresh_surface {
-        let time = view_bindings::globals.time;
-        let ripple = ripples(world_position.xz, time, footprint);
-        var size = 1.0;
-        var deep = 1.0;
-@if(VERTEX_COLORS) {
-        size = swell_size(in.color.r, in.color.g * CHUNK_SIZE, world_position.xz, time);
-        deep = deep_water(in.color.g * CHUNK_SIZE);
-}
-        let waves = swell(world_position.xz, time, dist, size, deep);
-        let slope = ripple.xy + waves.slope;
-        let surface = normalize(vec3<f32>(-slope.x, 1.0, -slope.y));
-        let variance = CALM_SLOPE_VARIANCE + ripple.z + waves.lost;
-        // the clouds are flat, so they're reflected and cast shadows from where the water really is
-        let rough = rough_reflection(uncurved(world_position), slope, sqrt(ripple.z + waves.lost), to_eye);
-        let sky = rough.rgb;
-        let reflected = rough.a;
-        let sun = glint(surface, to_eye, variance, world_position, in.position.xy) * cloud_shadow(uncurved(world_position));
-        // blended over what's behind: the reflection and glint stay as bright however clear the water
-        let body = scene * alpha * (1.0 - reflected);
-        let covered = alpha * (1.0 - reflected) + reflected;
-        scene = (body + sky * reflected + sun) / max(covered, 1e-4);
-        alpha = covered;
-    }
 
-    // fresh water is its own sight of what's under it, so is drawn over it, not blended, and keeps
+    // water is its own sight of what's under it, so is drawn over it, not blended, and keeps
     // its look at any distance, LODs included
-    // a fall's side seen from out of the water is fresh water's outside too
-    if outside && fresh_surface {
-        // LOD water has no depth to go by and a coarse bed under it shows in squares, so is deep enough to hide it
-        var depth = 10.0;
-@if(VERTEX_COLORS) {
-        depth = max(in.color.g * CHUNK_SIZE, 0.25);
-}
-        scene = fresh_water(world_position, normal, to_eye, in.position, depth, footprint, dist, scene_colour(color.rgb) * daylight(uncurved(world_position)));
-        alpha = 1.0;
-    } else if fresh_surface && normal.y > 0.5 {
+    var scene = tint;
+    if outside {
+        scene = water(world_position, normal, to_eye, in.position, depth, footprint, dist, tint, sea, ocean, waves);
+        scene = mix(scene, scene_colour(FOAM_COLOR) * daylight(uncurved(world_position)), foam);
+    } else if normal.y > 0.5 {
         // seen from under it, clear, not tinted
-        scene = fresh_water_below(world_position, to_eye, in.position, footprint);
-        alpha = 1.0;
+        scene = water_below(world_position, to_eye, in.position, footprint);
     }
 
     // so distant water fades into the sky instead of popping in and out
-    let shown = fogged(vec4<f32>(scene, alpha), world_position, in.position.xy);
+    let shown = fogged(vec4<f32>(scene, 1.0), world_position, in.position.xy);
 
     // after the texture samples above, which need uniform control flow
     let threshold = dither_threshold(in.position.xy);
