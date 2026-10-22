@@ -6,15 +6,7 @@ Another Minecraft clone, originally written using [specs](https://github.com/ame
 cargo run --release --example sandbox
 ```
 
-<video src="images/flyover.mp4" controls autoplay loop muted playsinline width="100%">
-  <a href="images/flyover.mp4">Watch a flyover of an Ochre world</a>
-</video>
-
-## Planned work
-
-- Chunk LODs for vastly improved render distance.
-- Better terrain generation and features.
-- Player controller.
+https://github.com/user-attachments/assets/945fa886-ab4c-47c7-af87-1b53fb2d9064
 
 ## License
 
