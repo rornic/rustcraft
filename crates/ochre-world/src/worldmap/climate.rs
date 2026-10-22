@@ -364,9 +364,9 @@ fn closeness(map: &WorldMap, source: impl Fn(usize) -> bool) -> Vec<f32> {
     let reach = RIPARIAN_REACH;
     let mut dist = vec![u8::MAX; dim * dim];
     let mut frontier: Vec<usize> = Vec::new();
-    for i in 0..dim * dim {
+    for (i, d) in dist.iter_mut().enumerate() {
         if source(i) {
-            dist[i] = 0;
+            *d = 0;
             frontier.push(i);
         }
     }

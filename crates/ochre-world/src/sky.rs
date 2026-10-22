@@ -1,4 +1,5 @@
 use bevy::{
+    app::{App, Plugin, PostUpdate, Startup, Update},
     asset::Assets,
     camera::{Camera3d, Exposure},
     color::Color,
@@ -7,29 +8,38 @@ use bevy::{
         component::Component,
         query::{With, Without},
         resource::Resource,
+        schedule::IntoScheduleConfigs,
         system::{Commands, Local, Query, Res, ResMut},
     },
     input::{keyboard::KeyCode, ButtonInput},
     light::{
         atmosphere::ScatteringMedium, Atmosphere, AtmosphereEnvironmentMapLight,
-        CascadeShadowConfigBuilder, DirectionalLight, SunDisk,
+        CascadeShadowConfigBuilder, DirectionalLight, SimulationLightSystems, SunDisk,
     },
     math::{Quat, UVec2, UVec3, Vec3},
     pbr::{AtmosphereSettings, DistanceFog, FogFalloff},
     time::Time,
-    transform::components::{GlobalTransform, Transform},
+    transform::{
+        components::{GlobalTransform, Transform},
+        TransformSystems,
+    },
 };
 
 use std::f32::consts::{PI, TAU};
 
+use crate::clouds::CloudPlugin;
+use crate::sky_dome::{NightSkyPlugin, SunGlarePlugin};
+use crate::weather::WeatherPlugin;
 use ochre_base::math::smoothstep;
+use ochre_terrain::chunk::CHUNK_SIZE;
 use ochre_terrain::curvature::WORLD_CURVE;
+use ochre_terrain::settings::RendererSettings;
 
 /// How opaque fog gets at its far end.
 pub const FOG_MAX_OPACITY: f32 = 0.8;
 
 /// Where the sun is at noon: its path across the sky is the great circle through this and the horizon, see `path_basis`.
-pub const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
+pub(crate) const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
 /// Seconds in a game day.
 pub const DAY_SECONDS: f32 = 600.0;
 /// The clock counts whole ticks, so it stays exact however long the game runs.
@@ -44,7 +54,7 @@ const SCRUB_FORWARD_KEY: KeyCode = KeyCode::BracketRight;
 // How far past opposite the sun the moon rides, in radians, which keeps it nearly full.
 const MOON_LAG: f32 = 0.5;
 /// Warm, to stand out against the cool light from the sky.
-pub const SUN_COLOR: Color = Color::srgb(1.0, 0.9, 0.75);
+pub(crate) const SUN_COLOR: Color = Color::srgb(1.0, 0.9, 0.75);
 /// How bright sunlight is in the world shaders, where the camera's exposure cancels out.
 const SUN_BRIGHTNESS: f32 = 1.3;
 /// Fixed, so sun and sky keep the same brightness in the scene whatever the illuminance.
@@ -111,7 +121,7 @@ pub struct Sun;
 
 /// Which way the sun casts its shadows: turned in steps, see `aim_sun_shadows`.
 #[derive(Component)]
-pub struct SunShadows(Quat);
+struct SunShadows(Quat);
 
 // The sun's shadows turn once every this many ticks, sliding over the last this share of each.
 const SHADOW_STEP_TICKS: u64 = 2 * TICKS_PER_SECOND;
@@ -175,13 +185,13 @@ pub fn sun_direction(time: f32) -> Vec3 {
 }
 
 /// Toward the moon `time` of the way through the day: opposite the sun, so it rises as the sun sets.
-pub fn moon_direction(time: f32) -> Vec3 {
+pub(crate) fn moon_direction(time: f32) -> Vec3 {
     on_path(sun_angle(time) + PI + MOON_LAG)
 }
 
 /// Runs the clock, wound with `[` and `]`, and moves the sun and moon to it: the sky, fog and
 /// light all follow them.
-pub fn move_sky(
+fn move_sky(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut clock: ResMut<TimeOfDay>,
@@ -216,14 +226,14 @@ fn shadow_days(ticks: u64, carry: f32) -> f32 {
 }
 
 /// Turns the sun to `SunShadows` while its shadow maps fit, as turning them every frame makes the texels crawl.
-pub fn aim_sun_shadows(mut sun: Query<(&mut GlobalTransform, &SunShadows)>) {
+fn aim_sun_shadows(mut sun: Query<(&mut GlobalTransform, &SunShadows)>) {
     for (mut transform, shadows) in &mut sun {
         *transform = GlobalTransform::from_rotation(shadows.0);
     }
 }
 
 /// Turns the sun back once its shadow maps are fitted, so its light and disc still move smoothly.
-pub fn aim_sun_light(mut sun: Query<(&mut GlobalTransform, &Transform), With<SunShadows>>) {
+fn aim_sun_light(mut sun: Query<(&mut GlobalTransform, &Transform), With<SunShadows>>) {
     for (mut global, transform) in &mut sun {
         *global = GlobalTransform::from(*transform);
     }
@@ -262,7 +272,7 @@ fn atmosphere_settings() -> AtmosphereSettings {
 }
 
 /// The planet, with its ground at y = 0.
-pub fn spawn_atmosphere(mut commands: Commands, mut media: ResMut<Assets<ScatteringMedium>>) {
+fn spawn_atmosphere(mut commands: Commands, mut media: ResMut<Assets<ScatteringMedium>>) {
     let medium = media.add(ScatteringMedium::earth(256, 256));
     commands.spawn(Atmosphere::earth(medium));
 }
@@ -273,7 +283,7 @@ pub fn spawn_atmosphere(mut commands: Commands, mut media: ResMut<Assets<Scatter
 /// hang level, far above the land's edge. Instead the sky's seen from as high above the
 /// planet as it takes for its horizon to dip that far, darkening as it would from a plane.
 /// Low down, where the land's edge dips no further than the Earth's would, nothing moves.
-pub fn match_sky_horizon(
+fn match_sky_horizon(
     camera: Query<(&GlobalTransform, &DistanceFog), With<Camera3d>>,
     mut planets: Query<(&Atmosphere, &mut GlobalTransform), Without<Camera3d>>,
 ) {
@@ -298,6 +308,56 @@ pub fn match_sky_horizon(
         eye.y - altitude - atmosphere.inner_radius,
         eye.z,
     ));
+}
+
+/// Everything overhead: the clock, sun, moon and atmosphere, the night sky and sun's glare, clouds
+/// and weather. `OCHRE_TIME` starts the clock at that time of day, in days, for looking at the sky
+/// at any hour.
+pub struct SkyPlugin {
+    /// How far the sun casts shadows, in blocks, and in how many slices.
+    pub shadow_distance: f32,
+    pub shadow_cascades: usize,
+}
+
+impl SkyPlugin {
+    pub fn new(renderer: &RendererSettings) -> Self {
+        Self {
+            shadow_distance: (renderer.shadow_distance as f32 * CHUNK_SIZE as f32)
+                .min(renderer.fog_distance()),
+            shadow_cascades: renderer.shadow_cascades,
+        }
+    }
+}
+
+impl Plugin for SkyPlugin {
+    fn build(&self, app: &mut App) {
+        let start = std::env::var("OCHRE_TIME")
+            .ok()
+            .and_then(|time| time.parse().ok())
+            .unwrap_or(START_TIME);
+        let (distance, cascades) = (self.shadow_distance, self.shadow_cascades);
+        app.add_plugins((NightSkyPlugin, SunGlarePlugin, CloudPlugin, WeatherPlugin))
+            .insert_resource(TimeOfDay::from_days(start))
+            .add_systems(
+                Startup,
+                (spawn_atmosphere, move |mut commands: Commands| {
+                    commands.spawn(sun(distance, cascades));
+                    commands.spawn(moon());
+                }),
+            )
+            .add_systems(Update, move_sky)
+            // once the camera's moved, see `TransformSystems::Propagate`
+            .add_systems(
+                PostUpdate,
+                (
+                    match_sky_horizon.after(TransformSystems::Propagate),
+                    aim_sun_shadows
+                        .after(TransformSystems::Propagate)
+                        .before(SimulationLightSystems::UpdateDirectionalLightCascades),
+                    aim_sun_light.after(SimulationLightSystems::UpdateDirectionalLightCascades),
+                ),
+            );
+    }
 }
 
 #[cfg(test)]

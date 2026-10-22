@@ -35,7 +35,7 @@ pub struct ChunkGroup {
 }
 
 #[derive(Component)]
-pub struct BuildChunkGroup {
+pub(crate) struct BuildChunkGroup {
     task: Task<ChunkMeshes>,
     chunks: Vec<Entity>,
 }
@@ -56,7 +56,7 @@ pub struct GroupedChunk;
 /// Draws the faces between its group's leaves, see `ChunkMeshes::inner_leaves`. Hidden unless
 /// the group is in `INNER_LEAVES_REACH` of the camera.
 #[derive(Component)]
-pub struct InnerLeafFaces;
+pub(crate) struct InnerLeafFaces;
 
 fn group_aabb() -> Aabb {
     let width = (2 * CHUNK_SIZE) as f32;
@@ -64,7 +64,7 @@ fn group_aabb() -> Aabb {
 }
 
 /// Starts merging the meshes of each group whose chunks have all settled, one way or the other.
-pub fn build_groups(
+pub(crate) fn build_groups(
     mut commands: Commands,
     mut loader: ResMut<ChunkLoader>,
     unsettled: Query<(), Unsettled>,
@@ -119,7 +119,7 @@ pub fn build_groups(
 /// Shows the faces between leaves of the groups near the camera, and hides the rest, whose leaves
 /// have their holes filled. A group is near if any of it is, so it's never missing faces that
 /// would show through a hole.
-pub fn show_inner_leaves(
+pub(crate) fn show_inner_leaves(
     camera: Query<&GlobalTransform, (With<Camera>, With<ChildOf>)>,
     groups: Query<&ChunkGroup>,
     mut inner_leaves: Query<(&ChildOf, &mut Visibility), With<InnerLeafFaces>>,
@@ -149,7 +149,7 @@ fn inner_leaves_near(key: LodKey, eye: Vec3) -> bool {
 }
 
 /// Draws groups whose merged meshes are ready.
-pub fn load_groups(
+pub(crate) fn load_groups(
     mut commands: Commands,
     loader: Res<ChunkLoader>,
     mut meshes: ResMut<Assets<Mesh>>,

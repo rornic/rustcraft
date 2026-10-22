@@ -12,8 +12,8 @@ use ochre_base::WATER_LEVEL;
 const DETAIL_WAVELENGTH: f64 = 120.0;
 const DETAIL_OCTAVES: u32 = 6;
 /// Peak height of the detail, in blocks, over the gentlest ground and the roughest.
-pub const GENTLE_DETAIL: f64 = 3.0;
-pub const ROUGH_DETAIL: f64 = 38.0;
+pub(crate) const GENTLE_DETAIL: f64 = 3.0;
+pub(crate) const ROUGH_DETAIL: f64 = 38.0;
 
 // Rows of dunes driven by a wind along +x: a long gentle slope up to each crest, and a steep
 // face falling away behind it.
@@ -87,7 +87,7 @@ fn blended_staircase(
 }
 
 /// How much of the way, 0..1, mountain ground at (`x`, `z`) is terraced, before its height.
-pub fn terrace_patch(seed: u32, x: f64, z: f64) -> f64 {
+pub(crate) fn terrace_patch(seed: u32, x: f64, z: f64) -> f64 {
     smoothstep(
         TERRACE_PATCH_START,
         TERRACE_PATCH_START + 0.3,

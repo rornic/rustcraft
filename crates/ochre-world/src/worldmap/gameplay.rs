@@ -309,7 +309,7 @@ fn push(map: &mut WorldMap, kind: FeatureKind, i: usize, value: f32) {
 fn river_gaps(
     map: &WorldMap,
     slope: &[f32],
-    crossing: &mut Vec<bool>,
+    crossing: &mut [bool],
     mut place: Option<&mut Vec<usize>>,
 ) -> f32 {
     let dim = map.dim();
@@ -527,7 +527,7 @@ fn spawns(map: &mut WorldMap, slope: &[f32]) {
     };
     let candidates: Vec<usize> = (0..dim * dim)
         .step_by(1)
-        .filter(|i| (i % dim) % 6 == 0 && (i / dim) % 6 == 0)
+        .filter(|i| (i % dim).is_multiple_of(6) && (i / dim).is_multiple_of(6))
         .collect();
     let mut kept: Vec<usize> = Vec::new();
     for relaxed in [false, true] {
@@ -590,7 +590,7 @@ fn sites(map: &mut WorldMap, slope: &[f32]) {
         .collect();
     let every = |keep: &dyn Fn(usize) -> bool| -> Vec<usize> {
         (0..dim * dim)
-            .filter(|i| (i % dim) % 3 == 0 && (i / dim) % 3 == 0)
+            .filter(|i| (i % dim).is_multiple_of(3) && (i / dim).is_multiple_of(3))
             .filter(|&i| map.water_kind[i] == 0 && map.height[i] >= sea() + 2.0 && keep(i))
             .collect()
     };

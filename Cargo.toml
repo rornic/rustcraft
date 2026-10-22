@@ -44,11 +44,11 @@ ochre-base.workspace = true
 ochre-terrain.workspace = true
 ochre-world.workspace = true
 ochre-gameplay.workspace = true
-bevy.workspace = true
 serde.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
+bevy.workspace = true
 criterion.workspace = true
 image.workspace = true
 

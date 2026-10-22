@@ -246,7 +246,7 @@ fn tile(
 }
 
 /// Rain wears the land: gullies and valleys on the slopes, silt in the flats.
-pub fn hydraulic(map: &mut WorldMap) {
+pub(crate) fn hydraulic(map: &mut WorldMap) {
     let dim = map.dim();
     let mut grid: Vec<f32> = map.height.iter().map(|h| h * HEIGHT_SCALE).collect();
     for round in 0..ROUNDS {
@@ -260,7 +260,7 @@ pub fn hydraulic(map: &mut WorldMap) {
 }
 
 /// Slumps ground steeper than rock holds, leaving scree slopes at the angle of rest.
-pub fn thermal(map: &mut WorldMap) {
+pub(crate) fn thermal(map: &mut WorldMap) {
     let dim = map.dim();
     let sea = WATER_LEVEL as f32;
     let cell = map.config.map_cell as f32;
@@ -340,7 +340,7 @@ const STREAM_K: f32 = 0.03;
 
 /// Cuts valleys along the lines water gathers, solving each pass for the new heights outward
 /// from the sea in one sweep, which holds at any rate of wear.
-pub fn stream_power(map: &mut WorldMap) {
+pub(crate) fn stream_power(map: &mut WorldMap) {
     let dim = map.dim();
     let sea = WATER_LEVEL as f32;
     let cell = map.config.map_cell as f32;

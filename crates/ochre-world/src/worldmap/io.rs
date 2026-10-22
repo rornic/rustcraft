@@ -79,14 +79,16 @@ impl Reader<'_> {
         }
         Ok(self
             .take(len * 4)?
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect())
     }
 }
 
 impl WorldMap {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.height.len() * 8 + 64);
         out.extend(MAGIC);
         out.extend(self.version.to_le_bytes());
@@ -121,7 +123,7 @@ impl WorldMap {
 
     /// Refuses a map made by another generator version, which would not match the terrain
     /// players' edits were made against.
-    pub fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> io::Result<Self> {
         if bytes.len() < 8 {
             return Err(bad("map file is truncated"));
         }
@@ -186,7 +188,7 @@ impl WorldMap {
 }
 
 /// Where the map for `seed` is cached under `dir`.
-pub fn cache_path(dir: &Path, seed: u32, config: WorldConfig) -> PathBuf {
+pub(crate) fn cache_path(dir: &Path, seed: u32, config: WorldConfig) -> PathBuf {
     dir.join(format!(
         "map-v{GENERATOR_VERSION}-seed{seed}-{}m-{}cell.rcmap",
         config.size, config.map_cell

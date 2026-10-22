@@ -9,7 +9,7 @@ use ochre_base::WATER_LEVEL;
 
 /// Square blocks of land that must drain through a cell for it to be a stream, which starts a
 /// block or two wide and widens from there.
-pub const RIVER_MIN_AREA: f32 = 400_000.0;
+pub(crate) const RIVER_MIN_AREA: f32 = 400_000.0;
 // No river is narrower, in blocks: one block wide doesn't fill with water reliably.
 const MIN_RIVER_WIDTH: f32 = 2.0;
 // Fewer cells than this in a river that never reaches water, and it is no river.
@@ -587,15 +587,10 @@ mod tests {
         let before = map.height.clone();
         run(&mut map, true);
         let mut rivers = 0;
-        for i in 0..map.height.len() {
+        for (i, (&was, &now)) in before.iter().zip(&map.height).enumerate() {
             if map.water_kind[i] == WaterCell::River as u8 {
                 rivers += 1;
-                assert!(
-                    map.height[i] <= before[i] + 1e-3,
-                    "river cell {i} raised from {} to {}",
-                    before[i],
-                    map.height[i]
-                );
+                assert!(now <= was + 1e-3, "river cell {i} raised from {was} to {now}");
             }
         }
         assert!(rivers > 50);

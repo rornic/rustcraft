@@ -108,7 +108,7 @@ impl RegionStore {
     }
 
     // Blocks until the region is computed, here or by another thread, so only call from a task.
-    pub fn get_region(&self, coord: RegionCoord) -> Arc<Region> {
+    pub(crate) fn get_region(&self, coord: RegionCoord) -> Arc<Region> {
         let slot = self.lru.write().unwrap().get_or_insert(coord);
         slot.get_or_init(|| Arc::new(compute_region(&*self.noise, coord)))
             .clone()

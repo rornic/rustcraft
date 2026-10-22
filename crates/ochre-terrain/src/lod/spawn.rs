@@ -28,7 +28,7 @@ pub(super) const LOD_TASKS_PER_THREAD: usize = 32;
 // Nodes known to have nothing to draw are added straight away without a task or an entity, up to this many a frame.
 pub(super) const LOD_EMPTY_NODES_PER_FRAME: usize = 8192;
 
-pub fn spawn_lods(
+pub(crate) fn spawn_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
     world: Res<World>,

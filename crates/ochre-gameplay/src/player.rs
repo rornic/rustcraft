@@ -34,9 +34,30 @@ use bevy::{
 };
 
 use crate::collision::{move_and_collide, Aabb};
-use ochre_base::{block::BlockType, WATER_LEVEL};
-use ochre_terrain::{chunk::ChunkCoordinate, world::World};
-use ochre_world::tonemap::scene_colour;
+use bevy::{
+    anti_alias::taa::TemporalAntiAliasing,
+    app::{App, Plugin, Update},
+    camera::{Camera3d, Hdr, PerspectiveProjection, Projection},
+    core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass},
+    ecs::{
+        schedule::IntoScheduleConfigs,
+        system::{Commands, SystemParam},
+    },
+    pbr::{MaterialPlugin, ScreenSpaceTransmission},
+    post_process::{bloom::Bloom, effect_stack::Vignette},
+    render::view::Msaa,
+};
+use ochre_base::{block::BlockType, WATER_LEVEL, WORLD_HEIGHT};
+use ochre_terrain::{
+    chunk::{ChunkCoordinate, CHUNK_SIZE},
+    horizon::update_horizon,
+    settings::RendererSettings,
+    world::World,
+};
+use ochre_world::{
+    sky::{atmosphere_camera, FOG_MAX_OPACITY},
+    tonemap::{dry_color_grading, scene_colour, TONEMAPPING},
+};
 
 /// The player's body, at its feet, with the camera at its eyes.
 #[derive(Component, Default)]
@@ -109,7 +130,7 @@ const MAX_STEP: f32 = 0.1;
 type PlayerCamera<'a> = (&'a ChildOf, &'a mut Transform);
 
 #[allow(clippy::type_complexity)]
-pub fn player_move(
+fn player_move(
     time: Res<Time>,
     world: Res<World>,
     mut player_query: Query<(&mut Transform, &mut Player)>,
@@ -267,7 +288,7 @@ fn walk(
     player.against_wall = (hit.x || hit.z) && across != Vec3::ZERO;
 }
 
-pub fn player_look(
+fn player_look(
     time: Res<Time>,
     mut player_query: Query<&mut Transform, With<Player>>,
     mut camera_query: Query<PlayerCamera, (With<Camera>, Without<Player>)>,
@@ -344,10 +365,7 @@ pub struct Murk(Handle<MurkMaterial>);
 
 /// The murk, hidden, to hang from the camera, and the handle `update_underwater_effects`
 /// shows it by.
-pub fn murk(
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<MurkMaterial>,
-) -> (impl Bundle, Murk) {
+fn murk(meshes: &mut Assets<Mesh>, materials: &mut Assets<MurkMaterial>) -> (impl Bundle, Murk) {
     let material = materials.add(MurkMaterial {
         color: LinearRgba::from(*UNDERWATER_COLOR).with_alpha(0.0),
     });
@@ -366,8 +384,8 @@ pub fn murk(
 // Snapshots whichever DistanceFog/DepthOfField/ClearColor were active right before the camera
 // entered water, and restores that exact snapshot on exit, instead of hardcoding "dry" defaults
 // that could drift out of sync with setup_scene's render-distance-derived fog settings.
-#[allow(clippy::type_complexity)]
-pub fn update_underwater_effects(
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+fn update_underwater_effects(
     world: Res<World>,
     murk: Res<Murk>,
     mut murk_materials: ResMut<Assets<MurkMaterial>>,
@@ -445,4 +463,108 @@ fn show_murk(murk: &Murk, materials: &mut Assets<MurkMaterial>, shown: bool) {
     if let Some(mut material) = materials.get_mut(&murk.0) {
         material.color.alpha = if shown { 1.0 } else { 0.0 };
     }
+}
+/// Walking and flying, looking round, and the view underwater.
+pub struct PlayerPlugin;
+
+impl Plugin for PlayerPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(MaterialPlugin::<MurkMaterial>::default())
+            .add_systems(
+                Update,
+                (
+                    player_move,
+                    player_look,
+                    update_horizon,
+                    update_underwater_effects,
+                )
+                    .chain(),
+            );
+    }
+}
+
+#[derive(SystemParam)]
+pub struct PlayerAssets<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    murk: ResMut<'w, Assets<MurkMaterial>>,
+}
+
+/// Spawns the player at `position` facing `look`, with a camera that sees out to the renderer's
+/// fog distance, and the murk the camera sees through underwater.
+pub fn spawn_player(
+    commands: &mut Commands,
+    assets: &mut PlayerAssets,
+    renderer: &RendererSettings,
+    position: Vec3,
+    look: Vec3,
+) {
+    let fog_distance = renderer.fog_distance();
+    let player = commands
+        .spawn((
+            Player::default(),
+            Transform::from_translation(position).looking_to(look, Vec3::Y),
+        ))
+        .id();
+    let camera = commands
+        .spawn((
+            Transform::from_xyz(0.0, EYE_HEIGHT, 0.0),
+            Camera3d::default(),
+            atmosphere_camera(),
+            Projection::Perspective(PerspectiveProjection {
+                // vertical, as Minecraft's field of view setting is
+                fov: 90f32.to_radians(),
+                far: fog_distance + WORLD_HEIGHT as f32,
+                ..default()
+            }),
+            // Depth of field, bloom and sunlight brighter than white all need HDR.
+            Camera::default(),
+            Hdr,
+            TONEMAPPING,
+            // Just a soft glow around the brightest sunlit faces and sky.
+            Bloom {
+                intensity: 0.05,
+                ..Bloom::NATURAL
+            },
+            // TAA for the thin faces and one-block steps that shimmer at a distance
+            Msaa::Off,
+            // the transmission copy of the scene is what fresh water refracts and reflects
+            (
+                DepthPrepass,
+                MotionVectorPrepass,
+                ScreenSpaceTransmission::default(),
+            ),
+            TemporalAntiAliasing::default(),
+            DistanceFog {
+                color: Color::NONE.with_alpha(FOG_MAX_OPACITY),
+                falloff: FogFalloff::Linear {
+                    // half fogged where the farthest LOD level starts, hiding the swap to it,
+                    // see `fog.wesl`
+                    start: renderer.lod_layout().last_level_start() * CHUNK_SIZE as f32,
+                    end: fog_distance,
+                },
+                ..default()
+            },
+        ))
+        .insert((
+            // In focus 8 blocks out, blurred ~1px at 16 blocks and ~2px from 150 on, so LOD seams soften. Gaussian is cheaper than Bokeh.
+            DepthOfField {
+                mode: DepthOfFieldMode::Gaussian,
+                focal_distance: 8.0,
+                aperture_f_stops: 2.2,
+                ..default()
+            },
+            dry_color_grading(),
+            // a light darkening toward the corners, which draws the eye in
+            Vignette {
+                intensity: 0.35,
+                radius: 0.9,
+                smoothness: 3.0,
+                ..default()
+            },
+            ChildOf(player),
+        ))
+        .id();
+    let (murk, handle) = murk(&mut assets.meshes, &mut assets.murk);
+    commands.spawn((murk, ChildOf(camera)));
+    commands.insert_resource(handle);
 }

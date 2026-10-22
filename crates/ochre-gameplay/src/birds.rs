@@ -178,7 +178,7 @@ fn gather_flock(
 }
 
 /// Where the flock heads at `t` seconds, wandering round `eye` far enough off to be seen whole.
-pub fn flock_heading(eye: Vec3, t: f32) -> Vec3 {
+pub(crate) fn flock_heading(eye: Vec3, t: f32) -> Vec3 {
     let a = t * 0.11 + 0.8 * ops::sin(t * 0.05);
     let radius = FLOCK_RANGE * (0.75 + 0.25 * ops::sin(t * 0.17));
     eye + Vec3::new(ops::cos(a) * radius, 0.0, ops::sin(a) * radius)
@@ -237,7 +237,7 @@ fn flock(
 }
 
 /// How hard bird `i` steers, in blocks a second squared, given every bird's place and velocity.
-pub fn steering(i: usize, birds: &[(Vec3, Vec3)], target: Vec3) -> Vec3 {
+pub(crate) fn steering(i: usize, birds: &[(Vec3, Vec3)], target: Vec3) -> Vec3 {
     let (here, velocity) = birds[i];
     let (mut heading, mut middle, mut away, mut count) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 0.0);
     for (j, &(there, their_velocity)) in birds.iter().enumerate() {

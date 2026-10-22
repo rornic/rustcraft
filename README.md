@@ -3,7 +3,7 @@
 Another Minecraft clone, originally written using [specs](https://github.com/amethyst/specs) and [glium](https://github.com/glium/glium) but recently migrated to Bevy.
 
 ```
-cargo run --release
+cargo run --release --example sandbox
 ```
 
 ![Image of rustcraft](images/readme.jpg)
@@ -19,9 +19,9 @@ cargo run --release
 Licensed under either of
 
 - Apache License, Version 2.0
-  ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+  ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
 - MIT license
-  ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+  ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
 

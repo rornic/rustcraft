@@ -1,5 +1,6 @@
 use bevy::{
     asset::{Asset, RenderAssetUsages},
+    ecs::system::SystemParam,
     image::{
         CompressedImageFormats, ImageFilterMode, ImageSampler, ImageSamplerDescriptor, ImageType,
     },
@@ -17,6 +18,7 @@ use bevy::{
 };
 
 use crate::chunk::CHUNK_SIZE;
+use crate::fade::FULLY_VISIBLE;
 use crate::generate::generator::{INNER_LEAVES_BAND, INNER_LEAVES_REACH};
 use crate::lod::{LodLayout, SOLID_WATER_LEVEL};
 use crate::settings::DebugSettings;
@@ -116,7 +118,7 @@ pub struct ChunkMaterial {
     // the dither window drawn, see `fade::FadeMaterials`
     #[uniform(3)]
     pub fade: Vec4,
-    // the clouds, to shade the land under them, see `clouds::CloudLayer`
+    // the clouds, to shade the land under them, see `CloudLayer`
     #[texture(4)]
     #[sampler(5)]
     pub cloud_pattern: Handle<Image>,
@@ -217,6 +219,74 @@ pub struct TerrainMaterials {
     pub spray: Handle<SprayMaterial>,
 }
 
+impl TerrainMaterials {
+    pub fn new(
+        layout: LodLayout,
+        debug: DebugSettings,
+        inputs: &ShaderInputs,
+        assets: &mut TerrainAssets,
+    ) -> Self {
+        let clouds = &inputs.clouds;
+        let chunk = assets.chunk.add(ChunkMaterial {
+            color: LinearRgba::WHITE,
+            texture: inputs.atlas.clone(),
+            fade: FULLY_VISIBLE,
+            cloud_pattern: clouds.pattern.clone(),
+            cloud_layer: clouds.layer,
+            curvature: inputs.curvature.clone(),
+            debug,
+        });
+        let water = WaterMaterial {
+            color: LinearRgba::rgb(0.0, 0.85, 0.85),
+            texture: inputs.atlas.clone(),
+            fade: FULLY_VISIBLE,
+            cloud_pattern: clouds.pattern.clone(),
+            cloud_layer: clouds.layer,
+            cloud_target: clouds.target.clone(),
+            see_through: see_through_reach(layout),
+            curvature: inputs.curvature.clone(),
+            solid: false,
+        };
+        Self {
+            chunk,
+            solid_water: assets.water.add(WaterMaterial {
+                solid: true,
+                ..water.clone()
+            }),
+            water: assets.water.add(water),
+            spray: assets.spray.add(SprayMaterial {
+                curvature: inputs.curvature.clone(),
+            }),
+        }
+    }
+}
+
+/// The clouds' textures, shared by the cloud, water and land shaders, see `cloud_bindings.wesl`.
+#[derive(Resource, Clone, Default)]
+pub struct CloudLayer {
+    /// How much cloud is over each cell, 0 where clear to 1 where thickest.
+    pub pattern: Handle<Image>,
+    /// The middle of the layer's height, the pattern's width in blocks, and the wind.
+    pub layer: Vec4,
+    /// The clouds as seen, unlit, at a fraction of the screen's resolution, see `CloudMarch`.
+    pub target: Handle<Image>,
+}
+
+/// What the terrain's shaders sample that other systems own. The default is blank, for a headless run.
+#[derive(Clone, Default)]
+pub struct ShaderInputs {
+    pub atlas: Option<Handle<Image>>,
+    pub clouds: CloudLayer,
+    pub curvature: Handle<ShaderBuffer>,
+}
+
+#[derive(SystemParam)]
+pub struct TerrainAssets<'w> {
+    pub chunk: ResMut<'w, Assets<ChunkMaterial>>,
+    pub water: ResMut<'w, Assets<WaterMaterial>>,
+    pub spray: ResMut<'w, Assets<SprayMaterial>>,
+}
+
 /// White water thrown up where fresh water runs steeply or falls, as particles the shader moves.
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct SprayMaterial {
@@ -269,7 +339,7 @@ pub struct WaterMaterial {
     // the dither window drawn, see `fade::FadeMaterials`
     #[uniform(3)]
     pub fade: Vec4,
-    // the clouds, for water to reflect and shade its glint by, see `clouds::CloudLayer`
+    // the clouds, for water to reflect and shade its glint by, see `CloudLayer`
     #[texture(4)]
     #[sampler(5)]
     pub cloud_pattern: Handle<Image>,
@@ -282,7 +352,7 @@ pub struct WaterMaterial {
     // what the land bends around, see `curvature::Curvature`
     #[storage(8, read_only)]
     pub curvature: Handle<ShaderBuffer>,
-    // the clouds as seen, for reflections of what's on screen, see `clouds::CloudLayer::target`
+    // the clouds as seen, for reflections of what's on screen, see `CloudLayer::target`
     #[texture(9)]
     #[sampler(10)]
     pub cloud_target: Handle<Image>,
