@@ -13,10 +13,11 @@ import bevy_pbr::prepass::utils as prepass_utils;
 import super::fog::fogged;
 import super::dither::dither_threshold;
 import super::sky::sky_colour;
-import super::lighting::{cloud_light, daylight, moon_radiance, sun_radiance};
+import super::lighting::{daylight, moon_radiance, sun_radiance};
 import super::sky::{MOON_LIGHT, SUN_LIGHT};
 import super::stars::reflected_celestial;
-import super::cloud_shadow::{cloud_shadow, cloud_pattern, cloud_sampler, cloud_layer};
+import super::cloud_shadow::cloud_shadow;
+import super::clouds::{clouds, lit_clouds};
 import super::curvature::{curved, uncurved};
 import super::hash::hash2;
 
@@ -27,6 +28,9 @@ import super::hash::hash2;
 @group(constants::MATERIAL_BIND_GROUP) @binding(3) var<uniform> material_fade: vec4<f32>;
 // between these distances, x to y, see-through water turns opaque, see `WaterMaterial`
 @group(constants::MATERIAL_BIND_GROUP) @binding(7) var<uniform> see_through: vec4<f32>;
+// the clouds as seen, unlit, see `clouds::CloudLayer::target`
+@group(constants::MATERIAL_BIND_GROUP) @binding(9) var cloud_target: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(10) var cloud_target_sampler: sampler;
 
 
 const TROPICAL_TINT: vec3<f32> = vec3<f32>(0.0, 0.85, 0.9);
@@ -122,9 +126,9 @@ const REFLECT_STRAIGHT_DOWN: f32 = 0.02;
 // How bright the sun's glint is, to how bright it would be off a perfect mirror.
 const GLINT: f32 = 0.6;
 
-// Clouds as reflected: their colour, lit by `cloud_light` as the clouds are, and how far out they
-// fade, to the fog's end, as the clouds themselves do.
-const CLOUD_COLOR: vec3<f32> = vec3<f32>(0.95, 0.95, 0.92);
+// Steps and octaves for reflecting off-screen clouds: few, as waves blur them and every water pixel marches.
+const REFLECTED_CLOUD_STEPS: i32 = 1;
+const REFLECTED_CLOUD_OCTAVES: i32 = 1;
 
 // Water's colours are picked as they should look on screen, so they're turned back into
 // the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
@@ -319,28 +323,31 @@ fn ripples(xz: vec2<f32>, time: f32, footprint: f32) -> vec3<f32> {
     return vec3<f32>(slope, lost);
 }
 
-// The sky reflected along `direction` from `origin`, with the clouds in it where it rises to them.
-fn reflected_sky(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
-    // a reflection pointing down would be of the water itself, so it's kept to the sky
-    let up = normalize(vec3<f32>(direction.x, max(direction.y, 0.02), direction.z));
+// A reflection pointing down would be of the water itself, so it's kept to the sky.
+fn skyward(direction: vec3<f32>) -> vec3<f32> {
+    return normalize(vec3<f32>(direction.x, max(direction.y, 0.02), direction.z));
+}
+
+// The sky and stars reflected along `direction`.
+fn reflected_sky(direction: vec3<f32>) -> vec3<f32> {
+    let up = skyward(direction);
     let night = reflected_celestial(up);
-    let sky = sky_colour(up) * (1.0 - night.a) + night.rgb;
-    let layer = cloud_layer.x;
-    if direction.y <= 0.0 || origin.y >= layer || cloud_layer.y <= 0.0 {
-        return sky;
+    return sky_colour(up) * (1.0 - night.a) + night.rgb;
+}
+
+// `sky` with clouds over it: read from the cloud target where that way is on screen, marched cheaply where not.
+fn under_clouds(sky: vec3<f32>, origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    let up = skyward(direction);
+    let clip = view_bindings::view.unjittered_clip_from_world * vec4<f32>(view_bindings::view.world_position.xyz + up, 1.0);
+    let ndc = clip.xy / clip.w;
+    var cloud: vec4<f32>;
+    if clip.w > 0.0 && all(abs(ndc) < vec2<f32>(1.0)) {
+        let marched = textureSampleLevel(cloud_target, cloud_target_sampler, vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5), 0.0);
+        cloud = lit_clouds(marched, origin, up, 1.0);
+    } else {
+        cloud = clouds(origin, up, REFLECTED_CLOUD_STEPS, REFLECTED_CLOUD_OCTAVES);
     }
-    let hit = origin.xz + direction.xz * ((layer - origin.y) / direction.y);
-    // `globals.time` wraps when the wind has carried the clouds a whole number of patterns
-    let drift = cloud_layer.zw * view_bindings::globals.time;
-    let thickness = textureSampleLevel(cloud_pattern, cloud_sampler, (hit - drift) / cloud_layer.y, 0.0).r;
-    let away = distance(hit, view_bindings::view.world_position.xz);
-    let end = max(view_bindings::fog.be.y, 1.0);
-    let cover = smoothstep(0.1, 0.5, thickness) * (1.0 - smoothstep(0.4 * end, end, away));
-    // seen from below, steeply, or from the side, low down
-    let side = normalize(vec3<f32>(-direction.x, 0.0, -direction.z) + vec3<f32>(0.0, 0.0, 1e-4));
-    let facing = normalize(mix(side, vec3<f32>(0.0, -1.0, 0.0), direction.y));
-    let lit = cloud_light(facing, vec3<f32>(hit.x, layer, hit.y));
-    return mix(sky, CLOUD_COLOR * lit, cover);
+    return sky * (1.0 - cloud.a) + cloud.rgb;
 }
 
 // Where reflections are looked up across the spread of slopes waves too fine to draw would
@@ -358,6 +365,7 @@ const REFLECTION_SPREAD: array<vec2<f32>, 8> = array<vec2<f32>, 8>(
 fn rough_reflection(origin: vec3<f32>, slope: vec2<f32>, spread: f32, to_eye: vec3<f32>) -> vec4<f32> {
     var light = vec3<f32>(0.0);
     var reflected = 0.0;
+    var toward = vec3<f32>(0.0);
     for (var i = 0; i < REFLECTION_TAPS; i++) {
         let tilted = slope + REFLECTION_SPREAD[i] * spread;
         let normal = normalize(vec3<f32>(-tilted.x, 1.0, -tilted.y));
@@ -367,11 +375,15 @@ fn rough_reflection(origin: vec3<f32>, slope: vec2<f32>, spread: f32, to_eye: ve
             continue;
         }
         let share = fresnel(facing);
-        light += reflected_sky(origin, reflect(-to_eye, normal)) * share;
+        let direction = reflect(-to_eye, normal);
+        light += reflected_sky(direction) * share;
+        toward += direction * share;
         reflected += share;
     }
     let mean = reflected / f32(REFLECTION_TAPS);
-    return vec4<f32>(light / max(reflected, 1e-4), mean);
+    // the clouds once, along the taps' mean, as marching them for each would cost too much
+    let sky = under_clouds(light / max(reflected, 1e-4), origin, normalize(toward + vec3<f32>(0.0, 1e-4, 0.0)));
+    return vec4<f32>(sky, mean);
 }
 
 // How much of the light arriving at an angle with cosine `cos_theta` off the normal water
@@ -567,12 +579,16 @@ fn fresh_water(world_position: vec3<f32>, normal: vec3<f32>, to_eye: vec3<f32>, 
     let reflect_dir = reflect(-to_eye, surface);
     // a calm lake mirrors more than the plain fresnel says, enough to show the trees from above
     let share = min(fresnel(dot(surface, to_eye)) * 1.6 + 0.03, 0.75);
-    let sky = reflected_sky(uncurved(world_position), reflect_dir);
     var world = vec4<f32>(0.0);
     if dist < REFLECTION_NEAR && share > 0.06 {
         world = screen_reflection(world_position, reflect_dir, frag_coord);
     }
-    let reflection = mix(sky, world.rgb, world.a);
+    // the sky and clouds only where the land's reflection leaves them showing
+    var reflection = world.rgb;
+    if world.a < 1.0 {
+        let sky = under_clouds(reflected_sky(reflect_dir), uncurved(world_position), reflect_dir);
+        reflection = mix(sky, world.rgb, world.a);
+    }
     let sun = glint(surface, to_eye, variance, world_position, frag_coord.xy) * cloud_shadow(uncurved(world_position));
     return body * (1.0 - share) + reflection * share + sun;
 }

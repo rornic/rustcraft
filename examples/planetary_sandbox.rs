@@ -3,9 +3,11 @@ use ochre_world::ambience::AmbiencePlugin;
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
+use bevy::light::SimulationLightSystems;
 use bevy::pbr::ScreenSpaceTransmission;
 use bevy::post_process::bloom::Bloom;
 use bevy::post_process::dof::{DepthOfField, DepthOfFieldMode};
+use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 use ochre_gameplay::birds::BirdPlugin;
 use ochre_gameplay::critters::CritterPlugin;
@@ -26,7 +28,8 @@ use ochre_terrain::{
 };
 use ochre_world::clouds::{spawn_clouds, CloudLayer, CloudPlugin};
 use ochre_world::sky::{
-    atmosphere_camera, match_sky_horizon, moon, move_sky, spawn_atmosphere, sun, TimeOfDay,
+    aim_sun_light, aim_sun_shadows, atmosphere_camera, match_sky_horizon, moon, move_sky,
+    spawn_atmosphere, sun, TimeOfDay,
     FOG_MAX_OPACITY, START_TIME,
 };
 use ochre_world::sky_dome::{NightSkyPlugin, SunGlarePlugin};
@@ -119,6 +122,13 @@ fn setup_scene(
             dry_color_grading(),
         ))
         .id();
+    // a light darkening toward the corners, which draws the eye in
+    commands.entity(camera).insert(Vignette {
+        intensity: 0.35,
+        radius: 0.9,
+        smoothness: 3.0,
+        ..default()
+    });
     commands.entity(player).add_children(&[camera]);
     let (murk, murk_handle) = murk(&mut meshes, &mut murk_materials);
     commands.spawn((murk, ChildOf(camera)));
@@ -143,6 +153,7 @@ fn setup_scene(
         fade: FULLY_VISIBLE,
         cloud_pattern: clouds.pattern.clone(),
         cloud_layer: clouds.layer,
+        cloud_target: clouds.target.clone(),
         see_through: see_through_reach(layout),
         curvature: curvature.buffer.clone(),
         solid: false,
@@ -248,6 +259,15 @@ fn main() {
         .add_systems(
             PostUpdate,
             match_sky_horizon.after(bevy::transform::TransformSystems::Propagate),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                aim_sun_shadows
+                    .after(bevy::transform::TransformSystems::Propagate)
+                    .before(SimulationLightSystems::UpdateDirectionalLightCascades),
+                aim_sun_light.after(SimulationLightSystems::UpdateDirectionalLightCascades),
+            ),
         )
         .add_systems(
             Update,
