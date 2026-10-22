@@ -4108,6 +4108,64 @@ dependencies = [
 ]
 
 [[package]]
+name = "ochre-base"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
+name = "ochre-engine"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "criterion",
+ "image",
+ "ochre-base",
+ "ochre-gameplay",
+ "ochre-terrain",
+ "ochre-world",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "ochre-gameplay"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "ochre-base",
+ "ochre-terrain",
+ "ochre-world",
+ "rand 0.10.3",
+]
+
+[[package]]
+name = "ochre-terrain"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "image",
+ "ochre-base",
+ "ochre-world",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "ochre-world"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "noise",
+ "ochre-base",
+ "ochre-terrain",
+ "rand 0.10.3",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "offset-allocator"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4682,20 +4740,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rustcraft"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "criterion",
- "image",
- "noise",
- "rand 0.10.3",
- "serde",
- "toml",
- "tracing",
 ]
 
 [[package]]

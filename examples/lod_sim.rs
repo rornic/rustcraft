@@ -10,21 +10,19 @@ use std::time::{Duration, Instant};
 use bevy::math::I64Vec3;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
-use rustcraft::chunks::chunk_loader::{
-    ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh,
-};
-use rustcraft::chunks::fade::FULLY_VISIBLE;
-use rustcraft::chunks::generate::columns::COARSE_CELL;
-use rustcraft::chunks::generate::terrain_source::TerrainSource;
-use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::chunks::group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk};
-use rustcraft::chunks::lod::{LodKey, LodLayout, LodLoader, LodNode};
-use rustcraft::chunks::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
-use rustcraft::chunks::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
-use rustcraft::horizon::render_distance_at;
-use rustcraft::settings::{DebugSettings, RendererSettings, Settings};
-use rustcraft::worldmap::WorldConfig;
+use ochre_base::terrain_source::TerrainSource;
+use ochre_base::WATER_LEVEL;
+use ochre_engine::settings::{DebugSettings, RendererSettings, Settings};
+use ochre_terrain::chunk::{ChunkCoordinate, CHUNK_SIZE};
+use ochre_terrain::chunk_loader::{ChunkLoader, DirtyChunk, GenerateChunkData, GenerateChunkMesh};
+use ochre_terrain::fade::FULLY_VISIBLE;
+use ochre_terrain::generate::columns::COARSE_CELL;
+use ochre_terrain::group::{BuiltGroup, ChunkGroup, GroupedChunk, MeshedChunk};
+use ochre_terrain::horizon::render_distance_at;
+use ochre_terrain::lod::{LodKey, LodLayout, LodLoader, LodNode};
+use ochre_terrain::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
+use ochre_terrain::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
+use ochre_world::worldmap::WorldConfig;
 
 #[derive(Component)]
 struct SimCamera;
@@ -40,8 +38,7 @@ fn setup(
 ) {
     let world_config = renderer.1;
     let renderer = &renderer.0;
-    let world =
-        rustcraft::world::World::new(renderer.lod_layout().region_reach() as u32, world_config);
+    let world = ochre_world::load_world(renderer.lod_layout().region_reach() as u32, world_config);
     let spawn = world.spawn();
     let height = world.height;
     commands.insert_resource(world);
@@ -120,7 +117,7 @@ fn report(app: &mut App, layout: LodLayout, pos: Vec3) -> Report {
         .map(|(g, v)| (g.key, *v != Visibility::Hidden))
         .collect();
     let chunk_vis = |c: &ChunkCoordinate| group_vis.get(&LodKey::containing(*c, 1)).copied();
-    let game_world = world.resource::<rustcraft::world::World>();
+    let game_world = world.resource::<ochre_terrain::world::World>();
     // sampled straight from the terrain, so reporting never computes regions for the game
     let noise = game_world.region_store.terrain();
     let anchor = ChunkCoordinate::containing(pos.floor().as_i64vec3());
@@ -249,7 +246,7 @@ fn coarse_ground(
 
 // The surface chunks within `radius` chunks of `pos`, found once so checking them is cheap.
 fn surface_chunks(app: &App, pos: Vec3, radius: i64) -> Vec<ChunkCoordinate> {
-    let game_world = app.world().resource::<rustcraft::world::World>();
+    let game_world = app.world().resource::<ochre_terrain::world::World>();
     let noise = game_world.region_store.terrain();
     let anchor = ChunkCoordinate::containing(pos.floor().as_i64vec3());
     let size = CHUNK_SIZE as i64;

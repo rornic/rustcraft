@@ -72,7 +72,7 @@ the lee of ranges.
 
 ## Phase 5a: the game runs on the world map
 
-`World::new` loads or generates the map (cached under `worlds/`, or `RC_WORLD_DIR`), `WorldTerrain` is the
+`ochre_world::load_world` loads or generates the map (cached under `worlds/`, or `OCHRE_WORLD_DIR`), `WorldTerrain` is the
 `TerrainSource`, and the layered-noise generator, its biome shaping and the `Fractal` helper are gone. The
 terrain differs (new continents), so LOD vertex counts and spawn-area timings are no longer comparable
 with earlier rows, only the per-sample and per-chunk numbers are.

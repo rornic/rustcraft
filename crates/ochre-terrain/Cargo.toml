@@ -1,0 +1,20 @@
+[package]
+name = "ochre-terrain"
+description = "Voxel chunk storage, generation, meshing and octree LODs for the Ochre voxel engine"
+publish = false
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ochre-base.workspace = true
+bevy.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# the terrain tests build on real world maps; only types from ochre-base cross back
+ochre-world = { workspace = true, features = ["test-support"] }
+image.workspace = true

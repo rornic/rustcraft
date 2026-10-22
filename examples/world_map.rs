@@ -15,11 +15,11 @@ use std::env;
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
 use bevy::math::DVec3;
 
-use rustcraft::chunks::generate::biome::{grass_colour, leaf_colour, Biomes, Climate};
-use rustcraft::chunks::generate::generator::FREEZE_TEMPERATURE;
-use rustcraft::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
-use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::worldmap::{WorldConfig, WorldTerrain};
+use ochre_base::biome::{grass_colour, leaf_colour, Biomes, Climate};
+use ochre_base::terrain_source::{TerrainSample, TerrainSource, WaterKind};
+use ochre_base::WATER_LEVEL;
+use ochre_terrain::generate::generator::FREEZE_TEMPERATURE;
+use ochre_world::worldmap::{WorldConfig, WorldTerrain};
 
 struct Args {
     seed: u32,
@@ -184,8 +184,8 @@ fn render(samples: &[(TerrainSample, Climate)], biomes: &Biomes, args: &Args) ->
 }
 
 // Lakes and rivers over the height map, rivers drawn a pixel wide at least so they show at any scale.
-fn overlay_water(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMap, args: &Args) {
-    use rustcraft::worldmap::WaterCell;
+fn overlay_water(image: &mut image::RgbImage, map: &ochre_world::worldmap::WorldMap, args: &Args) {
+    use ochre_world::worldmap::WaterCell;
     let half = args.pixels as f64 / 2.0;
     for cz in 0..map.dim() {
         for cx in 0..map.dim() {
@@ -206,7 +206,7 @@ fn overlay_water(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMa
             let (from, to) = match map.down[i] {
                 255 => (to_pixel(cx, cz), to_pixel(cx, cz)),
                 d => {
-                    let (dx, dz) = rustcraft::worldmap::NEIGHBOURS[d as usize];
+                    let (dx, dz) = ochre_world::worldmap::NEIGHBOURS[d as usize];
                     (
                         to_pixel(cx, cz),
                         to_pixel((cx as i64 + dx) as usize, (cz as i64 + dz) as usize),
@@ -249,8 +249,8 @@ fn overlay_water(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMa
 
 // Marks each feature: passes white, fords cyan, bridge sites orange, spawn regions green rings,
 // iron brown, coal black, clay terracotta, salt pink, caves blue, hotspots red.
-fn draw_labels(image: &mut image::RgbImage, map: &rustcraft::worldmap::WorldMap, args: &Args) {
-    use rustcraft::worldmap::FeatureKind::*;
+fn draw_labels(image: &mut image::RgbImage, map: &ochre_world::worldmap::WorldMap, args: &Args) {
+    use ochre_world::worldmap::FeatureKind::*;
     let half = args.pixels as f64 / 2.0;
     // marks stay a readable size however far the map is zoomed out
     let size = (3.0f64).max(120.0 / args.scale);
@@ -395,7 +395,7 @@ fn main() {
         map_cell: args.cell,
     };
     let start = std::time::Instant::now();
-    let map = std::sync::Arc::new(rustcraft::worldmap::generate(args.seed, config));
+    let map = std::sync::Arc::new(ochre_world::worldmap::generate(args.seed, config));
     println!("generated the world map in {:.1?}", start.elapsed());
     let world_map = Some(map.clone());
     let noise: Box<dyn TerrainSource> = Box::new(WorldTerrain::new(map));
@@ -426,11 +426,11 @@ fn main() {
         let path = format!("{stem}-labels.png");
         labels.save(&path).expect("failed to save image");
         println!("wrote {path}");
-        for kind in rustcraft::worldmap::FeatureKind::ALL {
+        for kind in ochre_world::worldmap::FeatureKind::ALL {
             let count = map.features.iter().filter(|f| f.kind == kind).count();
             println!("{:>12}: {count}", kind.name());
         }
-        let problems = rustcraft::worldmap::gameplay::validate(map);
+        let problems = ochre_world::worldmap::gameplay::validate(map);
         println!(
             "validation: {}",
             if problems.is_empty() {

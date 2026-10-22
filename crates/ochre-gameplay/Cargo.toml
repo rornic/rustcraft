@@ -1,0 +1,16 @@
+[package]
+name = "ochre-gameplay"
+description = "Player movement, collision, wildlife and debug overlay for the Ochre voxel engine"
+publish = false
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ochre-base.workspace = true
+ochre-terrain.workspace = true
+ochre-world.workspace = true
+bevy.workspace = true
+rand.workspace = true

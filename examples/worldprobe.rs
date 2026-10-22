@@ -13,14 +13,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::math::{I64Vec3, U16Vec3};
-use rustcraft::block::BlockType;
-use rustcraft::chunks::chunk::{ChunkCoordinate, ChunkData};
-use rustcraft::chunks::generate::generator::{generate_chunk_with, ChunkPasses};
+use ochre_base::block::BlockType;
+use ochre_terrain::chunk::{ChunkCoordinate, ChunkData};
+use ochre_terrain::generate::generator::{generate_chunk_with, ChunkPasses};
 
 use image::{Rgb, RgbImage};
-use rustcraft::chunks::generate::region_store::RegionStore;
-use rustcraft::chunks::generate::terrain_source::{TerrainSource, WaterKind};
-use rustcraft::worldmap::{WorldConfig, WorldMap, WorldTerrain};
+use ochre_base::terrain_source::{TerrainSource, WaterKind};
+use ochre_terrain::generate::region_store::RegionStore;
+use ochre_world::worldmap::{WorldConfig, WorldMap, WorldTerrain};
 
 fn kind_char(kind: WaterKind) -> char {
     match kind {
@@ -95,7 +95,11 @@ impl Blocks {
         let key = (x.div_euclid(16), y.div_euclid(16), z.div_euclid(16));
         let (regions, passes) = (self.regions.clone(), self.passes);
         let chunk = self.chunks.entry(key).or_insert_with(|| {
-            generate_chunk_with(regions, ChunkCoordinate(I64Vec3::new(key.0, key.1, key.2)), passes)
+            generate_chunk_with(
+                regions,
+                ChunkCoordinate(I64Vec3::new(key.0, key.1, key.2)),
+                passes,
+            )
         });
         chunk.get_block_at(U16Vec3::new(
             x.rem_euclid(16) as u16,
@@ -113,7 +117,13 @@ impl Blocks {
     }
 }
 
-fn describe(terrain: &WorldTerrain, map: &WorldMap, regions: &RegionStore, x: i64, z: i64) -> String {
+fn describe(
+    terrain: &WorldTerrain,
+    map: &WorldMap,
+    regions: &RegionStore,
+    x: i64,
+    z: i64,
+) -> String {
     let mut sampler = regions.sampler();
     let p = terrain.sample(x as f64, z as f64);
     format!(
@@ -138,7 +148,10 @@ fn main() {
     }
     let seed: u32 = args[0].parse().unwrap();
     let (x, z): (i64, i64) = (args[2].parse().unwrap(), args[3].parse().unwrap());
-    let map = Arc::new(rustcraft::worldmap::generate(seed, WorldConfig::default()));
+    let map = Arc::new(ochre_world::worldmap::generate(
+        seed,
+        WorldConfig::default(),
+    ));
     let terrain = Arc::new(WorldTerrain::new(map.clone()));
     let regions = Arc::new(RegionStore::new(terrain.clone()));
     match args[1].as_str() {
@@ -253,9 +266,27 @@ fn main() {
             let mut sampler = regions.sampler();
             let mut all = Blocks::new(regions.clone(), ChunkPasses::ALL);
             let off = [
-                ("cliffs", ChunkPasses { cliffs: false, ..ChunkPasses::ALL }),
-                ("trees", ChunkPasses { trees: false, ..ChunkPasses::ALL }),
-                ("flora", ChunkPasses { flora: false, ..ChunkPasses::ALL }),
+                (
+                    "cliffs",
+                    ChunkPasses {
+                        cliffs: false,
+                        ..ChunkPasses::ALL
+                    },
+                ),
+                (
+                    "trees",
+                    ChunkPasses {
+                        trees: false,
+                        ..ChunkPasses::ALL
+                    },
+                ),
+                (
+                    "flora",
+                    ChunkPasses {
+                        flora: false,
+                        ..ChunkPasses::ALL
+                    },
+                ),
             ];
             for (name, passes) in off {
                 let mut without = Blocks::new(regions.clone(), passes);
@@ -270,7 +301,11 @@ fn main() {
                             if a != b {
                                 changed += 1;
                                 if !column && examples.len() < 5 {
-                                    examples.push(format!("({px},{y},{pz}) {} -> {}", letter(b), letter(a)));
+                                    examples.push(format!(
+                                        "({px},{y},{pz}) {} -> {}",
+                                        letter(b),
+                                        letter(a)
+                                    ));
                                 }
                                 column = true;
                             }
@@ -278,7 +313,10 @@ fn main() {
                         columns += column as u64;
                     }
                 }
-                println!("{name}: {changed} blocks in {columns} columns; e.g. {}", examples.join("  "));
+                println!(
+                    "{name}: {changed} blocks in {columns} columns; e.g. {}",
+                    examples.join("  ")
+                );
             }
         }
         other => {

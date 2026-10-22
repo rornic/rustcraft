@@ -15,13 +15,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bevy::color::{ColorToComponents, LinearRgba, Srgba};
-use rustcraft::block::BlockType;
-use rustcraft::chunks::generate::biome::grass_colour;
-use rustcraft::chunks::generate::generator::surface_block;
-use rustcraft::chunks::generate::region_store::RegionStore;
-use rustcraft::chunks::generate::terrain_source::{TerrainSample, TerrainSource, WaterKind};
-use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::worldmap::{FeatureKind, WaterCell, WorldConfig, WorldMap, WorldTerrain, NEIGHBOURS};
+use ochre_base::biome::grass_colour;
+use ochre_base::block::BlockType;
+use ochre_base::terrain_source::{TerrainSample, TerrainSource, WaterKind};
+use ochre_base::WATER_LEVEL;
+use ochre_terrain::generate::generator::surface_block;
+use ochre_terrain::generate::region_store::RegionStore;
+use ochre_world::worldmap::{
+    FeatureKind, WaterCell, WorldConfig, WorldMap, WorldTerrain, NEIGHBOURS,
+};
 
 struct World {
     map: Arc<WorldMap>,
@@ -43,11 +45,18 @@ impl Server {
             }
         }
         let start = Instant::now();
-        let map = Arc::new(rustcraft::worldmap::generate(seed, WorldConfig::default()));
+        let map = Arc::new(ochre_world::worldmap::generate(
+            seed,
+            WorldConfig::default(),
+        ));
         let terrain = Arc::new(WorldTerrain::new(map.clone()));
         let regions = RegionStore::new(terrain.clone()).with_resident_cap(512);
         println!("seed {seed} generated in {:.1?}", start.elapsed());
-        let world = Arc::new(World { map, terrain, regions });
+        let world = Arc::new(World {
+            map,
+            terrain,
+            regions,
+        });
         *slot = Some((seed, world.clone()));
         world
     }
@@ -128,7 +137,9 @@ fn block_colour(b: BlockType) -> Option<Rgb> {
         Air => return None,
         Stone => [128.0, 128.0, 128.0],
         CompactedStone => [90.0, 90.0, 95.0],
-        Grass | TallGrass | Fern | ShortGrass | SeedGrass | Poppy | Dandelion => [90.0, 160.0, 60.0],
+        Grass | TallGrass | Fern | ShortGrass | SeedGrass | Poppy | Dandelion => {
+            [90.0, 160.0, 60.0]
+        }
         Sand => [222.0, 204.0, 140.0],
         Sandstone => [200.0, 170.0, 110.0],
         Water => [40.0, 90.0, 190.0],
@@ -192,7 +203,9 @@ fn fill(w: &World, v: &View, grid: &mut [Col], gw: usize) {
                     }
                     col.x = x;
                     col.z = z;
-                    col.s = w.terrain.sample_for_cell(x, z, if exact { 1.0 } else { v.scale });
+                    col.s = w
+                        .terrain
+                        .sample_for_cell(x, z, if exact { 1.0 } else { v.scale });
                     if need_temp || need_block {
                         col.temp = w.terrain.temperature(x, z);
                     }
@@ -200,13 +213,24 @@ fn fill(w: &World, v: &View, grid: &mut [Col], gw: usize) {
                         let (bx, bz) = (x as i64, z as i64);
                         let (ground, water_top, gradient) = if exact {
                             let (gx, gz) = hs.gradient(bx, bz);
-                            (hs.ground_top(bx, bz), hs.water_top(bx, bz), gx.abs() + gz.abs())
+                            (
+                                hs.ground_top(bx, bz),
+                                hs.water_top(bx, bz),
+                                gx.abs() + gz.abs(),
+                            )
                         } else {
-                            let h = |dx: i64, dz: i64| w.terrain.sample((bx + dx) as f64, (bz + dz) as f64).height;
-                            let g = (h(6, 0) - h(-6, 0)).abs() / 6.0 + (h(0, 6) - h(0, -6)).abs() / 6.0;
+                            let h = |dx: i64, dz: i64| {
+                                w.terrain.sample((bx + dx) as f64, (bz + dz) as f64).height
+                            };
+                            let g =
+                                (h(6, 0) - h(-6, 0)).abs() / 6.0 + (h(0, 6) - h(0, -6)).abs() / 6.0;
                             let s = col.s;
                             let top = s.height.round() as i64;
-                            let water = if s.water_surface > 0.0 { s.water_surface.round() as i64 } else { WATER_LEVEL };
+                            let water = if s.water_surface > 0.0 {
+                                s.water_surface.round() as i64
+                            } else {
+                                WATER_LEVEL
+                            };
                             (top, water, g)
                         };
                         col.block = surface_block(
@@ -243,10 +267,21 @@ fn layer_pixel(w: &World, v: &View, name: &str, c: &Col) -> Option<(Rgb, f32)> {
             (colour, 1.0)
         }
         "biomes" => {
-            let colour = if above < 0.0 { [20.0, 40.0, 90.0] } else { biome_colour(w.terrain.biomes().name(c.s.biome)) };
+            let colour = if above < 0.0 {
+                [20.0, 40.0, 90.0]
+            } else {
+                biome_colour(w.terrain.biomes().name(c.s.biome))
+            };
             (colour, 1.0)
         }
-        "trees" => (lerp([30.0, 30.0, 30.0], [20.0, 200.0, 40.0], (c.s.trees * 1.6) as f32), 1.0),
+        "trees" => (
+            lerp(
+                [30.0, 30.0, 30.0],
+                [20.0, 200.0, 40.0],
+                (c.s.trees * 1.6) as f32,
+            ),
+            1.0,
+        ),
         "water" => {
             let depth = (c.s.water_surface - c.s.height as f32).clamp(0.0, 60.0) / 60.0;
             let colour = match c.s.water_kind {
@@ -262,7 +297,14 @@ fn layer_pixel(w: &World, v: &View, name: &str, c: &Col) -> Option<(Rgb, f32)> {
                 return None;
             }
             let s = c.s.water_surface;
-            (hsv(((s - WATER_LEVEL as f32) / 300.0).clamp(0.0, 1.0) * 0.75, 1.0, 0.55 + 0.45 * s.fract().abs()), 1.0)
+            (
+                hsv(
+                    ((s - WATER_LEVEL as f32) / 300.0).clamp(0.0, 1.0) * 0.75,
+                    1.0,
+                    0.55 + 0.45 * s.fract().abs(),
+                ),
+                1.0,
+            )
         }
         "flowdir" => {
             if c.s.water_kind != WaterKind::River {
@@ -270,7 +312,10 @@ fn layer_pixel(w: &World, v: &View, name: &str, c: &Col) -> Option<(Rgb, f32)> {
             }
             let (u, vv) = map.to_cell(c.x, c.z);
             let max = (map.dim() - 1) as f64;
-            let i = map.index(u.round().clamp(0.0, max) as usize, vv.round().clamp(0.0, max) as usize);
+            let i = map.index(
+                u.round().clamp(0.0, max) as usize,
+                vv.round().clamp(0.0, max) as usize,
+            );
             match map.down[i] {
                 255 => ([255.0, 255.0, 255.0], 1.0),
                 d => (hsv(d as f32 / 8.0, 1.0, 1.0), 1.0),
@@ -280,9 +325,36 @@ fn layer_pixel(w: &World, v: &View, name: &str, c: &Col) -> Option<(Rgb, f32)> {
             let f = map.bilinear(&map.flow, c.x, c.z).max(1.0).log2() / 14.0;
             (lerp([20.0, 20.0, 30.0], [80.0, 200.0, 255.0], f), 1.0)
         }
-        "temperature" => (ramp(&[(0.0, [40.0, 60.0, 220.0]), (0.5, [240.0, 240.0, 120.0]), (1.0, [230.0, 40.0, 30.0])], c.temp), 1.0),
-        "moisture" => (lerp([200.0, 170.0, 100.0], [20.0, 80.0, 200.0], map.bilinear(&map.moisture, c.x, c.z)), 1.0),
-        "continentalness" => (ramp(&[(-1.0, [10.0, 20.0, 80.0]), (0.0, [200.0, 200.0, 140.0]), (1.0, [60.0, 140.0, 60.0])], c.s.continentalness as f32), 1.0),
+        "temperature" => (
+            ramp(
+                &[
+                    (0.0, [40.0, 60.0, 220.0]),
+                    (0.5, [240.0, 240.0, 120.0]),
+                    (1.0, [230.0, 40.0, 30.0]),
+                ],
+                c.temp,
+            ),
+            1.0,
+        ),
+        "moisture" => (
+            lerp(
+                [200.0, 170.0, 100.0],
+                [20.0, 80.0, 200.0],
+                map.bilinear(&map.moisture, c.x, c.z),
+            ),
+            1.0,
+        ),
+        "continentalness" => (
+            ramp(
+                &[
+                    (-1.0, [10.0, 20.0, 80.0]),
+                    (0.0, [200.0, 200.0, 140.0]),
+                    (1.0, [60.0, 140.0, 60.0]),
+                ],
+                c.s.continentalness as f32,
+            ),
+            1.0,
+        ),
         "roughness" => (gray(b(&map.roughness)), 1.0),
         "range" => (gray(b(&map.range)), 1.0),
         "contours" => {
@@ -326,7 +398,11 @@ fn render(w: &World, v: &View) -> Vec<u8> {
                             let dx = (hgt(x + 1, z) - hgt(x - 1, z)) / (2.0 * v.scale);
                             let dz = (hgt(x, z + 1) - hgt(x, z - 1)) / (2.0 * v.scale);
                             let dry = c.s.height > WATER_LEVEL as f64;
-                            let shade = if dry { (1.0 - (dx + dz) * 3.0).clamp(0.4, 1.4) as f32 } else { 1.0 };
+                            let shade = if dry {
+                                (1.0 - (dx + dz) * 3.0).clamp(0.4, 1.4) as f32
+                            } else {
+                                1.0
+                            };
                             colour = colour.map(|ch| ch * (1.0 + (shade - 1.0) * alpha));
                         } else if let Some((layer, a)) = layer_pixel(w, v, name, c) {
                             colour = lerp(colour, layer, a * alpha);
@@ -347,7 +423,12 @@ fn render(w: &World, v: &View) -> Vec<u8> {
             for dz in -r..=r {
                 for dx in -r..=r {
                     let (x, z) = (cx as i64 + dx, cz as i64 + dz);
-                    if (dx * dx + dz * dz) as f64 <= radius * radius && x >= 0 && z >= 0 && (x as usize) < v.w && (z as usize) < v.h {
+                    if (dx * dx + dz * dz) as f64 <= radius * radius
+                        && x >= 0
+                        && z >= 0
+                        && (x as usize) < v.w
+                        && (z as usize) < v.h
+                    {
                         let i = (z as usize * v.w + x as usize) * 3;
                         out[i..i + 3].copy_from_slice(&feature_colour(f.kind));
                     }
@@ -377,10 +458,21 @@ fn info(w: &World, x: f64, z: f64) -> String {
     let (ground, water_top) = (hs.ground_top(bx, bz), hs.water_top(bx, bz));
     let (gx, gz) = hs.gradient(bx, bz);
     let temp = w.terrain.temperature(bx as f64, bz as f64);
-    let block = surface_block(w.terrain.biomes(), s.biome, map.seed, (bx, bz), (ground, water_top), gx.abs() + gz.abs(), temp);
+    let block = surface_block(
+        w.terrain.biomes(),
+        s.biome,
+        map.seed,
+        (bx, bz),
+        (ground, water_top),
+        gx.abs() + gz.abs(),
+        temp,
+    );
     let (u, v) = map.to_cell(bx as f64, bz as f64);
     let max = (map.dim() - 1) as f64;
-    let (cx, cz) = (u.round().clamp(0.0, max) as usize, v.round().clamp(0.0, max) as usize);
+    let (cx, cz) = (
+        u.round().clamp(0.0, max) as usize,
+        v.round().clamp(0.0, max) as usize,
+    );
     let i = map.index(cx, cz);
     let near: Vec<String> = map
         .features
@@ -394,15 +486,57 @@ fn info(w: &World, x: f64, z: f64) -> String {
     };
     let lines = [
         format!("block x={bx} z={bz}  map cell {cx},{cz}"),
-        format!("ground height {:.2} (map bicubic {:.2}), top block y={ground}", s.height, map.height_at(x, z)),
-        format!("surface block {}  slope {:.2}", name_of(block), gx.abs() + gz.abs()),
-        format!("water {:?} surface {:.2} depth {:.2} (water_top {water_top})", s.water_kind, s.water_surface, s.water_surface - s.height as f32),
-        format!("map cell water {:?} surface {:.2} river width {:.1} ford {}", WaterCell::from_u8(map.water_kind[i]), map.water_surface[i], map.river_width[i], map.ford[i]),
+        format!(
+            "ground height {:.2} (map bicubic {:.2}), top block y={ground}",
+            s.height,
+            map.height_at(x, z)
+        ),
+        format!(
+            "surface block {}  slope {:.2}",
+            name_of(block),
+            gx.abs() + gz.abs()
+        ),
+        format!(
+            "water {:?} surface {:.2} depth {:.2} (water_top {water_top})",
+            s.water_kind,
+            s.water_surface,
+            s.water_surface - s.height as f32
+        ),
+        format!(
+            "map cell water {:?} surface {:.2} river width {:.1} ford {}",
+            WaterCell::from_u8(map.water_kind[i]),
+            map.water_surface[i],
+            map.river_width[i],
+            map.ford[i]
+        ),
         format!("flow {:.0} cells, drains {down}", map.flow[i]),
-        format!("biome {:?} (map {:?})  trees {:.2}", w.terrain.biomes().name(s.biome), rustcraft::worldmap::climate::BiomeKind::from_u8(map.biome[i]), s.trees),
-        format!("temperature {:.3} moisture {:.3} (map cell {:.3}/{:.3})", temp, map.bilinear(&map.moisture, x, z), map.temperature[i], map.moisture[i]),
-        format!("continentalness {:.3} roughness {:.2} range {:.2}", s.continentalness, map.roughness[i] as f32 / 255.0, map.range[i] as f32 / 255.0),
-        format!("features within 300: {}", if near.is_empty() { "none".into() } else { near.join("; ") }),
+        format!(
+            "biome {:?} (map {:?})  trees {:.2}",
+            w.terrain.biomes().name(s.biome),
+            ochre_world::worldmap::climate::BiomeKind::from_u8(map.biome[i]),
+            s.trees
+        ),
+        format!(
+            "temperature {:.3} moisture {:.3} (map cell {:.3}/{:.3})",
+            temp,
+            map.bilinear(&map.moisture, x, z),
+            map.temperature[i],
+            map.moisture[i]
+        ),
+        format!(
+            "continentalness {:.3} roughness {:.2} range {:.2}",
+            s.continentalness,
+            map.roughness[i] as f32 / 255.0,
+            map.range[i] as f32 / 255.0
+        ),
+        format!(
+            "features within 300: {}",
+            if near.is_empty() {
+                "none".into()
+            } else {
+                near.join("; ")
+            }
+        ),
     ];
     lines.join("\n")
 }
@@ -448,7 +582,14 @@ fn parse_view(q: &HashMap<String, String>, w: usize, h: usize) -> View {
                 .collect()
         })
         .unwrap_or_default();
-    View { x: num("x", 0.0), z: num("z", 0.0), w, h, scale: num("scale", 1.0).max(0.25), layers }
+    View {
+        x: num("x", 0.0),
+        z: num("z", 0.0),
+        w,
+        h,
+        scale: num("scale", 1.0).max(0.25),
+        layers,
+    }
 }
 
 fn handle(server: &Server, mut stream: TcpStream) {
@@ -465,7 +606,13 @@ fn handle(server: &Server, mut stream: TcpStream) {
     let seed: u32 = q.get("seed").and_then(|s| s.parse().ok()).unwrap_or(42);
     let num = |k: &str, d: f64| q.get(k).and_then(|v| v.parse().ok()).unwrap_or(d);
     match path {
-        "/" => reply(stream, "200 OK", "text/html", "", include_bytes!("worldview.html")),
+        "/" => reply(
+            stream,
+            "200 OK",
+            "text/html",
+            "",
+            include_bytes!("worldview.html"),
+        ),
         "/seed" => {
             server.world(seed);
             reply(stream, "200 OK", "text/plain", "", b"ok");
@@ -474,20 +621,47 @@ fn handle(server: &Server, mut stream: TcpStream) {
             let world = server.world(seed);
             let size = (num("size", 256.0) as usize).clamp(1, 1024);
             let v = parse_view(&q, size, size);
-            reply(stream, "200 OK", "image/png", "Cache-Control: max-age=600\r\n", &png(render(&world, &v), size, size));
+            reply(
+                stream,
+                "200 OK",
+                "image/png",
+                "Cache-Control: max-age=600\r\n",
+                &png(render(&world, &v), size, size),
+            );
         }
         "/info" => {
             let world = server.world(seed);
-            reply(stream, "200 OK", "text/plain", "", info(&world, num("x", 0.0), num("z", 0.0)).as_bytes());
+            reply(
+                stream,
+                "200 OK",
+                "text/plain",
+                "",
+                info(&world, num("x", 0.0), num("z", 0.0)).as_bytes(),
+            );
         }
         "/export" => {
             let world = server.world(seed);
-            let (w, h) = ((num("w", 1024.0) as usize).clamp(1, 4096), (num("h", 1024.0) as usize).clamp(1, 4096));
+            let (w, h) = (
+                (num("w", 1024.0) as usize).clamp(1, 4096),
+                (num("h", 1024.0) as usize).clamp(1, 4096),
+            );
             let v = parse_view(&q, w, h);
             let data = png(render(&world, &v), w, h);
             let dir = std::path::Path::new("target/worldview");
             std::fs::create_dir_all(dir).unwrap();
-            let name = format!("{seed}-{:.0}_{:.0}-{}x{}-s{}-{}.png", v.x, v.z, w, h, v.scale, v.layers.iter().map(|l| l.0.as_str()).collect::<Vec<_>>().join("+"));
+            let name = format!(
+                "{seed}-{:.0}_{:.0}-{}x{}-s{}-{}.png",
+                v.x,
+                v.z,
+                w,
+                h,
+                v.scale,
+                v.layers
+                    .iter()
+                    .map(|l| l.0.as_str())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            );
             let path = dir.join(name);
             std::fs::write(&path, &data).unwrap();
             let abs = std::fs::canonicalize(&path).unwrap();
@@ -501,7 +675,9 @@ fn handle(server: &Server, mut stream: TcpStream) {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let seed: u32 = args.next().map_or(42, |s| s.parse().expect("seed is a u32"));
+    let seed: u32 = args
+        .next()
+        .map_or(42, |s| s.parse().expect("seed is a u32"));
     let port: u16 = args.next().map_or(8777, |s| s.parse().expect("port"));
     let server = Arc::new(Server::default());
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("port in use");

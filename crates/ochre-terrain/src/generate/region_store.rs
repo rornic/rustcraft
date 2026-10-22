@@ -1,0 +1,350 @@
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, RwLock};
+
+use bevy::math::I64Vec2;
+
+use super::columns::{ChunkColumns, ColumnCache, ColumnGrid};
+use super::region::{compute_region, Region, RegionCoord, REGION_SIZE};
+use super::trees::TreeGround;
+use crate::lod::LodKey;
+use ochre_base::biome::BiomeId;
+use ochre_base::terrain_source::{SpringPart, TerrainSource};
+use ochre_base::WATER_LEVEL;
+
+// The fewest regions kept, about 400KB each.
+const RESIDENT_REGION_CAP: usize = 64;
+
+pub fn resident_cap_for(radius_blocks: i64) -> usize {
+    let across = ((2 * radius_blocks + REGION_SIZE - 1) / REGION_SIZE) as usize + 2;
+    (across * across).max(RESIDENT_REGION_CAP)
+}
+
+// Many tasks can ask for a region at once: one computes it, the rest wait on the same lock.
+type RegionSlot = Arc<OnceLock<Arc<Region>>>;
+
+// Evicts the least recently used region, found by a scan, which is cheap at a few hundred.
+struct RegionLru {
+    cap: usize,
+    tick: u64,
+    entries: HashMap<RegionCoord, (RegionSlot, u64)>,
+}
+
+impl RegionLru {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            tick: 0,
+            entries: HashMap::new(),
+        }
+    }
+
+    fn get_or_insert(&mut self, coord: RegionCoord) -> RegionSlot {
+        self.tick += 1;
+        let tick = self.tick;
+        if let Some((slot, last_access)) = self.entries.get_mut(&coord) {
+            *last_access = tick;
+            return slot.clone();
+        }
+
+        let slot: RegionSlot = Arc::new(OnceLock::new());
+        self.entries.insert(coord, (slot.clone(), tick));
+        if self.entries.len() > self.cap {
+            if let Some(evict) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, last_access))| *last_access)
+                .map(|(coord, _)| *coord)
+            {
+                self.entries.remove(&evict);
+            }
+        }
+        slot
+    }
+}
+
+pub struct RegionStore {
+    noise: Arc<dyn TerrainSource>,
+    // which slots exist, held only briefly: never while a region is computed
+    lru: RwLock<RegionLru>,
+    columns: ColumnCache,
+}
+
+impl RegionStore {
+    pub fn new(noise: Arc<dyn TerrainSource>) -> Self {
+        Self {
+            noise,
+            lru: RwLock::new(RegionLru::new(RESIDENT_REGION_CAP)),
+            columns: ColumnCache::default(),
+        }
+    }
+
+    pub fn terrain(&self) -> &dyn TerrainSource {
+        &*self.noise
+    }
+
+    /// The ground under a coarse LOD node's cells, see `columns::COARSE_CELL`. Blocks
+    /// while it's sampled, so only call from a task.
+    pub fn column_grid(&self, key: LodKey) -> Arc<ColumnGrid> {
+        self.columns.grid(&*self.noise, key)
+    }
+
+    /// What full-detail chunks at chunk `x`, `z` take from each of their columns, shared by all
+    /// the chunks stacked there. Blocks while it's sampled, so only call from a task.
+    pub fn chunk_columns(&self, heights: &mut HeightSampler, x: i64, z: i64) -> Arc<ChunkColumns> {
+        self.columns.chunk_columns(&*self.noise, heights, x, z)
+    }
+
+    /// The lowest and highest ground under a coarse LOD node, if a node over the same
+    /// column has been sampled. Never blocks.
+    pub fn column_height_range(&self, key: LodKey) -> Option<(f32, f32)> {
+        self.columns.height_range(key)
+    }
+
+    pub fn with_resident_cap(self, cap: usize) -> Self {
+        Self {
+            lru: RwLock::new(RegionLru::new(cap)),
+            ..self
+        }
+    }
+
+    // Blocks until the region is computed, here or by another thread, so only call from a task.
+    pub fn get_region(&self, coord: RegionCoord) -> Arc<Region> {
+        let slot = self.lru.write().unwrap().get_or_insert(coord);
+        slot.get_or_init(|| Arc::new(compute_region(&*self.noise, coord)))
+            .clone()
+    }
+
+    /// The lowest and highest terrain in the block range `min..=max` (x, z), rounded out
+    /// to whole tiles, or None if a region it touches hasn't been computed yet. Never blocks.
+    pub fn loaded_height_range(&self, min: I64Vec2, max: I64Vec2) -> Option<(f32, f32)> {
+        let lru = self.lru.read().unwrap();
+        let (first, last) = (
+            RegionCoord::from_world(min.x, min.y),
+            RegionCoord::from_world(max.x, max.y),
+        );
+        let (mut lowest, mut highest) = (f32::MAX, f32::MIN);
+        for rz in first.0.y..=last.0.y {
+            for rx in first.0.x..=last.0.x {
+                let coord = RegionCoord(I64Vec2::new(rx, rz));
+                let region = lru.entries.get(&coord)?.0.get()?;
+                let origin = coord.origin();
+                let local_min = (min - origin).max(I64Vec2::ZERO);
+                let local_max = (max - origin).min(I64Vec2::splat(REGION_SIZE - 1));
+                let (lo, hi) = region.height_range(local_min, local_max);
+                (lowest, highest) = (lowest.min(lo), highest.max(hi));
+            }
+        }
+        Some((lowest, highest))
+    }
+
+    pub fn sampler(&self) -> HeightSampler<'_> {
+        HeightSampler {
+            store: self,
+            recent: Vec::with_capacity(SAMPLER_REGIONS),
+        }
+    }
+
+    pub fn get_height(&self, world_x: i64, world_z: i64) -> f64 {
+        self.sampler().height(world_x, world_z)
+    }
+}
+
+pub(super) const SLOPE_SPAN: i64 = 6;
+
+// Enough for a lookup area that touches a corner where four regions meet.
+const SAMPLER_REGIONS: usize = 4;
+
+pub struct HeightSampler<'a> {
+    store: &'a RegionStore,
+    // most recently used last
+    recent: Vec<(RegionCoord, Arc<Region>)>,
+}
+
+/// The block the water's surface lies in, that block and the ones under it filled: the surface is somewhere in
+/// its top block, so a river sloping down its course is a slope across blocks, not steps.
+pub fn water_block_top(surface: f32) -> i64 {
+    (surface - 0.001).ceil() as i64
+}
+
+/// `ground` in whole blocks, kept a block under the water over it, if any.
+pub fn bed_top(ground: f32, surface: f32) -> i64 {
+    let top = ground.round() as i64;
+    if surface > ground {
+        top.min(water_block_top(surface) - 1)
+    } else {
+        top
+    }
+}
+
+impl HeightSampler<'_> {
+    pub fn height(&mut self, world_x: i64, world_z: i64) -> f64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .height_at(world_x - origin.x, world_z - origin.y) as f64
+    }
+
+    pub fn biome(&mut self, world_x: i64, world_z: i64) -> BiomeId {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .biome_at(world_x - origin.x, world_z - origin.y)
+    }
+
+    /// The height of the water's surface over the column, in whole blocks, or the sea's where the
+    /// column is dry, which is what ground over it is measured from.
+    pub fn water_top(&mut self, world_x: i64, world_z: i64) -> i64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        let surface = self
+            .region(coord)
+            .water_at(world_x - origin.x, world_z - origin.y);
+        if surface > 0.0 {
+            water_block_top(surface)
+        } else {
+            WATER_LEVEL
+        }
+    }
+
+    /// The top block of the ground in whole blocks, kept under the water over it: a bed a hair under
+    /// a shallow lake's surface would round up level with it, and the water be lost as dry sand.
+    pub fn ground_top(&mut self, world_x: i64, world_z: i64) -> i64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        let region = self.region(coord);
+        let (x, z) = (world_x - origin.x, world_z - origin.y);
+        bed_top(region.height_at(x, z), region.water_at(x, z))
+    }
+
+    /// The surface of the river's or lake's water over the column, if it has any.
+    pub fn fresh_water(&mut self, world_x: i64, world_z: i64) -> Option<f32> {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .fresh_water_at(world_x - origin.x, world_z - origin.y)
+    }
+
+    pub fn spring(&mut self, world_x: i64, world_z: i64) -> SpringPart {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .spring_at(world_x - origin.x, world_z - origin.y)
+    }
+
+    pub fn trees(&mut self, world_x: i64, world_z: i64) -> f64 {
+        let coord = RegionCoord::from_world(world_x, world_z);
+        let origin = coord.origin();
+        self.region(coord)
+            .trees_at(world_x - origin.x, world_z - origin.y)
+    }
+
+    // Central-difference gradient over the heightmap, as the height change across two
+    // blocks. Measured over SLOPE_SPAN blocks either side, so block-sized bumps don't
+    // flip the surface between snow, stone and grass column by column.
+    pub fn gradient(&mut self, world_x: i64, world_z: i64) -> (f64, f64) {
+        TreeGround::gradient(self, world_x, world_z)
+    }
+
+    fn region(&mut self, coord: RegionCoord) -> &Region {
+        match self.recent.iter().position(|(c, _)| *c == coord) {
+            Some(i) => {
+                let entry = self.recent.remove(i);
+                self.recent.push(entry);
+            }
+            None => {
+                if self.recent.len() == SAMPLER_REGIONS {
+                    self.recent.remove(0);
+                }
+                self.recent.push((coord, self.store.get_region(coord)));
+            }
+        }
+        &self.recent.last().unwrap().1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Barrier;
+
+    use super::*;
+
+    #[test]
+    fn test_resident_cap_covers_render_area() {
+        assert_eq!(RESIDENT_REGION_CAP, resident_cap_for(256));
+        // 2048 blocks either side spans 16 regions, plus one at each edge
+        assert_eq!(18 * 18, resident_cap_for(2048));
+    }
+
+    #[test]
+    fn test_sampler_matches_region_heights_across_region_corners() {
+        let store = RegionStore::new(ochre_world::worldmap::test_terrain(1));
+        let mut sampler = store.sampler();
+        // a block either side of the corner where regions (-1..0, -1..0) meet
+        for (x, z) in [(-1, -1), (0, -1), (-1, 0), (0, 0), (255, 300), (-1, -1)] {
+            let coord = RegionCoord::from_world(x, z);
+            let origin = coord.origin();
+            let expected = store
+                .get_region(coord)
+                .height_at(x - origin.x, z - origin.y) as f64;
+            assert_eq!(expected, sampler.height(x, z));
+        }
+        assert!(sampler.recent.len() <= SAMPLER_REGIONS);
+    }
+
+    #[test]
+    fn test_loaded_height_range_waits_for_every_region_it_touches() {
+        let store = RegionStore::new(ochre_world::worldmap::test_terrain(1));
+        // spans the corner of regions (0, 0) to (1, 1)
+        let (min, max) = (I64Vec2::splat(200), I64Vec2::splat(300));
+        assert_eq!(None, store.loaded_height_range(min, max));
+        store.get_region(RegionCoord(I64Vec2::new(0, 0)));
+        assert_eq!(None, store.loaded_height_range(min, max));
+        for (x, z) in [(1, 0), (0, 1), (1, 1)] {
+            store.get_region(RegionCoord(I64Vec2::new(x, z)));
+        }
+        let (lowest, highest) = store.loaded_height_range(min, max).unwrap();
+        let mut sampler = store.sampler();
+        for z in 200..=300 {
+            for x in 200..=300 {
+                assert!((lowest..=highest).contains(&(sampler.height(x, z) as f32)));
+            }
+        }
+    }
+
+    #[test]
+    fn test_get_region_caches_repeated_lookups() {
+        let store = RegionStore::new(ochre_world::worldmap::test_terrain(1));
+        let coord = RegionCoord(I64Vec2::new(0, 0));
+
+        let first = store.get_region(coord);
+        let second = store.get_region(coord);
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn test_concurrent_get_region_computes_once() {
+        let store = Arc::new(RegionStore::new(ochre_world::worldmap::test_terrain(1)));
+        let coord = RegionCoord(I64Vec2::new(5, 5));
+        let thread_count = 8;
+        let barrier = Arc::new(Barrier::new(thread_count));
+
+        let handles: Vec<_> = (0..thread_count)
+            .map(|_| {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    store.get_region(coord)
+                })
+            })
+            .collect();
+
+        let regions: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for region in &regions[1..] {
+            assert!(
+                Arc::ptr_eq(&regions[0], region),
+                "all callers should observe the same computed Region"
+            );
+        }
+    }
+}

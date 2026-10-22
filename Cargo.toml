@@ -1,13 +1,19 @@
-[package]
-name = "rustcraft"
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 authors = ["rornic"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/rornic/rustcraft"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+[workspace.dependencies]
+ochre-base = { path = "crates/ochre-base" }
+ochre-terrain = { path = "crates/ochre-terrain" }
+ochre-world = { path = "crates/ochre-world" }
+ochre-gameplay = { path = "crates/ochre-gameplay" }
 noise = "0.9.0"
 rand = "0.10"
 toml = "1"
@@ -19,10 +25,32 @@ bevy = { version = "0.20", default-features = false, features = [
     "common_api", "3d_bevy_render", "ui_api", "ui_bevy_render", "bevy_ui_widgets",
 ] }
 tracing = { version = "0.1.40", features = ["attributes"] }
-
-[dev-dependencies]
 criterion = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+# The engine: re-exports the ochre crates, and holds the examples and benchmarks.
+[package]
+name = "ochre-engine"
+description = "A planetary voxel engine for Bevy"
+publish = false
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ochre-base.workspace = true
+ochre-terrain.workspace = true
+ochre-world.workspace = true
+ochre-gameplay.workspace = true
+bevy.workspace = true
+serde.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+image.workspace = true
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]

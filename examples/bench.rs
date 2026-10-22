@@ -6,14 +6,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bevy::math::I64Vec3;
-use rustcraft::chunks::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
-use rustcraft::chunks::generate::generator::{
-    generate_chunk, generate_chunk_mesh, generate_lod_mesh,
-};
-use rustcraft::chunks::generate::region_store::RegionStore;
-use rustcraft::chunks::generate::terrain_source::TerrainSource;
-use rustcraft::chunks::lod::LodKey;
-use rustcraft::worldmap::{WorldConfig, WorldTerrain};
+use ochre_base::terrain_source::TerrainSource;
+use ochre_terrain::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
+use ochre_terrain::generate::generator::{generate_chunk, generate_chunk_mesh, generate_lod_mesh};
+use ochre_terrain::generate::region_store::RegionStore;
+use ochre_terrain::lod::LodKey;
+use ochre_world::worldmap::{WorldConfig, WorldTerrain};
 
 // Chunks across the area generated, and how many layers of them up from below the surface.
 const ACROSS: i64 = 20;
@@ -34,7 +32,7 @@ fn main() {
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let map = rustcraft::worldmap::generate(seed, WorldConfig::default());
+    let map = ochre_world::worldmap::generate(seed, WorldConfig::default());
     let map_copy = Arc::new(map);
     let noise: Arc<dyn TerrainSource> = Arc::new(WorldTerrain::new(map_copy.clone()));
     let (sx, sz, sh) = if std::env::var("BENCH_MOUNTAIN").is_ok() {
@@ -47,9 +45,9 @@ fn main() {
             .find(|&(x, z)| {
                 (-6..=6).step_by(3).all(|d| {
                     let i = map.index((x as i64 + d) as usize, (z as i64 + d) as usize);
-                    rustcraft::worldmap::climate::BiomeKind::from_u8(map.biome[i])
-                        == rustcraft::worldmap::climate::BiomeKind::Mountain
-                        && map.height[i] > rustcraft::chunks::generate::WATER_LEVEL as f32 + 150.0
+                    ochre_world::worldmap::climate::BiomeKind::from_u8(map.biome[i])
+                        == ochre_world::worldmap::climate::BiomeKind::Mountain
+                        && map.height[i] > ochre_base::WATER_LEVEL as f32 + 150.0
                 })
             })
             .expect("no mountain");
@@ -111,8 +109,7 @@ fn chunks(regions: &Arc<RegionStore>, spawn: I64Vec3) {
                 .iter()
                 .map(|n| data.get(n).cloned())
                 .collect();
-            let meshes =
-                generate_chunk_mesh(data[&c].clone(), neighbours, c, &regions, false);
+            let meshes = generate_chunk_mesh(data[&c].clone(), neighbours, c, &regions, false);
             vertices += meshes.opaque.count_vertices();
         }
         best = best.min(start.elapsed());

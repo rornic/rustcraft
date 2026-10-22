@@ -7,13 +7,13 @@ use std::time::Instant;
 
 use bevy::math::I64Vec3;
 use criterion::{criterion_group, BatchSize, Criterion};
-use rustcraft::chunks::chunk::{ChunkCoordinate, CHUNK_SIZE};
-use rustcraft::chunks::generate::generator::{generate_chunk, generate_lod_mesh};
-use rustcraft::chunks::generate::region_store::RegionStore;
-use rustcraft::chunks::generate::terrain_source::TerrainSource;
-use rustcraft::chunks::generate::WATER_LEVEL;
-use rustcraft::chunks::lod::LodKey;
-use rustcraft::worldmap::{WorldConfig, WorldTerrain};
+use ochre_base::terrain_source::TerrainSource;
+use ochre_base::WATER_LEVEL;
+use ochre_terrain::chunk::{ChunkCoordinate, CHUNK_SIZE};
+use ochre_terrain::generate::generator::{generate_chunk, generate_lod_mesh};
+use ochre_terrain::generate::region_store::RegionStore;
+use ochre_terrain::lod::LodKey;
+use ochre_world::worldmap::{WorldConfig, WorldTerrain};
 use std::hint::black_box;
 
 const SEED: u32 = 1;
@@ -32,10 +32,14 @@ const KINDS: [Kind; 3] = [Kind::Plains, Kind::Mountains, Kind::Coast];
 const WORLD_HALF_SIZE: i64 = 32_768;
 
 fn terrain() -> Arc<dyn TerrainSource> {
-    static MAP: std::sync::OnceLock<Arc<rustcraft::worldmap::WorldMap>> =
+    static MAP: std::sync::OnceLock<Arc<ochre_world::worldmap::WorldMap>> =
         std::sync::OnceLock::new();
-    let map =
-        MAP.get_or_init(|| Arc::new(rustcraft::worldmap::generate(SEED, WorldConfig::default())));
+    let map = MAP.get_or_init(|| {
+        Arc::new(ochre_world::worldmap::generate(
+            SEED,
+            WorldConfig::default(),
+        ))
+    });
     Arc::new(WorldTerrain::new(map.clone()))
 }
 
@@ -150,7 +154,7 @@ fn terrain_samples(c: &mut Criterion) {
 }
 
 fn world_map_samples(c: &mut Criterion) {
-    let map = Arc::new(rustcraft::worldmap::generate(1, WorldConfig::default()));
+    let map = Arc::new(ochre_world::worldmap::generate(1, WorldConfig::default()));
     let terrain = WorldTerrain::new(map.clone());
     let half = map.config.half_size() as f64;
     let at = |i: u64| {
@@ -204,7 +208,7 @@ fn world_generation(c: &mut Criterion) {
     let mut group = c.benchmark_group("worldmap_generate");
     group.sample_size(10);
     group.bench_function("default_world", |b| {
-        b.iter(|| black_box(rustcraft::worldmap::generate(1, WorldConfig::default())))
+        b.iter(|| black_box(ochre_world::worldmap::generate(1, WorldConfig::default())))
     });
     group.finish();
 }

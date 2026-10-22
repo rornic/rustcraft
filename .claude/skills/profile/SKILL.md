@@ -1,6 +1,6 @@
 ---
 name: profile
-description: Measure and profile rustcraft's terrain pipeline (regions, chunk generation, chunk meshing, LOD meshing per level) and its main-thread loading, find hotspots with perf, and A/B a change. Use when asked to speed something up, check a change for a performance regression, or find where time goes.
+description: Measure and profile Ochre's terrain pipeline (regions, chunk generation, chunk meshing, LOD meshing per level) and its main-thread loading, find hotspots with perf, and A/B a change. Use when asked to speed something up, check a change for a performance regression, or find where time goes.
 ---
 
 # Profile
@@ -25,16 +25,16 @@ cargo run --release --example bench -- 7 lod     # seed 7, LOD meshing only
 
 ## Find the hotspot
 
-Add line tables to rustcraft alone, so nothing else recompiles.
+Add line tables to the terrain and world crates alone, so nothing else recompiles.
 
 ```
-cargo build --release --example bench --config 'profile.release.package.rustcraft.debug="line-tables-only"'
+cargo build --release --example bench --config 'profile.release.package.ochre-terrain.debug="line-tables-only"' --config 'profile.release.package.ochre-world.debug="line-tables-only"'
 P=$(ls /usr/lib/linux-tools/*/perf | head -1)
 $P record -e cpu-clock -F 3000 -o /tmp/perf.data ./target/release/examples/bench 1 lod
 $P report -i /tmp/perf.data --no-children --sort symbol | head -40
 ```
 
-- Hottest lines in one function: `$P annotate -i /tmp/perf.data --stdio -l <mangled symbol> | grep -E '^\s+[0-9.]+ +[a-z_]+\.rs:' | sort -rn | head`. Only rustcraft's own functions have line tables, so a dependency's (`noise`'s Perlin) prints nothing.
+- Hottest lines in one function: `$P annotate -i /tmp/perf.data --stdio -l <mangled symbol> | grep -E '^\s+[0-9.]+ +[a-z_]+\.rs:' | sort -rn | head`. Only Ochre's own functions have line tables, so a dependency's (`noise`'s Perlin) prints nothing.
 - To see who calls the hot code, record with `--call-graph dwarf,16384`, dump with `$P script -i /tmp/perf.data --no-demangle > /tmp/perf.txt`, then `python3 .claude/skills/profile/attribute.py /tmp/perf.txt <frames>` naming the frames to follow, such as `tree_in_cell crown_boxes SkyLight mesh_opaque_greedy perlin`. Paths come out muddled where inlining merges functions.
 - When neither is clear, add temporary `Instant` timers round the phases (a static `[AtomicU64; N]` the bench prints), and remove them before committing.
 
@@ -53,7 +53,7 @@ Keep a change only if it wins in every pair. Revert one within noise, as it's co
 `examples/lod_sim` runs the loading systems headless and logs frames over 100ms, plus holes and LOD node counts every 2 seconds. Fix the seed to compare two builds, and write to a file, as a killed pipe loses its output.
 
 ```
-RC_SEED=7 timeout -s INT 30 ./target/release/examples/lod_sim 80 10 > /tmp/sim.txt 2>&1
+OCHRE_SEED=7 timeout -s INT 30 ./target/release/examples/lod_sim 80 10 > /tmp/sim.txt 2>&1
 ```
 
 The arguments are flying speed in blocks a second and seconds spent flying. A full run lasts about 90 seconds (20 to load, the flight, then 60 stopped), so the 30-second timeout keeps just the load and the start of the flight. Node counts at the same timestamps show loading speed. Holes on a fixed seed must match between builds. Some persistent full-detail holes are pre-existing.
