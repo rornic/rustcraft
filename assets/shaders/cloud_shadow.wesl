@@ -3,14 +3,11 @@
 
 import bevy_pbr::render::mesh_view_bindings as view_bindings;
 import super::sky::SUN_LIGHT;
+import super::cloud_bindings::{cloud_pattern, cloud_sampler, cloud_layer};
 
-@group(constants::MATERIAL_BIND_GROUP) @binding(4) var cloud_pattern: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(5) var cloud_sampler: sampler;
-// the middle of the layer's height, the pattern's width in blocks, and the wind
-@group(constants::MATERIAL_BIND_GROUP) @binding(6) var<uniform> cloud_layer: vec4<f32>;
-
-// How much of the sun a cloud keeps off the ground.
+// How much sun a cloud blocks, and the cover its shadow darkens over, matching `cloud_march.wesl`.
 const CLOUD_SHADE: f32 = 0.7;
+const SHADOW_COVER: vec2<f32> = vec2<f32>(0.35, 0.8);
 
 // How much sunlight reaches `world_position` past the clouds, 0..1.
 fn cloud_shadow(world_position: vec3<f32>) -> f32 {
@@ -24,5 +21,5 @@ fn cloud_shadow(world_position: vec3<f32>) -> f32 {
     // number of patterns, see `clouds::WIND`
     let drift = cloud_layer.zw * view_bindings::globals.time;
     let cover = textureSampleLevel(cloud_pattern, cloud_sampler, (under - drift) / cloud_layer.y, 0.0).r;
-    return 1.0 - CLOUD_SHADE * cover;
+    return 1.0 - CLOUD_SHADE * smoothstep(SHADOW_COVER.x, SHADOW_COVER.y, cover);
 }

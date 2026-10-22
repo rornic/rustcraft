@@ -116,20 +116,3 @@ fn daylight(world_position: vec3<f32>) -> vec3<f32> {
     }
     return (direct_sun(up, world_position) + direct_moon(up) + sky) / max(tuned, vec3<f32>(1e-4));
 }
-
-// Clouds scatter the light that falls on them about inside, so most of what lights them,
-// shaded sides and all, is sunlight come through them, and their colour follows the sun's:
-// white at midday, glowing orange and pink as it sets. On top, sunlight straight on, a
-// little softened, and some of the sky's light. Weighted so midday is much as before
-// sunlight came through them.
-const CLOUD_SUN_DIRECT: f32 = 0.8;
-const CLOUD_SUN_THROUGH: f32 = 0.5;
-const CLOUD_SKY: f32 = 0.6;
-
-// Light on a cloud's face at `world_position` turned to `normal`, for the clouds and their
-// reflections in the water.
-fn cloud_light(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
-    let sun = direct_sun(normal, world_position) * CLOUD_SUN_DIRECT + sun_radiance(world_position) * CLOUD_SUN_THROUGH;
-    let moon = direct_moon(normal) * CLOUD_SUN_DIRECT + moon_radiance() * CLOUD_SUN_THROUGH;
-    return sun + moon + open_sky(normal) * CLOUD_SKY;
-}

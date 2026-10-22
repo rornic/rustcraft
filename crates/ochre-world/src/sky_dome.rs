@@ -12,6 +12,9 @@ use bevy::{
     shader::ShaderRef,
 };
 
+/// Sorts the sky domes before every other blended thing, each pinned to the far plane so it draws only where nothing else is.
+pub const SKY_DEPTH_BIAS: f32 = -2.0e9;
+
 // A material drawn over the sky by a sphere hung round the camera, and the plugin spawning it.
 macro_rules! sky_dome {
     ($(#[$doc:meta])* $material:ident, $plugin:ident, $shader:literal) => {
@@ -31,6 +34,10 @@ macro_rules! sky_dome {
             // over the sky, which is drawn after the opaque meshes
             fn alpha_mode(&self) -> AlphaMode {
                 AlphaMode::Premultiplied
+            }
+
+            fn depth_bias(&self) -> f32 {
+                SKY_DEPTH_BIAS
             }
 
             fn enable_prepass() -> bool {
@@ -88,15 +95,24 @@ fn spawn_dome<M: Material + Default>(
     let Ok(camera) = camera.single() else {
         return;
     };
-    commands.spawn((
+    commands.spawn(dome(&mut meshes, materials.add(M::default()), camera));
+}
+
+/// A sphere hung round `camera`, drawing `material` over the sky.
+pub fn dome<M: Material>(
+    meshes: &mut Assets<Mesh>,
+    material: Handle<M>,
+    camera: Entity,
+) -> impl Bundle {
+    (
         // any size: it's drawn as if infinitely far
         Mesh3d(meshes.add(Sphere::new(1.0).mesh().ico(5).unwrap())),
-        MeshMaterial3d(materials.add(M::default())),
+        MeshMaterial3d(material),
         Transform::default(),
         NotShadowCaster,
         NotShadowReceiver,
         // it's round the camera, so always in view
         NoFrustumCulling,
         ChildOf(camera),
-    ));
+    )
 }
