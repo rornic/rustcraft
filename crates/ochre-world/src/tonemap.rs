@@ -11,7 +11,7 @@ pub const TONEMAPPING: Tonemapping = Tonemapping::SomewhatBoringDisplayTransform
 
 /// Stops of exposure before tonemapping, so a mid grey stays about mid grey once the
 /// tonemapping curve has bent it. `water.wesl` reads it from the view's colour grading.
-pub const EXPOSURE: f32 = 0.5;
+pub(crate) const EXPOSURE: f32 = 0.5;
 
 /// The camera's colour grading out of water.
 pub fn dry_color_grading() -> ColorGrading {

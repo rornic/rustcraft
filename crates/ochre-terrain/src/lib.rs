@@ -16,20 +16,24 @@ pub mod world;
 use bevy::{
     app::{App, Plugin, Update},
     app::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy},
-    asset::Assets,
     ecs::{schedule::IntoScheduleConfigs, system::Commands},
+    pbr::MaterialPlugin,
+    render::RenderApp,
 };
 
 use crate::settings::{DebugSettings, RendererSettings};
 use chunk_loader::{
     gather_chunks, generate_chunks, load_chunks, mark_chunks, unload_chunks, ChunkLoader,
 };
+use curvature::CurvaturePlugin;
 use fade::{apply_fades, FadeMaterials};
 use group::{build_groups, load_groups, show_inner_leaves};
 use lod::{
     load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_lod_selection, LodLoader,
 };
-use material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
+use material::{
+    ChunkMaterial, ShaderInputs, SprayMaterial, TerrainAssets, TerrainMaterials, WaterMaterial,
+};
 
 /// Loads, meshes and unloads full-detail chunks and LOD terrain around the camera.
 pub struct TerrainPlugin;
@@ -66,6 +70,28 @@ impl Plugin for TerrainPlugin {
     }
 }
 
+/// Draws the terrain: its materials, the bend of the land away to the horizon, and the renderer's
+/// mesh buffers. Needs a window and GPU, so a headless run goes without.
+pub struct TerrainRenderPlugin {
+    pub renderer: RendererSettings,
+}
+
+impl Plugin for TerrainRenderPlugin {
+    fn build(&self, app: &mut App) {
+        pack::set_packed(self.renderer.pack_meshes);
+        app.add_plugins((
+            MaterialPlugin::<ChunkMaterial>::default(),
+            MaterialPlugin::<WaterMaterial>::default(),
+            MaterialPlugin::<SprayMaterial>::default(),
+            CurvaturePlugin,
+        ));
+        // the terrain's meshes share a few big buffers, see `RendererSettings::mesh_slab_mb`
+        if let Some(render) = app.get_sub_app_mut(RenderApp) {
+            render.insert_resource(self.renderer.mesh_allocator());
+        }
+    }
+}
+
 /// Terrain generation runs on the async compute pool, so it gets most of the cores.
 pub fn task_pool_plugin() -> TaskPoolPlugin {
     TaskPoolPlugin {
@@ -89,22 +115,22 @@ pub fn task_pool_plugin() -> TaskPoolPlugin {
     }
 }
 
-/// Inserts the resources `TerrainPlugin`'s systems run on, drawing with the given materials.
+/// Inserts the resources `TerrainPlugin`'s systems run on, drawing with materials built from `inputs`.
 pub fn insert_terrain_resources(
     commands: &mut Commands,
     renderer: &RendererSettings,
-    debug: &DebugSettings,
+    debug: DebugSettings,
     world_height: u64,
-    materials: TerrainMaterials,
-    chunk_materials: &mut Assets<ChunkMaterial>,
-    water_materials: &mut Assets<WaterMaterial>,
+    inputs: &ShaderInputs,
+    assets: &mut TerrainAssets,
 ) {
     let layout = renderer.lod_layout();
+    let materials = TerrainMaterials::new(layout, debug, inputs, assets);
     commands.insert_resource(FadeMaterials::new(
         renderer.lod_fade_seconds,
         &materials,
-        chunk_materials,
-        water_materials,
+        &mut assets.chunk,
+        &mut assets.water,
     ));
     commands.insert_resource(LodLoader::new(
         layout,

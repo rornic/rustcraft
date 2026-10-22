@@ -155,7 +155,7 @@ fn run_weather(clock: Res<TimeOfDay>, mut weather: ResMut<Weather>, mut last: Lo
 }
 
 /// How many seconds of weather pass as the clock goes from `then` to `now`, in ticks.
-pub fn weather_seconds(then: u64, now: u64) -> f32 {
+pub(crate) fn weather_seconds(then: u64, now: u64) -> f32 {
     now.saturating_sub(then) as f32 / TICKS_PER_SECOND as f32
 }
 
@@ -811,7 +811,7 @@ impl Source for RainDecoder {
 /// deep boom; farther off, only a softer rumble. Then a long roll that swells again as the far
 /// parts of the bolt are heard, echoes, and dies away.
 #[derive(Asset, TypePath)]
-pub struct Thunder {
+pub(crate) struct Thunder {
     distance: f32,
     seed: u64,
 }

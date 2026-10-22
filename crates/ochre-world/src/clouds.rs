@@ -20,9 +20,8 @@ use bevy::{
             BufferInitDescriptor, BufferUsages, CachedRenderPipelineId, ColorTargetState,
             ColorWrites, CompareFunction, Extent3d, FragmentState, Operations, PipelineCache,
             RenderPassColorAttachment, RenderPassDescriptor, RenderPipelineDescriptor,
-            SamplerBindingType, ShaderStages, ShaderType,
-            SpecializedMeshPipelineError, TextureDimension, TextureFormat, TextureSampleType,
-            TextureUsages,
+            SamplerBindingType, ShaderStages, ShaderType, SpecializedMeshPipelineError,
+            TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
         },
         renderer::{RenderContext, RenderDevice},
         storage::{GpuShaderBuffer, ShaderBuffer},
@@ -38,6 +37,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use crate::sky::Sun;
 use crate::sky_dome::dome;
 use ochre_terrain::curvature::Curvature;
+pub use ochre_terrain::material::CloudLayer;
 use ochre_terrain::material::{push_shader_defs, water_level, WaterMaterial};
 
 /// Height of the clouds' undersides, far above the highest land; matches `BASE` in `cloud_march.wesl`.
@@ -70,11 +70,15 @@ impl Plugin for CloudPlugin {
             MaterialPlugin::<CloudMaterial>::default(),
             ExtractResourcePlugin::<CloudMarch>::default(),
         ))
-        .add_systems(Startup, spawn_clouds)
+        // before the Startup systems that build materials from the cloud layer
+        .add_systems(PreStartup, spawn_clouds)
         // once the camera's spawned
         .add_systems(PostStartup, spawn_cloud_dome)
         .add_systems(Update, fit_cloud_target)
-        .add_systems(PostUpdate, aim_cloud_march.after(TransformSystems::Propagate));
+        .add_systems(
+            PostUpdate,
+            aim_cloud_march.after(TransformSystems::Propagate),
+        );
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .add_systems(RenderStartup, init_cloud_pipeline)
@@ -192,17 +196,6 @@ struct CloudView {
 const HISTORY_BLEND: f32 = 0.12;
 const HISTORY_BLEND_PER_BLOCK: f32 = 0.02;
 
-/// The cloud pattern shared by the cloud, water and land shaders, see `cloud_bindings.wesl`.
-#[derive(Resource, Clone)]
-pub struct CloudLayer {
-    /// How much cloud is over each cell, 0 where clear to 1 where thickest.
-    pub pattern: Handle<Image>,
-    /// The middle of the layer's height, the pattern's width in blocks, and the wind.
-    pub layer: Vec4,
-    /// The clouds as seen, unlit, at a fraction of the screen's resolution, see `CloudMarch`.
-    pub target: Handle<Image>,
-}
-
 // Where cell (`x`, `z`) lies round a torus in 4D, for noise with features about `cells` across
 // that wraps at the pattern's edges without a seam.
 fn torus(x: usize, z: usize, cells: f64) -> [f64; 4] {
@@ -214,12 +207,15 @@ fn torus(x: usize, z: usize, cells: f64) -> [f64; 4] {
 
 /// Cloud cover per cell, row-major [z][x]: clear over `1 - CLOUDY` of the sky, rising evenly to 1 over the rest.
 fn cloud_pattern(seed: u32) -> Vec<f32> {
-    let noise = Fbm::<Perlin>::new(seed).set_octaves(3).set_persistence(0.45);
+    let noise = Fbm::<Perlin>::new(seed)
+        .set_octaves(3)
+        .set_persistence(0.45);
     let clusters = Perlin::new(seed.wrapping_add(1));
     let values: Vec<f64> = (0..PATTERN * PATTERN)
         .map(|i| {
             let (x, z) = (i % PATTERN, i / PATTERN);
-            noise.get(torus(x, z, CLOUD_CELLS)) + CLUSTERING * clusters.get(torus(x, z, CLUSTER_CELLS))
+            noise.get(torus(x, z, CLOUD_CELLS))
+                + CLUSTERING * clusters.get(torus(x, z, CLUSTER_CELLS))
         })
         .collect();
     let mut order: Vec<usize> = (0..values.len()).collect();
@@ -255,7 +251,7 @@ fn pattern_image(cover: &[f32]) -> Image {
     image
 }
 
-pub fn spawn_clouds(
+fn spawn_clouds(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     curvature: Res<Curvature>,
@@ -322,7 +318,10 @@ fn fit_cloud_target(
         return;
     };
     let size = target_size(window.physical_size());
-    if images.get(&march.target).is_none_or(|image| image.size() == size) {
+    if images
+        .get(&march.target)
+        .is_none_or(|image| image.size() == size)
+    {
         return;
     }
     for handle in [&march.target, &march.history] {
@@ -463,8 +462,10 @@ fn march_clouds(
         return;
     };
     let device = ctx.render_device().clone();
-    let (Some(layer), Some(view)) = (uniform(&device, &march.layer), uniform(&device, &march.view))
-    else {
+    let (Some(layer), Some(view)) = (
+        uniform(&device, &march.layer),
+        uniform(&device, &march.view),
+    ) else {
         return;
     };
     let bind_group = device.create_bind_group(
@@ -482,19 +483,21 @@ fn march_clouds(
     );
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
-    let mut pass = ctx.command_encoder().begin_render_pass(&RenderPassDescriptor {
-        label: Some("cloud_march"),
-        color_attachments: &[Some(RenderPassColorAttachment {
-            view: &target.texture_view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: Operations::default(),
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
+    let mut pass = ctx
+        .command_encoder()
+        .begin_render_pass(&RenderPassDescriptor {
+            label: Some("cloud_march"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &target.texture_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations::default(),
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
     let span = diagnostics.pass_span(&mut pass, "cloud_march");
     pass.set_pipeline(render_pipeline);
     pass.set_bind_group(0, &bind_group, &[]);

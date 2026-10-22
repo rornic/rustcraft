@@ -35,7 +35,7 @@ pub(super) const LOD_APPLY_TIME_BUDGET: Duration = Duration::from_millis(2);
 // where Bevy batches opaque ones into a few draws, and water this far out is nearly opaque anyway.
 pub const SOLID_WATER_LEVEL: u8 = 2;
 
-pub fn load_lods(
+pub(crate) fn load_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
     mut nodes_query: Query<(Entity, &LodNode, &mut GenerateLodMesh)>,
@@ -94,7 +94,7 @@ pub fn load_lods(
     }
 }
 
-pub fn retire_lods(
+pub(crate) fn retire_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
     time: Res<Time>,
@@ -140,7 +140,7 @@ pub fn retire_lods(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn refresh_lod_visibility(
+pub(crate) fn refresh_lod_visibility(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
     time: Res<Time>,

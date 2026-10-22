@@ -55,7 +55,7 @@ pub struct LodSelection {
     changed: Vec<LodKey>,
 }
 
-pub fn update_lod_selection(
+pub(crate) fn update_lod_selection(
     mut lods: ResMut<LodLoader>,
     chunks: ChunkStates,
     pending_lods: Query<(), With<GenerateLodMesh>>,

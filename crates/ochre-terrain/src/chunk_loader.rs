@@ -134,7 +134,7 @@ impl ChunkLoader {
 }
 
 #[allow(clippy::type_complexity)]
-pub fn gather_chunks(
+pub(crate) fn gather_chunks(
     mut commands: Commands,
     mut chunk_loader: ResMut<ChunkLoader>,
     world: Res<World>,
@@ -171,7 +171,7 @@ pub fn gather_chunks(
     }
 }
 
-pub fn generate_chunks(
+pub(crate) fn generate_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
     mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkData)>,
@@ -188,7 +188,7 @@ pub fn generate_chunks(
 }
 
 #[allow(clippy::type_complexity)]
-pub fn mark_chunks(
+pub(crate) fn mark_chunks(
     mut commands: Commands,
     world: Res<World>,
     chunk_loader: Res<ChunkLoader>,
@@ -217,7 +217,7 @@ pub fn mark_chunks(
     }
 }
 
-pub fn load_chunks(
+pub(crate) fn load_chunks(
     mut commands: Commands,
     world: Res<World>,
     mut chunks_query: Query<(Entity, &Chunk, &mut GenerateChunkMesh)>,
@@ -274,7 +274,7 @@ pub fn load_chunks(
 }
 
 #[allow(clippy::type_complexity)]
-pub fn unload_chunks(
+pub(crate) fn unload_chunks(
     mut commands: Commands,
     mut world: ResMut<World>,
     mut chunk_loader: ResMut<ChunkLoader>,

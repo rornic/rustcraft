@@ -40,7 +40,7 @@ pub struct Curve {
 impl Curve {
     /// The world whose horizon from the top of the world is `chunks` away. From sea level
     /// its horizon is half as far, see `horizon_distance`.
-    pub const fn seen_from_the_top_to(chunks: f32) -> Self {
+    pub(crate) const fn seen_from_the_top_to(chunks: f32) -> Self {
         let blocks = chunks * CHUNK_SIZE as f32;
         // solves `horizon_distance` at the top of the world for the radius
         Self {
@@ -72,7 +72,7 @@ impl Curve {
 
     /// How far below the camera's flat horizon land `distance` blocks away is drawn, seen
     /// from `height` blocks up: a sphere's drop, while it's still eased in.
-    pub fn drop_at(self, distance: f32, height: f32) -> f32 {
+    pub(crate) fn drop_at(self, distance: f32, height: f32) -> f32 {
         distance * distance * self.bend_at(height)
     }
 

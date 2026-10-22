@@ -49,7 +49,7 @@ pub(super) fn freeboard(width: f32) -> f32 {
 }
 
 /// How deep, in blocks, a river `width` blocks across is.
-pub fn depth_for_width(width: f32) -> f32 {
+pub(crate) fn depth_for_width(width: f32) -> f32 {
     // depth grows with width the way `river_depth` does with `river_width`, near enough
     (0.6 + (width - 1.2).max(0.0) / 3.0).min(12.0)
 }
@@ -442,9 +442,9 @@ impl WorldMap {
             order.push(n);
             let stretch = stretches[n];
             let mut level = envelope[n];
-            for k in 0..=PROFILE_POINTS {
-                level = level.min(caps[n][k]);
-                profiles.data[n][k] = level;
+            for (slot, cap) in profiles.data[n].iter_mut().zip(&caps[n]) {
+                level = level.min(*cap);
+                *slot = level;
             }
             profiles.index[stretch.from] = n as u32;
             if let Some(&next) = at.get(&stretch.to) {

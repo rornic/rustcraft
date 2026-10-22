@@ -232,7 +232,7 @@ impl Tree {
     // the leaves win, or a whole cell's width of trunk would stand in for the crown. Cells this
     // wide or wider hold leaves if a quarter of them would be, or small crowns would fall between
     // cell centres, and from `THIN_TRUNK_CELL` they leave out the trunk.
-    pub fn block_in_cell(&self, min: I64Vec3, size: i64) -> Option<BlockType> {
+    pub(crate) fn block_in_cell(&self, min: I64Vec3, size: i64) -> Option<BlockType> {
         let overlaps = |lo: i64, from: i64, to: i64| lo < to && lo + size > from;
         let width = self.width();
         let trunk = overlaps(min.x, self.base.x, self.base.x + width)
@@ -475,7 +475,7 @@ pub fn grows_into(existing: BlockType, block: BlockType) -> bool {
 /// `warmth` warm up there. Pines in the cold, and on a mountain's upper slopes even in the tropics;
 /// the hot biomes keep their broadleaf trees however high the ground or cool the water's edge, so no
 /// savanna has pines in it.
-pub fn tree_kind(biome: Option<&str>, above_sea: i64, warmth: f32) -> TreeKind {
+pub(crate) fn tree_kind(biome: Option<&str>, above_sea: i64, warmth: f32) -> TreeKind {
     let hot = matches!(biome, Some("savanna" | "jungle" | "desert"));
     let cold = matches!(biome, Some("taiga" | "tundra" | "glacier"));
     let alpine = above_sea >= ALPINE_PINES_ABOVE && biome == Some("mountain");

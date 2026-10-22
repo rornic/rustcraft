@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::chunk::CHUNK_SIZE;
 use crate::lod::LodLayout;
 
 #[derive(Deserialize, Clone, Copy)]
@@ -45,13 +46,18 @@ pub struct DebugSettings {
 
 impl RendererSettings {
     /// The renderer's mesh allocator, with these slab limits in place of Bevy's 512 MB and 1.5x.
-    pub fn mesh_allocator(&self) -> bevy::render::mesh::allocator::MeshAllocatorSettings {
+    pub(crate) fn mesh_allocator(&self) -> bevy::render::mesh::allocator::MeshAllocatorSettings {
         let mut settings = bevy::render::mesh::allocator::MeshAllocatorSettings::default();
         settings.max_slab_size = self.mesh_slab_mb.max(1) * 1024 * 1024;
         // a buffer is never too small to hold the biggest thing that goes in a shared one
         settings.large_threshold = settings.large_threshold.min(settings.max_slab_size / 2);
         settings.growth_factor = self.mesh_slab_growth.max(1.05);
         settings
+    }
+
+    /// Where the fog ends and the land with it, in blocks.
+    pub fn fog_distance(&self) -> f32 {
+        self.lod_layout().render_distance() * CHUNK_SIZE as f32
     }
 
     pub fn lod_layout(&self) -> LodLayout {

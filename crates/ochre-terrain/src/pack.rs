@@ -181,7 +181,7 @@ mod tests {
                 let after = decoded_positions(&packed);
                 for (i, (a, b)) in before.iter().zip(&after).enumerate() {
                     let error = (0..3).map(|k| (a[k] - b[k]).abs()).fold(0.0, f32::max);
-                    if !(error <= worst) {
+                    if error.is_nan() || error > worst {
                         worst = error;
                         worst_at =
                             format!("group ({gx}, {gy}, {gz}) vertex {i}: {a:?} became {b:?}");

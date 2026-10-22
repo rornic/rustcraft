@@ -1,13 +1,12 @@
 use std::error::Error;
 
-use bevy::ecs::component::Component;
 use serde::Deserialize;
 
 pub use ochre_terrain::settings::{DebugSettings, RendererSettings};
 use ochre_world::worldmap::WorldConfig;
 
 /// Everything `settings.toml` holds, each part read by the crate it configures.
-#[derive(Default, Deserialize, Clone, Copy, Component)]
+#[derive(Default, Deserialize, Clone, Copy)]
 pub struct Settings {
     pub renderer: RendererSettings,
     #[serde(default)]

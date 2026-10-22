@@ -11,11 +11,12 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use ochre_engine::settings::{DebugSettings, RendererSettings, Settings};
 use ochre_terrain::chunk_loader::{Chunk, GenerateChunkData};
-use ochre_terrain::fade::FULLY_VISIBLE;
 use ochre_terrain::group::ChunkGroup;
 use ochre_terrain::horizon::render_distance_at;
 use ochre_terrain::lod::{GenerateLodMesh, LodLoader, LodNode};
-use ochre_terrain::material::{ChunkMaterial, TerrainMaterials, WaterMaterial};
+use ochre_terrain::material::{
+    ChunkMaterial, ShaderInputs, SprayMaterial, TerrainAssets, WaterMaterial,
+};
 use ochre_terrain::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
 use ochre_world::worldmap::WorldConfig;
 
@@ -31,12 +32,7 @@ struct FlightCamera;
 #[derive(Resource)]
 struct Renderer(RendererSettings, WorldConfig);
 
-fn setup(
-    mut commands: Commands,
-    renderer: Res<Renderer>,
-    mut chunk_materials: ResMut<Assets<ChunkMaterial>>,
-    mut water_materials: ResMut<Assets<WaterMaterial>>,
-) {
+fn setup(mut commands: Commands, renderer: Res<Renderer>, mut assets: TerrainAssets) {
     let world_config = renderer.1;
     let renderer = &renderer.0;
     let world = ochre_world::load_world(renderer.lod_layout().region_reach() as u32, world_config);
@@ -52,41 +48,14 @@ fn setup(
         ))
         .id();
     commands.entity(player).add_children(&[camera]);
-    let chunk = chunk_materials.add(ChunkMaterial {
-        color: LinearRgba::WHITE,
-        texture: None,
-        fade: FULLY_VISIBLE,
-        cloud_pattern: Default::default(),
-        cloud_layer: Default::default(),
-        curvature: Default::default(),
-        debug: DebugSettings::default(),
-    });
-    let water_material = |solid| WaterMaterial {
-        color: LinearRgba::WHITE,
-        texture: None,
-        fade: FULLY_VISIBLE,
-        cloud_pattern: Default::default(),
-        cloud_layer: Default::default(),
-        cloud_target: Default::default(),
-        see_through: Default::default(),
-        curvature: Default::default(),
-        solid,
-    };
-    let water = water_materials.add(water_material(false));
-    let solid_water = water_materials.add(water_material(true));
+    // nothing's drawn, so the shaders get no clouds, curvature or atlas
     insert_terrain_resources(
         &mut commands,
         renderer,
-        &DebugSettings::default(),
+        DebugSettings::default(),
         height,
-        TerrainMaterials {
-            chunk,
-            water,
-            solid_water,
-            spray: Default::default(),
-        },
-        &mut chunk_materials,
-        &mut water_materials,
+        &ShaderInputs::default(),
+        &mut assets,
     );
 }
 
@@ -318,6 +287,7 @@ fn main() {
     .init_asset::<Image>()
     .init_asset::<ChunkMaterial>()
     .init_asset::<WaterMaterial>()
+    .init_asset::<SprayMaterial>()
     .add_systems(Startup, setup);
     app.update();
 

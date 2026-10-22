@@ -200,7 +200,7 @@ pub fn fade_out_and_despawn(commands: &mut Commands, entity: Entity, visible: bo
     }
 }
 
-pub fn apply_fades(
+pub(crate) fn apply_fades(
     mut commands: Commands,
     time: Res<Time>,
     materials: Res<FadeMaterials>,
