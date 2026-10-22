@@ -125,7 +125,7 @@ pub fn insert_terrain_resources(
     assets: &mut TerrainAssets,
 ) {
     let layout = renderer.lod_layout();
-    let materials = TerrainMaterials::new(layout, debug, inputs, assets);
+    let materials = TerrainMaterials::new(debug, inputs, assets);
     commands.insert_resource(FadeMaterials::new(
         renderer.lod_fade_seconds,
         &materials,

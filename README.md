@@ -6,7 +6,9 @@ Another Minecraft clone, originally written using [specs](https://github.com/ame
 cargo run --release --example sandbox
 ```
 
-![Image of rustcraft](images/readme.jpg)
+<video src="images/flyover.mp4" controls autoplay loop muted playsinline width="100%">
+  <a href="images/flyover.mp4">Watch a flyover of an Ochre world</a>
+</video>
 
 ## Planned work
 

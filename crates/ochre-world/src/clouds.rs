@@ -194,7 +194,7 @@ struct CloudView {
 
 // Share of each frame kept over the history when still, and more per block moved as clouds shift against the sky.
 const HISTORY_BLEND: f32 = 0.12;
-const HISTORY_BLEND_PER_BLOCK: f32 = 0.02;
+const HISTORY_BLEND_PER_BLOCK: f32 = 0.08;
 
 // Where cell (`x`, `z`) lies round a torus in 4D, for noise with features about `cells` across
 // that wraps at the pattern's edges without a seam.

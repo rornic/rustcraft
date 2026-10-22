@@ -123,9 +123,8 @@ pub struct Sun;
 #[derive(Component)]
 struct SunShadows(Quat);
 
-// The sun's shadows turn once every this many ticks, sliding over the last this share of each.
-const SHADOW_STEP_TICKS: u64 = 2 * TICKS_PER_SECOND;
-const SHADOW_SLIDE: f32 = 0.15;
+// The sun's shadows turn every tick, the finest the clock goes, sliding over the last this share of each.
+const SHADOW_SLIDE: f32 = 0.5;
 
 /// On the moon, see `move_sky`. Without shadows, so Bevy puts it before the sun among the
 /// lights, matching `MOON_LIGHT` and `SUN_LIGHT` in `sky.wesl`.
@@ -217,12 +216,10 @@ fn move_sky(
     }
 }
 
-/// The day fraction the sun's shadows follow: held at the last step, then slid to the next at its end.
+/// The day fraction the sun's shadows follow: held at the last tick, then slid to the next at its end.
 fn shadow_days(ticks: u64, carry: f32) -> f32 {
-    let step = ticks - ticks % SHADOW_STEP_TICKS;
-    let into = ((ticks - step) as f32 + carry) / SHADOW_STEP_TICKS as f32;
-    let slid = smoothstep(1.0 - SHADOW_SLIDE, 1.0, into);
-    ((step % DAY_TICKS) as f32 + slid * SHADOW_STEP_TICKS as f32) / DAY_TICKS as f32
+    let slid = smoothstep(1.0 - SHADOW_SLIDE, 1.0, carry);
+    ((ticks % DAY_TICKS) as f32 + slid) / DAY_TICKS as f32
 }
 
 /// Turns the sun to `SunShadows` while its shadow maps fit, as turning them every frame makes the texels crawl.
@@ -363,14 +360,13 @@ impl Plugin for SkyPlugin {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_shadows_hold_then_slide_on_to_the_next_step() {
-        let step = super::SHADOW_STEP_TICKS;
+    fn test_shadows_hold_then_slide_on_to_the_next_tick() {
         let day = super::DAY_TICKS as f32;
-        let start = super::shadow_days(3 * step, 0.0);
-        assert_eq!(start, super::shadow_days(3 * step + step / 2, 0.3));
-        let end = super::shadow_days(4 * step - 1, 0.999);
-        assert!((end - 4.0 * step as f32 / day).abs() < 1e-5, "{end}");
-        assert!((super::shadow_days(4 * step, 0.0) - end).abs() < 1e-5);
+        let start = super::shadow_days(3, 0.0);
+        assert_eq!(start, super::shadow_days(3, 0.3));
+        let end = super::shadow_days(3, 0.999);
+        assert!((end - 4.0 / day).abs() < 1e-5, "{end}");
+        assert!((super::shadow_days(4, 0.0) - end).abs() < 1e-5);
     }
 
     use super::*;
