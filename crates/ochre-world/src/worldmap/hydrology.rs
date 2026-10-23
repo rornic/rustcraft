@@ -46,6 +46,8 @@ const DRAIN_ROUNDS: usize = 4;
 const DRAIN_FALL: f32 = 0.01;
 // Land under the sea's level but cut off from it is this much over it once drained or filled.
 const LAND_ABOVE_SEA: f32 = 0.3;
+// The shallowest a lake's cells are under its water, a whole block.
+const SHALLOWEST: f32 = 1.5;
 // How far over the sea's level a basin of ground under it, walled off from the sea, holds water at least.
 const INLAND_SEA_ABOVE_SEA: f32 = 1.0;
 const MAX_RIVER_DEPTH: f32 = 12.0;
@@ -580,6 +582,11 @@ pub fn run(map: &mut WorldMap, carve: bool) {
             if height[i] < level[b] {
                 kind[i] = WaterCell::Lake as u8;
                 surface[i] = level[b];
+                // a lake's water is drawn a whole block, under its level: a bed between the two would
+                // stand out of it, parting the lake into pools where its cells only just hold water
+                if carve {
+                    map.height[i] = map.height[i].min(level[b].floor() - SHALLOWEST);
+                }
             }
         }
     }

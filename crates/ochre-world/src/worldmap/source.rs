@@ -26,6 +26,11 @@ const SHORE_SMOOTH: f64 = 5.0;
 const HOLD: f64 = 1.5;
 const CALM: f64 = 8.0;
 
+// How far over still water's level, in blocks, ground surrounded by its cells is still under it: the water
+// is drawn a whole block, under the level its cells were found by, so ground just over that would stand
+// out of it as strips, parting it into pools.
+const DROWN: f64 = 2.0;
+
 // A river within this many blocks of still water's level is joined to it, as one running into or out of
 // it is: their waters meet and the still water's is the one inside its shore.
 const JOIN: f64 = 1.5;
@@ -85,6 +90,20 @@ struct Still {
     // how much a point lies within a cell of this water's cells, 0..1, smooth across cells: 1 wherever
     // the water can stand, falling to nothing a cell past that, so what it does to the ground fades out
     near: f64,
+    // how much of the four cells round a point are this water's, 0..1, smooth across cells
+    cover: f64,
+}
+
+impl Still {
+    // Whether a point whose smooth ground is `base` is under this water: under its level, or up to
+    // `DROWN` over it where all four cells round it are the water's, which no rim can be among.
+    fn under(&self, base: f64) -> bool {
+        base < self.level + DROWN * smoothstep(0.5, 1.0, self.cover)
+    }
+
+    fn is(&self, other: &Still) -> bool {
+        self.level == other.level && self.kind == other.kind
+    }
 }
 
 // `ground` held over still water `w` where the map's smooth ground `base` is over its level, by as much
@@ -104,7 +123,8 @@ fn hold_over(ground: f64, base: f64, w: Still) -> f64 {
 fn contain(ground: f64, base: f64, level: f64, under: bool) -> f64 {
     let t = (base - level).abs().min(HOLD);
     if under {
-        ground.min(level - t.max(0.05))
+        // at least half a block under, so it rounds to the block under the water's
+        ground.min(level - t.max(0.55))
     } else {
         ground.max(level + t)
     }
@@ -229,7 +249,7 @@ impl WorldTerrain {
                 self.still_round(x, z)
                     .into_iter()
                     .flatten()
-                    .any(|w| base < w.level)
+                    .any(|w| w.under(base))
             },
         )
     }
@@ -245,6 +265,8 @@ impl WorldTerrain {
         let mut still: [Option<Still>; 4] = [None; 4];
         // which of the four cells round the point are within a cell of each water's cells
         let mut corners = [[false; 4]; 4];
+        // and which are each water's own cells
+        let mut owns = [[false; 4]; 4];
         for dz in 1 - reach..=reach {
             for dx in 1 - reach..=reach {
                 let i = map.index(
@@ -268,17 +290,22 @@ impl WorldTerrain {
                     level,
                     kind,
                     near: 0.0,
+                    cover: 0.0,
                 });
                 for (c, (a, b)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
                     corners[slot][c] |= (dx - a).abs() <= 1 && (dz - b).abs() <= 1;
+                    owns[slot][c] |= dx == a && dz == b;
                 }
             }
         }
-        for (w, near) in still.iter_mut().zip(corners) {
+        let blend = |bits: [bool; 4]| {
+            let at = |c: usize| if bits[c] { 1.0 } else { 0.0 };
+            (at(0) * (1.0 - fx) + at(1) * fx) * (1.0 - fz) + (at(2) * (1.0 - fx) + at(3) * fx) * fz
+        };
+        for ((w, near), own) in still.iter_mut().zip(corners).zip(owns) {
             if let Some(w) = w {
-                let at = |c: usize| if near[c] { 1.0 } else { 0.0 };
-                w.near = (at(0) * (1.0 - fx) + at(1) * fx) * (1.0 - fz)
-                    + (at(2) * (1.0 - fx) + at(3) * fx) * fz;
+                w.near = blend(near);
+                w.cover = blend(own);
             }
         }
         still
@@ -325,13 +352,15 @@ impl WorldTerrain {
     ) -> (f64, Option<Still>) {
         let mut wet = None;
         for &w in round.iter().flatten() {
-            if base < w.level {
-                ground = contain(ground, base, w.level, true);
+            if w.under(base) {
+                ground = contain(ground, base.min(w.level), w.level, true);
                 wet = Some(w);
             }
         }
         for &w in by.iter().flatten() {
-            ground = hold_over(ground, base, w);
+            if !wet.is_some_and(|v: Still| v.is(&w)) {
+                ground = hold_over(ground, base, w);
+            }
         }
         // inland of the sea the ground never sinks under it, or it would flood as a pond cut off from it
         if wet.is_none() {
@@ -512,7 +541,7 @@ impl TerrainSource for WorldTerrain {
                 1.0 - smoothstep(edge, edge + VALLEY_WIDTH, r.distance as f64)
             })
             .fold(0.0, f64::max);
-        let under_still = still.into_iter().flatten().any(|w| base < w.level);
+        let under_still = still.into_iter().flatten().any(|w| w.under(base));
         if !under_still && valley > 0.0 {
             ground += (self.valley_floor(x, z, base) - ground) * valley;
         }
@@ -522,8 +551,23 @@ impl TerrainSource for WorldTerrain {
         // the still water's shore is the water's edge there. One over the still water it passes is cut
         // and banked as ever, its banks keeping the two apart.
         let shaped = |r: &RiverHit| wet.is_none_or(|w| r.surface as f64 > w.level + JOIN);
+        // near still water it's joined to, a river builds no banks: the two meet at one level, and the
+        // still water's shore holds both, where banks would stand between them as a strip of land
+        let joined_by = |r: &RiverHit| {
+            by.iter()
+                .flatten()
+                .any(|w| (r.surface as f64 - w.level).abs() <= JOIN)
+        };
         if let Some(river) = rivers[0].filter(shaped) {
-            ground = channel(ground as f32, river) as f64;
+            ground = if joined_by(&river) {
+                if river.distance < river.width / 2.0 {
+                    ground.min(bed_height(river) as f64)
+                } else {
+                    ground
+                }
+            } else {
+                channel(ground as f32, river) as f64
+            };
         }
         // a river the nearest one meets still has its bed cut where its water is, so a stream is
         // not cut off short of the bank of the river it runs into, but not where it lies well under the
@@ -544,9 +588,13 @@ impl TerrainSource for WorldTerrain {
         // bends past another, the nearer's banks would cut the farther's from under its water
         if let Some(other) = rivers[1].filter(shaped) {
             let out = other.distance - other.width / 2.0;
-            let joined =
-                rivers[0].is_some_and(|main| (main.surface - other.surface).abs() <= JOIN as f32);
-            if !joined && (0.0..HOLD as f32).contains(&out) {
+            // and only on dry ground: inside the nearest's water, as where a stream runs into a river,
+            // the other's banks would stand up through it as a strip of land
+            let joined_or_under = rivers[0].is_some_and(|main| {
+                (main.surface - other.surface).abs() <= JOIN as f32
+                    || main.distance < main.width / 2.0
+            });
+            if !joined_or_under && (0.0..HOLD as f32).contains(&out) {
                 ground = ground.max((other.surface + out) as f64);
             }
         }
@@ -558,7 +606,9 @@ impl TerrainSource for WorldTerrain {
             .any(|r| r.distance < r.width / 2.0)
         {
             for &w in by.iter().flatten() {
-                ground = hold_over(ground, base, w);
+                if !wet.is_some_and(|v: Still| v.is(&w)) {
+                    ground = hold_over(ground, base, w);
+                }
             }
         }
         // a river rises in a bowl, held in a rim of ground over its level, but where the river runs out
@@ -586,8 +636,7 @@ impl TerrainSource for WorldTerrain {
         // a river by still water it runs into never stands over the still water's whole block by much,
         // or it floods the shore beside it over that level
         let by_still = |surface: f32| {
-            still
-                .into_iter()
+            by.iter()
                 .flatten()
                 .find(|w| (w.level..w.level + 2.0).contains(&(surface as f64)))
                 .map_or(surface, |w| w.level as f32)

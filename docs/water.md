@@ -50,7 +50,9 @@ The last run, in order:
 5. Basins whose lake doesn't fill them (closed, or held) are rerouted by `reroute`: a flood from the
    lake outward over the basin, so the rivers in it run down to the lake, not out over the brim the
    first flood found. Flow is gathered again over the new routing, with lakes as sinks.
-6. Sea cells are the open sea; lake cells are each basin's cells under its level; rivers start where
+6. Sea cells are the open sea; lake cells are each basin's cells under its level, their beds dug at least
+   `SHALLOWEST` under the whole block their water is drawn at, so every cell the map calls lake is lake
+   in blocks too (otherwise a lake whose cells only just hold water comes apart into pools); rivers start where
    enough water drains and the ground is steep enough, and are carved into the ground as before, but
    never under the level of a lake or the sea beside the cell (`still_beside`): a carved cell under a
    lake's level would let the lake's water into its whole square.
@@ -74,7 +76,9 @@ The terrain crate reads one `TerrainSample` per column (`ground`, `water_surface
 every cell beside (eight ways) a basin's cell is either in the basin or at least as high as its brim,
 or the water would have spilled there. So among the four cells round any point near a lake, every
 non-lake corner is at or over the lake's level, and the water's edge always falls inside the four.
-Where the smooth ground (`map.height_at`, bicubic) is under the level, the point is in the lake.
+Where the smooth ground (`map.height_at`, bicubic) is under the level, the point is in the lake. Where all
+four cells round it are the water's, which no rim can be among, it's in the lake up to `DROWN` over the
+level too, fading as fewer of the four are, so low strips between a lake's cells go under.
 The shore is the smooth ground's contour at the level: no cell's side ever shows, and no water ever
 stands past a rim's crest on ground falling away beyond it. The same holds for the sea.
 
@@ -104,12 +108,15 @@ edge, as still water's shore is.
 
 Where a river meets still water:
 - **joined**: its level within `JOIN` of the still water's, as at a mouth or outlet. Inside the
-  still water the river is left out; the still water's shore is the edge there.
+  still water the river is left out; the still water's shore is the edge there. Near it the river
+  cuts its bed but builds no banks, and its water takes the still water's level, so the two meet at
+  one height instead of being parted by a strip of bank.
 - **under** the still water: the still water covers it.
 - **over** it, passing by: it is cut and banked as ever, and its banks keep the two apart.
 
 The same barrier holds between two rivers: the second river's bank holds too unless the two are
-joined, and a second river's bed isn't cut where it would sink the first's bank under the first's
+joined or the point is in the nearest's water (where a stream runs into a river, its banks would
+otherwise stand up through the river as strips), and a second river's bed isn't cut where it would sink the first's bank under the first's
 water. This is the rule Minecraft's aquifers use: wherever two waters at different levels meet,
 ground stands between them.
 
