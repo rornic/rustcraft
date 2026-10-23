@@ -4,8 +4,8 @@
 
 use super::{WaterCell, WorldMap, NEIGHBOURS, NO_FLOW};
 
-// Cells searched round a point for river segments: a segment runs one cell, and a wide river
-// reaches further than a cell either side of its line.
+// Cells searched round a point for river segments at least: a segment runs one cell, and a wide river
+// reaches further than a cell either side of its line, see `WorldMap::river_search`.
 const SEARCH: i64 = 3;
 // Straight pieces a river's curve between two cells is measured as.
 const CURVE_PIECES: usize = 8;
@@ -98,6 +98,8 @@ pub struct RiverProfiles {
     // how far along the stretch, 0..1, a river that runs into a lake reaches: its curve goes on
     // past the shore, over land, which would leave a stub of channel there
     ends: Vec<f32>,
+    // cells round a point its rivers are looked for in, see `WorldMap::river_search`
+    search: i64,
 }
 
 impl RiverProfiles {
@@ -117,6 +119,15 @@ impl RiverProfiles {
 }
 
 impl WorldMap {
+    // Cells round a point to look for rivers in: as far as the widest river's banks and valley reach from
+    // a stretch, which runs a cell on from the one it starts in, or its banks end at the search's edge.
+    fn river_search(&self) -> i64 {
+        let widest = self.river_width.iter().copied().fold(0.0, f32::max);
+        SEARCH.max(
+            (super::source::river_reach(widest) / self.config.map_cell as f32).ceil() as i64 + 2,
+        )
+    }
+
     // The cell a river cell drains into, if it has one.
     pub(super) fn downstream(&self, cx: usize, cz: usize) -> Option<(usize, usize)> {
         match self.down[self.index(cx, cz)] {
@@ -275,6 +286,7 @@ impl WorldMap {
             index: vec![RiverProfiles::NONE; self.height.len()],
             data: Vec::new(),
             ends: Vec::new(),
+            search: self.river_search(),
         };
         for i in 0..self.height.len() {
             let Some(stretch) = self.stretch(tangents, i) else {
@@ -413,6 +425,7 @@ impl WorldMap {
             index: vec![RiverProfiles::NONE; self.height.len()],
             data: vec![[0.0; PROFILE_POINTS + 1]; stretches.len()],
             ends: vec![1.0; stretches.len()],
+            search: self.river_search(),
         };
         // a river into a lake or the sea ends where the land last gives way to the water, with a
         // rounded end, and goes no further over the land beside it: a pocket of low ground inland of
@@ -531,15 +544,27 @@ impl WorldMap {
         let (u, v) = self.to_cell(x, z);
         let (px, pz) = (u.round() as i64, v.round() as i64);
         let max = self.dim() as i64 - 1;
+        let search = profiles.search.max(SEARCH);
         // each stretch near the point, as (margin, hit, the cell it starts in, the cell it runs to)
         let mut found: Vec<(f32, RiverHit, usize, usize)> = Vec::new();
-        for cz in (pz - SEARCH).max(0)..=(pz + SEARCH).min(max) {
-            for cx in (px - SEARCH).max(0)..=(px + SEARCH).min(max) {
+        for cz in (pz - search).max(0)..=(pz + search).min(max) {
+            for cx in (px - search).max(0)..=(px + search).min(max) {
                 let i = self.index(cx as usize, cz as usize);
+                if profiles.index[i] == RiverProfiles::NONE {
+                    continue;
+                }
                 let Some(stretch) = self.stretch(tangents, i) else {
                     continue;
                 };
-                if profiles.index[i] == RiverProfiles::NONE {
+                // too far from the line between its cells for any of its curve, a cell off that at most, to reach the point
+                let reach = super::source::river_reach(stretch.width.max(stretch.end_width)) as f64
+                    + self.config.map_cell as f64;
+                let (ex, ez) = (stretch.b.0 - stretch.a.0, stretch.b.1 - stretch.a.1);
+                let f = (((x - stretch.a.0) * ex + (z - stretch.a.1) * ez)
+                    / (ex * ex + ez * ez).max(1e-9))
+                .clamp(0.0, 1.0);
+                let (qx, qz) = (stretch.a.0 + ex * f - x, stretch.a.1 + ez * f - z);
+                if qx * qx + qz * qz > reach * reach {
                     continue;
                 }
                 // the curve as short straight pieces, and the nearest point on them

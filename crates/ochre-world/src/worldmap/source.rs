@@ -99,6 +99,14 @@ fn bank_width(river: RiverHit) -> f32 {
     2.0 + river.width * 0.25
 }
 
+/// How far from its line a river `width` blocks across shapes the ground: its water, banks and valley.
+pub(super) fn river_reach(width: f32) -> f32 {
+    width * 0.75 + 2.0 + VALLEY_WIDTH as f32
+}
+
+// The most `meander` moves a point, in blocks.
+const MEANDER_REACH: f32 = 34.0 + 9.0;
+
 // How far a river's line is moved off its straight run between cell centres at a point: slow
 // bends a few hundred blocks long, with smaller wiggles on them.
 fn meander(seed: u32, x: f64, z: f64) -> (f64, f64) {
@@ -121,8 +129,12 @@ fn near_water(map: &WorldMap) -> Vec<bool> {
             if map.river_width[i] <= 0.0 && map.water_kind[i] != 2 {
                 continue;
             }
-            for z in (cz - NEAR).max(0)..=(cz + NEAR).min(dim - 1) {
-                for x in (cx - NEAR).max(0)..=(cx + NEAR).min(dim - 1) {
+            // a wide river's banks and valley reach further than `NEAR`, or they'd end at the cells' edges
+            let reach =
+                (river_reach(map.river_width[i]) + MEANDER_REACH) / map.config.map_cell as f32;
+            let radius = NEAR.max(reach.ceil() as i64 + 1);
+            for z in (cz - radius).max(0)..=(cz + radius).min(dim - 1) {
+                for x in (cx - radius).max(0)..=(cx + radius).min(dim - 1) {
                     near[(z * dim + x) as usize] = true;
                 }
             }

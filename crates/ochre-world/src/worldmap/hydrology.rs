@@ -538,8 +538,9 @@ pub fn run(map: &mut WorldMap, carve: bool) {
             _ => {}
         }
     }
+    // at that level, not the fill of a basin round it too big to be a lake, which would stand over the land beside it to the cells' edges
     for &i in &walled {
-        surface[i] = surface[i].max(sea + INLAND_SEA_ABOVE_SEA);
+        surface[i] = sea + INLAND_SEA_ABOVE_SEA;
     }
     map.flow = flow;
     map.water_kind = kind;
@@ -590,7 +591,10 @@ mod tests {
         for (i, (&was, &now)) in before.iter().zip(&map.height).enumerate() {
             if map.water_kind[i] == WaterCell::River as u8 {
                 rivers += 1;
-                assert!(now <= was + 1e-3, "river cell {i} raised from {was} to {now}");
+                assert!(
+                    now <= was + 1e-3,
+                    "river cell {i} raised from {was} to {now}"
+                );
             }
         }
         assert!(rivers > 50);
@@ -605,6 +609,54 @@ mod tests {
         let middle = 32 * dim + 32;
         assert_eq!(WaterCell::Lake as u8, map.water_kind[middle]);
         assert!(map.water_surface[middle] > map.height[middle] + 5.0);
+    }
+
+    #[test]
+    fn test_ground_under_the_sea_walled_in_stands_just_over_it() {
+        // a bowl too big and deep to be a lake, its rim too thick to breach, dipping under the sea in its middle
+        let config = WorldConfig {
+            size: 340 * 32,
+            map_cell: 32,
+        };
+        let dim = config.dim();
+        let mut map = WorldMap::empty(1, config);
+        for z in 0..dim {
+            for x in 0..dim {
+                let r = ((x as f32 - 170.0).powi(2) + (z as f32 - 170.0).powi(2)).sqrt();
+                map.height[z * dim + x] = match r {
+                    r if r < 145.0 => 430.0 + r * 0.4,
+                    r if r < 160.0 => 700.0,
+                    r => (700.0 - (r - 160.0) * 30.0).max(400.0),
+                };
+            }
+        }
+        run(&mut map, true);
+        let middle = 170 * dim + 170;
+        assert_eq!(WaterCell::Lake as u8, map.water_kind[middle]);
+        assert_eq!(
+            WATER_LEVEL as f32 + INLAND_SEA_ABOVE_SEA,
+            map.water_surface[middle]
+        );
+        // and no water stands over the dry ground beside it, which would end at the cells' edges, past the scatter the flood sees
+        for i in 0..dim * dim {
+            if map.water_kind[i] != WaterCell::Lake as u8 {
+                continue;
+            }
+            let (x, z) = (i % dim, i / dim);
+            for n in [i - 1, i + 1, i - dim, i + dim] {
+                if x > 0
+                    && x + 1 < dim
+                    && z > 0
+                    && z + 1 < dim
+                    && map.water_kind[n] == WaterCell::None as u8
+                {
+                    assert!(
+                        map.height[n] > map.water_surface[i] - 2.0,
+                        "lake at {i} over dry {n}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
