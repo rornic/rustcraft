@@ -79,7 +79,12 @@ fn audit(
                         c.steps += 1;
                         if marks.len() < 16 && c.steps.is_multiple_of(8) {
                             let (wx, wz) = at(x, z);
-                            marks.push(("step", wx, wz, (p.water_surface - q.water_surface) as f64));
+                            marks.push((
+                                "step",
+                                wx,
+                                wz,
+                                (p.water_surface - q.water_surface) as f64,
+                            ));
                         }
                     }
                 }
@@ -179,8 +184,14 @@ fn main() {
         .collect();
     let kinds = [
         ("rivers", audit(&t, &map, &rivers, &mut marks)),
-        ("lakes", audit(&t, &map, &edge_picks(&map, WaterCell::Lake), &mut marks)),
-        ("coasts", audit(&t, &map, &edge_picks(&map, WaterCell::Ocean), &mut marks)),
+        (
+            "lakes",
+            audit(&t, &map, &edge_picks(&map, WaterCell::Lake), &mut marks),
+        ),
+        (
+            "coasts",
+            audit(&t, &map, &edge_picks(&map, WaterCell::Ocean), &mut marks),
+        ),
     ];
     for m in &marks {
         println!("  {} {:.1} at {:.0},{:.0}", m.0, m.3, m.1, m.2);
@@ -188,7 +199,10 @@ fn main() {
     for w in &worst {
         println!("  deep cut {:.0} at {:.0},{:.0}", w.2, w.0, w.1);
     }
-    println!("AUDIT seed={seed} map uncontained={} deep14={deep} deep25={deep50}", uncontained(&map));
+    println!(
+        "AUDIT seed={seed} map uncontained={} deep14={deep} deep25={deep50}",
+        uncontained(&map)
+    );
     for (name, c) in kinds {
         println!(
             "AUDIT seed={seed} {name} windows={} wet={} walls={} tall_walls={} steps={} dry_near={} raised={}",

@@ -22,7 +22,7 @@ pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 34;
+pub const GENERATOR_VERSION: u32 = 35;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -345,6 +345,7 @@ pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     terrain::raise_peaks(&mut map);
     // ranges get their passes before the rivers settle into the ground they leave
     gameplay::carve_passes(&mut map);
+    hydrology::scatter(&mut map);
     hydrology::run(&mut map, true);
     climate::run(&mut map);
     detail::roughness_layer(&mut map);
@@ -386,6 +387,98 @@ mod tests {
         let half = map.config.half_size() as f64;
         assert!(map.height_at(-half - 500.0, 0.0).is_finite());
         assert!(map.height_at(half + 500.0, 0.0).is_finite());
+    }
+
+    // Still water's cells, each with a cell beside it that isn't of the same water: its shore.
+    fn shore_cells(map: &WorldMap) -> Vec<usize> {
+        let dim = map.dim() as i64;
+        (0..map.height.len())
+            .filter(|&i| {
+                let kind = map.water_kind[i];
+                (kind == WaterCell::Lake as u8 || kind == WaterCell::Ocean as u8)
+                    && NEIGHBOURS.iter().any(|&(dx, dz)| {
+                        let (x, z) = (i as i64 % dim + dx, i as i64 / dim + dz);
+                        (0..dim).contains(&x)
+                            && (0..dim).contains(&z)
+                            && map.water_kind[(z * dim + x) as usize] != kind
+                    })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_no_lake_or_sea_cell_stands_over_the_dry_cells_beside_it() {
+        for seed in [3, 5, 10] {
+            let terrain = test_terrain(seed);
+            let map = terrain.map();
+            let dim = map.dim() as i64;
+            let mut over = Vec::new();
+            for i in shore_cells(map) {
+                for (dx, dz) in NEIGHBOURS {
+                    let (x, z) = (i as i64 % dim + dx, i as i64 / dim + dz);
+                    if !(0..dim).contains(&x) || !(0..dim).contains(&z) {
+                        continue;
+                    }
+                    let n = (z * dim + x) as usize;
+                    if map.water_kind[n] == WaterCell::None as u8
+                        && map.height[n] < map.water_surface[i] - 2.0
+                    {
+                        over.push((i, n, map.water_surface[i], map.height[n]));
+                    }
+                }
+            }
+            assert!(over.is_empty(), "seed {seed}: {over:?}");
+        }
+    }
+
+    #[test]
+    fn test_no_lake_or_sea_stands_as_a_wall_over_the_ground_beside_it() {
+        use ochre_base::terrain_source::{TerrainSource, WaterKind};
+        for seed in [3, 5, 10] {
+            let terrain = test_terrain(seed);
+            let map = terrain.map();
+            let dim = map.dim();
+            let mut walls = Vec::new();
+            for i in shore_cells(map).into_iter().step_by(40) {
+                let (x0, z0) = map.cell_centre(i % dim, i / dim);
+                let (n, step) = (24i64, 2.0);
+                let at = |x: i64, z: i64| {
+                    (
+                        x0 + (x - n / 2) as f64 * step,
+                        z0 + (z - n / 2) as f64 * step,
+                    )
+                };
+                let s: Vec<_> = (0..n * n)
+                    .map(|q| {
+                        let (x, z) = at(q % n, q / n);
+                        terrain.sample(x, z)
+                    })
+                    .collect();
+                for z in 0..n - 1 {
+                    for x in 0..n - 1 {
+                        for (a, b) in [((x, z), (x + 1, z)), ((x, z), (x, z + 1))] {
+                            let (p, q) =
+                                (&s[(a.1 * n + a.0) as usize], &s[(b.1 * n + b.0) as usize]);
+                            // rivers stand over the ground beside them at their falls, meant to
+                            for (wet, dry, w) in [(p, q, a), (q, p, b)] {
+                                if matches!(wet.water_kind, WaterKind::Lake | WaterKind::Ocean)
+                                    && dry.water_kind == WaterKind::None
+                                    && (wet.water_surface as f64) - dry.height > 1.5
+                                {
+                                    walls.push((at(w.0, w.1), wet.water_surface, dry.height));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                walls.is_empty(),
+                "seed {seed}: {} walls, {:?}",
+                walls.len(),
+                &walls[..walls.len().min(5)]
+            );
+        }
     }
 
     #[test]

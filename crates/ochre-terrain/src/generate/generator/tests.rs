@@ -2196,15 +2196,17 @@ fn test_ground_well_under_a_lake_is_under_its_water() {
         let terrain = ochre_world::worldmap::test_terrain(seed);
         let map = terrain.map();
         let mut dry = Vec::new();
-        for cz in 0..map.dim() {
-            for cx in 0..map.dim() {
-                let (x, z) = map.cell_centre(cx, cz);
-                let Some((level, cover)) = map.lake_cover(x, z) else {
+        let lake = |cx: usize, cz: usize| map.water_kind[map.index(cx, cz)] == 2;
+        for cz in 1..map.dim() - 1 {
+            for cx in 1..map.dim() - 1 {
+                // a lake cell with lake all round it
+                if !(cz - 1..=cz + 1).all(|z| (cx - 1..=cx + 1).all(|x| lake(x, z))) {
                     continue;
-                };
+                }
+                let (x, z) = map.cell_centre(cx, cz);
+                let level = map.water_surface[map.index(cx, cz)];
                 let sample = terrain.sample(x, z);
-                if cover >= 0.99
-                    && (map.height_at(x, z) as f64) < level as f64
+                if (map.height_at(x, z) as f64) < level as f64
                     && sample.height < level.floor() as f64 - 1.0
                     && sample.water_surface == 0.0
                 {

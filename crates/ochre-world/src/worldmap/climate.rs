@@ -31,8 +31,6 @@ const RIPARIAN_REACH: u8 = 14;
 // moisture between which ground is dry: rivers lose their water crossing it, see `hydrology`.
 const RIPARIAN_WIDTHS: (f32, f32, f32) = (20.0, 38.0, 65.0);
 const DRY_BELOW: (f64, f64) = (0.2, 0.45);
-// A lake this many cells or fewer in dry ground dries up; only a great one survives a desert.
-const DESERT_LAKE_CELLS: usize = 6_000;
 const RIPARIAN_MOISTURE: f32 = 1.0;
 const RIPARIAN_COOLING: f32 = 0.14;
 // A cell takes the most common biome within this many cells, MODE_PASSES times, and a patch of
@@ -244,8 +242,6 @@ pub fn run(map: &mut WorldMap) {
     // where its warmth or moisture hovers at a threshold
     let mut moisture = blur_box(&moisture, dim, FIELD_BLUR);
     let mut temperature = blur_box(&temperature, dim, FIELD_BLUR);
-    // and so do lakes: one in dry ground that isn't a great one is gone, its basin left dry
-    dry_lakes(map, &moisture);
     // only big water changes the ground round it: a wide river or a lake cools and wets its
     // banks, so a green belt follows one through a desert, and a stream does nothing of the kind
     let near_water = fresh_water_closeness(map);
@@ -305,34 +301,6 @@ pub fn run(map: &mut WorldMap) {
     map.moisture = moisture;
     map.biome = kinds;
     map.trees = trees;
-}
-
-// Lakes in dry ground disappear, a whole lake at a time, unless there are more cells of it than
-// DESERT_LAKE_CELLS.
-fn dry_lakes(map: &mut WorldMap, moisture: &[f32]) {
-    let dim = map.dim();
-    let lake: Vec<bool> = map
-        .water_kind
-        .iter()
-        .map(|&k| k == WaterCell::Lake as u8)
-        .collect();
-    let (comp, sizes) = super::gameplay::components(&lake, dim);
-    let mut dryness = vec![0.0f32; sizes.len()];
-    for (i, &c) in comp.iter().enumerate() {
-        if c != u32::MAX {
-            dryness[c as usize] += smoothstep(DRY_BELOW.1, DRY_BELOW.0, moisture[i] as f64) as f32;
-        }
-    }
-    for (i, &c) in comp.iter().enumerate() {
-        if c == u32::MAX {
-            continue;
-        }
-        let mean = dryness[c as usize] / sizes[c as usize] as f32;
-        if mean > 0.5 && sizes[c as usize] <= DESERT_LAKE_CELLS {
-            map.water_kind[i] = WaterCell::None as u8;
-            map.water_surface[i] = 0.0;
-        }
-    }
 }
 
 // How strongly water near each cell wets and cools it, 0..1: a lake or a very wide river counts

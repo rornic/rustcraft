@@ -20,7 +20,7 @@ use ochre_terrain::generate::generator::{generate_chunk_with, ChunkPasses};
 use image::{Rgb, RgbImage};
 use ochre_base::terrain_source::{TerrainSource, WaterKind};
 use ochre_terrain::generate::region_store::RegionStore;
-use ochre_world::worldmap::{WorldConfig, WorldMap, WorldTerrain};
+use ochre_world::worldmap::{WaterCell, WorldConfig, WorldMap, WorldTerrain};
 
 fn kind_char(kind: WaterKind) -> char {
     match kind {
@@ -126,8 +126,14 @@ fn describe(
 ) -> String {
     let mut sampler = regions.sampler();
     let p = terrain.sample(x as f64, z as f64);
+    let (u, v) = map.to_cell(x as f64, z as f64);
+    let max = map.dim() as f64 - 1.0;
+    let cell = map.index(
+        u.round().clamp(0.0, max) as usize,
+        v.round().clamp(0.0, max) as usize,
+    );
     format!(
-        "x={x} z={z} ground={:.2} dry={:.2} base={:.2} water={:.2} {:?} | chunk ground_top={} water_top={} | lake_level={:?} lake_cover={:?}",
+        "x={x} z={z} ground={:.2} dry={:.2} base={:.2} water={:.2} {:?} | chunk ground_top={} water_top={} | map cell {:?} at {:.2}",
         p.height,
         terrain.dry_ground(x as f64, z as f64, 1.0),
         map.height_at(x as f64, z as f64),
@@ -135,8 +141,8 @@ fn describe(
         p.water_kind,
         sampler.ground_top(x, z),
         sampler.water_top(x, z),
-        map.lake_level(x as f64, z as f64),
-        map.lake_cover(x as f64, z as f64),
+        WaterCell::from_u8(map.water_kind[cell]),
+        map.water_surface[cell],
     )
 }
 

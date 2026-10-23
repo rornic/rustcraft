@@ -168,5 +168,5 @@ fn test_chunks_from_a_fixed_map_and_seed_hash_the_same_on_every_machine() {
     }
     // pinned: a change here means every machine's chunks changed, and with them any edits stored
     // as deltas against generated terrain, so bump `worldmap::GENERATOR_VERSION` with it
-    assert_eq!(12_370_745_859_300_875_681, first, "chunk hash changed");
+    assert_eq!(444_823_689_793_207_586, first, "chunk hash changed");
 }
