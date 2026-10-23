@@ -35,9 +35,6 @@ const DRY_EVAPORATION: f32 = 8.0;
 // A basin shallower than this, or with fewer cells, is drained: a flat or a pond, not worth a lake.
 const MIN_LAKE_DEPTH: f32 = 4.0;
 const MIN_LAKE_CELLS: usize = 300;
-// No lake stands deeper than this, as a range's rings would otherwise hold seas: it's held under its
-// basin's brim, and what it doesn't lose to the air rises again past the brim, where a river starts.
-const MAX_LAKE_DEPTH: f32 = 150.0;
 // Fewer cells under a lake's level than this and its basin is left a dry flat.
 const MIN_POND_CELLS: usize = 4;
 // How many cells' worth of flow a cell of lake loses to the air, in wet country and in the driest: a
@@ -370,7 +367,7 @@ fn rain(map: &WorldMap) -> Rain {
 // The level the lake in `basin` stands at, its cells `sorted` from lowest up, with `inflow` running in:
 // it spreads cell by cell from the floor until the water it loses to the air from its surface is all
 // that runs in, or reaches the basin's brim and spills the rest over it. Returns the level, what
-// goes on past the brim, and whether the lake is held under the brim, with no outlet of its own.
+// spills over the brim, and whether the lake is held under it, with no outlet of its own.
 fn balance(
     basin: &Basin,
     sorted: &[usize],
@@ -398,7 +395,6 @@ fn balance(
         }
         lost += evaporation(i);
     }
-    level = level.min(floor + MAX_LAKE_DEPTH);
     if floor < sea {
         // ground under the sea's level walled off from it holds water at least just over the sea, or it
         // would stand dry under the sea's level, which the land never does
@@ -414,18 +410,15 @@ fn balance(
     (level, (inflow - lost).max(0.0), closed)
 }
 
-// Each basin's lake: its level, whether it's held under its basin's brim, and the cell past the brim
-// what it doesn't lose goes on to, with how much.
+// Each basin's lake: its level, and whether it's held under its basin's brim, with no outlet.
 struct Lakes {
     level: Vec<f32>,
     held: Vec<bool>,
-    out: Vec<(usize, f32)>,
 }
 
 // Flow through every cell, with each basin's lake taking what it loses to the air from what passes through
 // it: what drains into a basin is gathered at the cells it leaves by, and once all of it's in, the lake's
-// level is worked out and what's left goes on. `rises` is water put in at cells past the brims of lakes
-// that no longer drain out over them.
+// level is worked out and what spills over its brim goes on.
 fn flow_through(
     down: &[u32],
     basins: &[Basin],
@@ -433,12 +426,8 @@ fn flow_through(
     basin_of: &[u32],
     height: &[f32],
     rain: &Rain,
-    rises: &[(usize, f32)],
 ) -> (Vec<f32>, Lakes) {
     let mut flow = rain.supply.clone();
-    for &(i, water) in rises {
-        flow[i] += water;
-    }
     let mut exits = vec![0usize; basins.len()];
     for (i, &d) in down.iter().enumerate() {
         let b = basin_of[i];
@@ -450,7 +439,6 @@ fn flow_through(
     let mut lakes = Lakes {
         level: basins.iter().map(|b| height[b.floor]).collect(),
         held: vec![true; basins.len()],
-        out: vec![(0, 0.0); basins.len()],
     };
     for i in upstream_first(down) {
         let i = i as usize;
@@ -472,8 +460,10 @@ fn flow_through(
             if exits[b] == 0 {
                 let (level, out, held) =
                     balance(&basins[b], &sorted[b], height, &rain.dry, gathered[b]);
-                (lakes.level[b], lakes.held[b], lakes.out[b]) = (level, held, (d, out));
-                flow[d] += out;
+                (lakes.level[b], lakes.held[b]) = (level, held);
+                if !held {
+                    flow[d] += out;
+                }
             }
         }
     }
@@ -563,19 +553,17 @@ pub fn run(map: &mut WorldMap, carve: bool) {
         })
         .collect();
     let rain = rain(map);
-    let (_, held) = flow_through(&flood.down, &lakes, &sorted, &basin_of, &height, &rain, &[]);
+    let (_, held) = flow_through(&flood.down, &lakes, &sorted, &basin_of, &height, &rain);
     let level = held.level;
     let mut down = flood.down.clone();
-    let mut rises = Vec::new();
     for (b, basin) in lakes.iter().enumerate() {
         if held.held[b] {
             reroute(
                 &mut down, &height, basin, &sorted[b], level[b], &basin_of, dim,
             );
-            rises.push(held.out[b]);
         }
     }
-    let (flow, _) = flow_through(&down, &lakes, &sorted, &basin_of, &height, &rain, &rises);
+    let (flow, _) = flow_through(&down, &lakes, &sorted, &basin_of, &height, &rain);
     let order = upstream_first(&down);
 
     let open = open_sea(&height, dim);
@@ -701,8 +689,10 @@ pub fn run(map: &mut WorldMap, carve: bool) {
             // wide is cut at block scale, see `worldmap::source`, and digging all of its
             // 32 m cell down to the bed would leave a dry crevice beside the water
             let filled = (width[i] / map.config.map_cell as f32).min(1.0);
-            // only ever cut: a bed held up by the water downstream must not raise the land
-            map.height[i] = (bed + depth * (1.0 - filled)).min(map.height[i]);
+            // only ever cut: a bed held up by the water downstream must not raise the land; and not
+            // under the lake or sea beside it, which would spill into the cell's whole square
+            let held = super::water::still_beside(dim, &kind, &surface, i);
+            map.height[i] = (bed + depth * (1.0 - filled)).max(held).min(map.height[i]);
         }
     }
     map.flow = flow;

@@ -39,9 +39,9 @@ The last run, in order:
    downhill with rain from `rain` (runoff by dryness and rock, the same model rivers use). All that
    drains into a basin is gathered; the lake spreads cell by cell from the floor up, each lake cell
    losing `LAKE_EVAPORATION` by how dry it is, until it loses all that comes in, or reaches the brim
-   and spills the rest on. Then:
-   - a lake is held under `floor + MAX_LAKE_DEPTH`, and what it doesn't lose rises again past its
-     brim, where a river starts from a spring;
+   and spills the rest on. A lake is either full, spilling from its surface into the river that leaves
+   it, or held under its brim by what it loses, with no outlet. There's no depth or size cap: capping a
+   wet basin's lake left water with nowhere to go but a river starting from nothing at the rim. Then:
    - a basin whose floor is under the sea holds water at least `INLAND_SEA_ABOVE_SEA` over it, or it
      would stand dry under the sea's level, which the terrain crate would fill with sea;
    - fewer than `MIN_POND_CELLS` under the level and the basin is a dry flat.
@@ -51,7 +51,9 @@ The last run, in order:
    lake outward over the basin, so the rivers in it run down to the lake, not out over the brim the
    first flood found. Flow is gathered again over the new routing, with lakes as sinks.
 6. Sea cells are the open sea; lake cells are each basin's cells under its level; rivers start where
-   enough water drains and the ground is steep enough, and are carved into the ground as before.
+   enough water drains and the ground is steep enough, and are carved into the ground as before, but
+   never under the level of a lake or the sea beside the cell (`still_beside`): a carved cell under a
+   lake's level would let the lake's water into its whole square.
 
 `water_kind`, `water_surface`, `river_width`, `flow` and `down` are what it leaves on the map. Lakes
 and the sea are no longer decided separately: a walled-in basin under the sea is just a lake.
@@ -80,8 +82,10 @@ stands past a rim's crest on ground falling away beyond it. The same holds for t
 where the smooth ground is, by as much as it is up to `HOLD`, and over it by as much where it's over.
 The detail laid on the ground can't poke an island through the water or dig a dry pit under its
 level beside it. The hold on the dry side is looked up a cell further out than the water (`still_by`),
-so it carries on past the farthest the water reaches. Detail is also calmed to nothing at the water's
-edge over `CALM` blocks, for smooth shores.
+so it carries on past the farthest the water reaches, and fades out over that extra cell by `near`,
+how much of the point lies within a cell of the water's cells: a hold or calm that stopped at a cell's
+edge would step the ground there. Detail is also calmed to nothing at the water's edge over `CALM`
+blocks, for smooth shores.
 
 Inland, out of any lake, the ground is never under the sea (`LAND_ABOVE_SEA`).
 
@@ -91,6 +95,9 @@ Rivers are curves through their cells (`Stretch`), each with a level profile tha
 downstream, ramps to the lake or sea it runs into, and starts at the lake it leaves
 (`build_river_profiles`). `RiverProfiles::index` lists each stretch in every cell its water, banks and
 valley reach, plus the meander, so a point looks only at its own cell's list, however wide the river.
+Each stretch also knows its river (`stem`, the run of widest feeders it's part of), so the second river a
+point sees is another river, never another stretch of a wide one: a river wider than its cells reaches
+over several of its own stretches, whose different levels read as humps if taken for a second river.
 
 `channel` cuts the bed and builds the banks, and holds the bank over the water within `HOLD` of its
 edge, as still water's shore is.
@@ -123,6 +130,8 @@ ground stands between them.
 Before this model (seeds 368871838, 5, 2198630850, the default 65 km world): lake walls over 1.5
 blocks 0 / 23 / 16 (6+ blocks: 0 / 6 / 10), dry map cells under a lake's level 32 / 42 / 61. After:
 lake walls 0 / 0 / 2 (none over 6), dry cells under a lake's level 0 / 0 / 0.
+Across 16 seeds: lake walls 61 to 3 (over 6 blocks 17 to 0), dry map cells under a neighbouring
+lake's level 543 to 0, river walls 105 to 60 (over 6 blocks 4 to 0).
 
 ## Research
 

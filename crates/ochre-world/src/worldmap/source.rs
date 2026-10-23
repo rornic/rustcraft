@@ -82,6 +82,19 @@ fn bank_width(river: RiverHit) -> f32 {
 struct Still {
     level: f64,
     kind: WaterKind,
+    // how much a point lies within a cell of this water's cells, 0..1, smooth across cells: 1 wherever
+    // the water can stand, falling to nothing a cell past that, so what it does to the ground fades out
+    near: f64,
+}
+
+// `ground` held over still water `w` where the map's smooth ground `base` is over its level, by as much
+// as `near` the water the point is, see `contain`.
+fn hold_over(ground: f64, base: f64, w: Still) -> f64 {
+    if base < w.level {
+        return ground;
+    }
+    let held = contain(ground, base, w.level, false);
+    ground + (held - ground) * w.near
 }
 
 // `ground` held to still water at `level`, by which side of it the map's smooth ground `base` is on:
@@ -227,35 +240,45 @@ impl WorldTerrain {
         let map = &self.map;
         let (u, v) = map.to_cell(x, z);
         let (cx, cz) = (u.floor() as i64, v.floor() as i64);
+        let (fx, fz) = (u - u.floor(), v - v.floor());
         let max = map.dim() as i64 - 1;
-        let mut still = [None; 4];
+        let mut still: [Option<Still>; 4] = [None; 4];
+        // which of the four cells round the point are within a cell of each water's cells
+        let mut corners = [[false; 4]; 4];
         for dz in 1 - reach..=reach {
             for dx in 1 - reach..=reach {
                 let i = map.index(
                     (cx + dx).clamp(0, max) as usize,
                     (cz + dz).clamp(0, max) as usize,
                 );
-                match WaterCell::from_u8(map.water_kind[i]) {
-                    WaterCell::Ocean => {
-                        still[0] = Some(Still {
-                            level: WATER_LEVEL as f64,
-                            kind: WaterKind::Ocean,
-                        })
-                    }
+                let (slot, level, kind) = match WaterCell::from_u8(map.water_kind[i]) {
+                    WaterCell::Ocean => (0, WATER_LEVEL as f64, WaterKind::Ocean),
                     WaterCell::Lake => {
                         let level = map.water_surface[i].floor() as f64;
-                        if let Some(slot) = still[1..]
-                            .iter_mut()
-                            .find(|w| w.is_none_or(|w| w.level == level))
-                        {
-                            *slot = Some(Still {
-                                level,
-                                kind: WaterKind::Lake,
-                            });
-                        }
+                        let Some(slot) =
+                            (1..4).find(|&k| still[k].is_none_or(|w: Still| w.level == level))
+                        else {
+                            continue;
+                        };
+                        (slot, level, WaterKind::Lake)
                     }
-                    _ => {}
+                    _ => continue,
+                };
+                still[slot] = Some(Still {
+                    level,
+                    kind,
+                    near: 0.0,
+                });
+                for (c, (a, b)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+                    corners[slot][c] |= (dx - a).abs() <= 1 && (dz - b).abs() <= 1;
                 }
+            }
+        }
+        for (w, near) in still.iter_mut().zip(corners) {
+            if let Some(w) = w {
+                let at = |c: usize| if near[c] { 1.0 } else { 0.0 };
+                w.near = (at(0) * (1.0 - fx) + at(1) * fx) * (1.0 - fz)
+                    + (at(2) * (1.0 - fx) + at(3) * fx) * fz;
             }
         }
         still
@@ -308,9 +331,7 @@ impl WorldTerrain {
             }
         }
         for &w in by.iter().flatten() {
-            if base >= w.level {
-                ground = contain(ground, base, w.level, false);
-            }
+            ground = hold_over(ground, base, w);
         }
         // inland of the sea the ground never sinks under it, or it would flood as a pond cut off from it
         if wet.is_none() {
@@ -324,7 +345,7 @@ impl WorldTerrain {
     fn calm(base: f64, by: &[Option<Still>; 4]) -> f64 {
         by.iter()
             .flatten()
-            .map(|w| smoothstep(0.0, CALM, (base - w.level).abs()))
+            .map(|w| 1.0 - w.near * (1.0 - smoothstep(0.0, CALM, (base - w.level).abs())))
             .fold(1.0, f64::min)
     }
 
@@ -536,10 +557,8 @@ impl TerrainSource for WorldTerrain {
             .filter(|r| shaped(r))
             .any(|r| r.distance < r.width / 2.0)
         {
-            for w in by.iter().flatten() {
-                if base >= w.level {
-                    ground = ground.max(w.level + (base - w.level).min(HOLD));
-                }
+            for &w in by.iter().flatten() {
+                ground = hold_over(ground, base, w);
             }
         }
         // a river rises in a bowl, held in a rim of ground over its level, but where the river runs out

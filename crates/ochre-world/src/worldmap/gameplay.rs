@@ -381,7 +381,7 @@ fn crossings(map: &mut WorldMap, slope: &[f32]) {
                         let d = ((dx * dx + dz * dz) as f32).sqrt();
                         // never under the lake or sea beside it, whose rim it would cut, as this is
                         // after the lakes are filled
-                        let held = held_over(map, nx, nz);
+                        let held = map.still_beside(n) + 1.0;
                         let flat = map.height[n].min(surface + 2.0 + 0.8 * d);
                         map.height[n] = flat.max(held.min(map.height[n]));
                     }
@@ -390,24 +390,6 @@ fn crossings(map: &mut WorldMap, slope: &[f32]) {
             push(map, FeatureKind::BridgeSite, i, width);
         }
     }
-}
-
-// The level the cell at (`x`, `z`) must stay over, a block above the lake or sea of any cell round it.
-fn held_over(map: &WorldMap, x: i64, z: i64) -> f32 {
-    let dim = map.dim() as i64;
-    NEIGHBOURS
-        .iter()
-        .map(|&(dx, dz)| (x + dx, z + dz))
-        .filter(|&(nx, nz)| (0..dim).contains(&nx) && (0..dim).contains(&nz))
-        .map(|(nx, nz)| (nz * dim + nx) as usize)
-        .filter(|&n| {
-            matches!(
-                WaterCell::from_u8(map.water_kind[n]),
-                WaterCell::Lake | WaterCell::Ocean
-            )
-        })
-        .map(|n| map.water_surface[n] + 1.0)
-        .fold(f32::MIN, f32::max)
 }
 
 // Cells to the nearest water of any kind, up to a bound, by a sweep out from the water.
