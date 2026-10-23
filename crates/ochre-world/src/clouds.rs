@@ -34,11 +34,11 @@ use bevy::{
 };
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
-use crate::sky::Sun;
+use crate::sky::{Moon, Sun};
 use crate::sky_dome::dome;
 use ochre_terrain::curvature::Curvature;
 pub use ochre_terrain::material::CloudLayer;
-use ochre_terrain::material::{push_shader_defs, water_level, WaterMaterial};
+use ochre_terrain::material::{push_shader_defs, water_level};
 
 /// Height of the clouds' undersides, far above the highest land; matches `BASE` in `cloud_march.wesl`.
 pub const CLOUD_BASE: f32 = 1500.0;
@@ -61,6 +61,8 @@ const CLUSTERING: f64 = 0.8;
 const WIND: Vec2 = Vec2::new(SPAN * 2.0 / 3600.0, SPAN / 3600.0);
 // The clouds are marched at this fraction of the screen's width and height, and blended up to it.
 const TARGET_SCALE: u32 = 4;
+// Texels across each half of the reflections' map, matching `REFLECTION_TEXELS` in `cloud_march.wesl`.
+const REFLECTION_SIZE: u32 = 512;
 
 pub struct CloudPlugin;
 
@@ -167,6 +169,7 @@ impl Material for CloudMaterial {
 #[extract_app(RenderApp)]
 struct CloudMarch {
     target: Handle<Image>,
+    reflection: Handle<Image>,
     // last frame's target, which the march blends into, so few steps a frame add up to many
     history: Handle<Image>,
     pattern: Handle<Image>,
@@ -186,15 +189,14 @@ struct CloudView {
     eye: Vec4,
     // toward the sun in xyz, and the frame count in w
     sun: Vec4,
-    // last frame's axes for reprojecting the history, with the share of each frame kept over it in `last_forward.w`
+    // last frame's axes and position, for reprojecting the history
     last_right: Vec4,
     last_up: Vec4,
     last_forward: Vec4,
+    last_eye: Vec4,
+    // toward the moon, whose disc the clouds hide as they do the sun's
+    moon: Vec4,
 }
-
-// Share of each frame kept over the history when still, and more per block moved as clouds shift against the sky.
-const HISTORY_BLEND: f32 = 0.12;
-const HISTORY_BLEND_PER_BLOCK: f32 = 0.08;
 
 // Where cell (`x`, `z`) lies round a torus in 4D, for noise with features about `cells` across
 // that wraps at the pattern's edges without a seam.
@@ -263,13 +265,28 @@ fn spawn_clouds(
     let history = images.add(target.clone());
     // copied on to the history each frame
     target.texture_descriptor.usage |= TextureUsages::COPY_SRC;
+    let mut reflection = Image::new_target_texture(
+        2 * REFLECTION_SIZE,
+        REFLECTION_SIZE,
+        TextureFormat::Rgba16Float,
+        None,
+    );
+    reflection.sampler = ImageSampler::linear();
     let clouds = CloudLayer {
-        pattern: images.add(pattern_image(&cloud_pattern(rand::random()))),
+        // OCHRE_SEED repeats the clouds too, for comparing frames across runs
+        pattern: images.add(pattern_image(&cloud_pattern(
+            std::env::var("OCHRE_SEED")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(rand::random),
+        ))),
         layer: Vec4::new((CLOUD_BASE + CLOUD_TOP) / 2.0, SPAN, WIND.x, WIND.y),
         target: images.add(target),
+        reflection: images.add(reflection),
     };
     commands.insert_resource(CloudMarch {
         target: clouds.target.clone(),
+        reflection: clouds.reflection.clone(),
         history,
         pattern: clouds.pattern.clone(),
         layer: clouds.layer,
@@ -312,7 +329,6 @@ fn fit_cloud_target(
     march: Option<Res<CloudMarch>>,
     mut images: ResMut<Assets<Image>>,
     mut clouds: ResMut<Assets<CloudMaterial>>,
-    mut waters: ResMut<Assets<WaterMaterial>>,
 ) {
     let (Ok(window), Some(march)) = (window.single(), march) else {
         return;
@@ -339,12 +355,6 @@ fn fit_cloud_target(
             material.into_inner();
         }
     }
-    let ids: Vec<_> = waters.ids().collect();
-    for id in ids {
-        if let Some(material) = waters.get_mut(id) {
-            material.into_inner();
-        }
-    }
 }
 
 // Tells the march how the main camera looks and where the sun is, once both have moved.
@@ -353,6 +363,7 @@ fn aim_cloud_march(
     frames: Res<FrameCount>,
     camera: Query<(&GlobalTransform, &Projection), With<Camera3d>>,
     sun: Query<&Transform, With<Sun>>,
+    moon: Query<&Transform, With<Moon>>,
     march: Option<ResMut<CloudMarch>>,
 ) {
     let (Ok((camera, Projection::Perspective(projection))), Ok(sun), Some(mut march)) =
@@ -363,7 +374,6 @@ fn aim_cloud_march(
     let up = (projection.fov / 2.0).tan();
     let last = march.view;
     let eye = camera.translation();
-    let moved = eye.distance(last.eye.truncate());
     march.view = CloudView {
         right: (camera.right() * up * projection.aspect_ratio).extend(0.0),
         up: (camera.up() * up).extend(0.0),
@@ -372,10 +382,11 @@ fn aim_cloud_march(
         sun: sun.back().extend(frames.0 as f32),
         last_right: last.right,
         last_up: last.up,
-        last_forward: last
-            .forward
-            .truncate()
-            .extend((HISTORY_BLEND + HISTORY_BLEND_PER_BLOCK * moved).min(1.0)),
+        last_forward: last.forward,
+        last_eye: last.eye,
+        moon: moon
+            .single()
+            .map_or(Vec4::ZERO, |moon| moon.back().extend(0.0)),
     };
 }
 
@@ -383,6 +394,7 @@ fn aim_cloud_march(
 struct CloudPipeline {
     layout: BindGroupLayoutDescriptor,
     pipeline: CachedRenderPipelineId,
+    reflection: CachedRenderPipelineId,
 }
 
 fn init_cloud_pipeline(
@@ -407,23 +419,33 @@ fn init_cloud_pipeline(
             ),
         ),
     );
-    let pipeline = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
-        label: Some("cloud_march_pipeline".into()),
-        layout: vec![layout.clone()],
-        vertex: fullscreen_shader.to_vertex_state(),
-        fragment: Some(FragmentState {
-            shader: asset_server.load("shaders/cloud_target.wesl"),
-            shader_defs: vec![ShaderDefVal::UInt("MATERIAL_BIND_GROUP".into(), 0)],
-            targets: vec![Some(ColorTargetState {
-                format: TextureFormat::Rgba16Float,
-                blend: None,
-                write_mask: ColorWrites::ALL,
-            })],
+    let shader = asset_server.load("shaders/cloud_target.wesl");
+    let queue = |label: &'static str, entry_point: &'static str| {
+        pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
+            label: Some(label.into()),
+            layout: vec![layout.clone()],
+            vertex: fullscreen_shader.to_vertex_state(),
+            fragment: Some(FragmentState {
+                shader: shader.clone(),
+                shader_defs: vec![ShaderDefVal::UInt("MATERIAL_BIND_GROUP".into(), 0)],
+                entry_point: Some(entry_point.into()),
+                targets: vec![Some(ColorTargetState {
+                    format: TextureFormat::Rgba16Float,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+                ..default()
+            }),
             ..default()
-        }),
-        ..default()
+        })
+    };
+    let pipeline = queue("cloud_march_pipeline", "fragment");
+    let reflection = queue("cloud_reflection_pipeline", "reflection");
+    commands.insert_resource(CloudPipeline {
+        layout,
+        pipeline,
+        reflection,
     });
-    commands.insert_resource(CloudPipeline { layout, pipeline });
 }
 
 // A uniform buffer holding `value`.
@@ -440,7 +462,7 @@ fn uniform<T: ShaderType + bevy::render::render_resource::encase::internal::Writ
     }))
 }
 
-/// Draws the clouds, unlit, into their target, see `CloudMarch`.
+/// Draws the clouds, unlit, into their target and the reflections' sky map, see `CloudMarch`.
 fn march_clouds(
     march: Option<Res<CloudMarch>>,
     pipeline: Option<Res<CloudPipeline>>,
@@ -452,13 +474,24 @@ fn march_clouds(
     let (Some(march), Some(pipeline)) = (march, pipeline) else {
         return;
     };
-    let (Some(render_pipeline), Some(target), Some(history), Some(pattern), Some(curvature)) = (
+    let (
+        Some(render_pipeline),
+        Some(reflection_pipeline),
+        Some(target),
+        Some(reflection),
+        Some(history),
+        Some(pattern),
+        Some(curvature),
+    ) = (
         pipeline_cache.get_render_pipeline(pipeline.pipeline),
+        pipeline_cache.get_render_pipeline(pipeline.reflection),
         images.get(&march.target),
+        images.get(&march.reflection),
         images.get(&march.history),
         images.get(&march.pattern),
         buffers.get(&march.curvature),
-    ) else {
+    )
+    else {
         return;
     };
     let device = ctx.render_device().clone();
@@ -483,27 +516,31 @@ fn march_clouds(
     );
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();
-    let mut pass = ctx
-        .command_encoder()
-        .begin_render_pass(&RenderPassDescriptor {
-            label: Some("cloud_march"),
-            color_attachments: &[Some(RenderPassColorAttachment {
-                view: &target.texture_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: Operations::default(),
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-    let span = diagnostics.pass_span(&mut pass, "cloud_march");
-    pass.set_pipeline(render_pipeline);
-    pass.set_bind_group(0, &bind_group, &[]);
-    pass.draw(0..3, 0..1);
-    span.end(&mut pass);
-    drop(pass);
+    for (label, render_pipeline, image) in [
+        ("cloud_march", render_pipeline, target),
+        ("cloud_reflection", reflection_pipeline, reflection),
+    ] {
+        let mut pass = ctx
+            .command_encoder()
+            .begin_render_pass(&RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &image.texture_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations::default(),
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        let span = diagnostics.pass_span(&mut pass, label);
+        pass.set_pipeline(render_pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
+        span.end(&mut pass);
+    }
     if target.texture.size() == history.texture.size() {
         ctx.command_encoder().copy_texture_to_texture(
             target.texture.as_image_copy(),

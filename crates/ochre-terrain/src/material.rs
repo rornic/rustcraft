@@ -235,7 +235,7 @@ impl TerrainMaterials {
             fade: FULLY_VISIBLE,
             cloud_pattern: clouds.pattern.clone(),
             cloud_layer: clouds.layer,
-            cloud_target: clouds.target.clone(),
+            cloud_reflection: clouds.reflection.clone(),
             curvature: inputs.curvature.clone(),
             solid: false,
         };
@@ -262,6 +262,8 @@ pub struct CloudLayer {
     pub layer: Vec4,
     /// The clouds as seen, unlit, at a fraction of the screen's resolution, see `CloudMarch`.
     pub target: Handle<Image>,
+    /// The clouds over the whole sky, unlit, for water to reflect, see `sky_disc` in `cloud_march.wesl`.
+    pub reflection: Handle<Image>,
 }
 
 /// What the terrain's shaders sample that other systems own. The default is blank, for a headless run.
@@ -339,10 +341,10 @@ pub struct WaterMaterial {
     // what the land bends around, see `curvature::Curvature`
     #[storage(8, read_only)]
     pub curvature: Handle<ShaderBuffer>,
-    // the clouds as seen, for reflections of what's on screen, see `CloudLayer::target`
+    // the clouds over the sky, to reflect, see `CloudLayer::reflection`
     #[texture(9)]
     #[sampler(10)]
-    pub cloud_target: Handle<Image>,
+    pub cloud_reflection: Handle<Image>,
     // drawn with the opaque meshes, which Bevy batches, see `lod::SOLID_WATER_LEVEL`
     pub solid: bool,
 }

@@ -17,7 +17,9 @@ import super::lighting::{daylight, moon_radiance, sun_radiance};
 import super::sky::{MOON_LIGHT, SUN_LIGHT};
 import super::stars::reflected_celestial;
 import super::cloud_shadow::cloud_shadow;
-import super::clouds::clouds;
+import super::clouds::lit_clouds;
+import super::cloud_march::{BASE, LAND_TOP, OVERHEAD_REACH, TOP, overhead, sky_disc};
+import super::cloud_cover::{cloud_reflection, cloud_reflection_sampler, disc_showing};
 import super::curvature::{curved, uncurved};
 import super::hash::hash2;
 
@@ -112,10 +114,6 @@ const CALM_SLOPE_VARIANCE: f32 = 0.002;
 const REFLECT_STRAIGHT_DOWN: f32 = 0.02;
 // How bright the sun's glint is, to how bright it would be off a perfect mirror.
 const GLINT: f32 = 0.6;
-
-// Steps and octaves for reflecting off-screen clouds: few, as waves blur them and every water pixel marches.
-const REFLECTED_CLOUD_STEPS: i32 = 3;
-const REFLECTED_CLOUD_OCTAVES: i32 = 2;
 
 // Water's colours are picked as they should look on screen, so they're turned back into
 // the scene colours the camera's exposure and tonemapping take to them. See `tonemap.rs`.
@@ -322,13 +320,25 @@ fn reflected_sky(direction: vec3<f32>) -> vec3<f32> {
     return sky_colour(up) * (1.0 - night.a) + night.rgb;
 }
 
-// `sky` with clouds over it. Always marched the same cheap way: reading the screen's cloud target where the
-// reflected way happens to be on screen and marching where not left a seam in the water fixed to the view.
+// `sky` with clouds over it, from the sky map rather than the screen's cloud target, which left a seam in the water where the reflected way left the screen.
 fn under_clouds(sky: vec3<f32>, origin: vec3<f32>, direction: vec3<f32>, keep: f32) -> vec3<f32> {
     if keep <= 0.0 {
         return sky;
     }
-    let cloud = clouds(origin, skyward(direction), REFLECTED_CLOUD_STEPS, REFLECTED_CLOUD_OCTAVES) * keep;
+    let up = skyward(direction);
+    // the map is marched from over the eye, so the way there to where this ray meets the clouds is looked up instead
+    let eye = view_bindings::view.world_position;
+    let meets = origin + up * max(0.5 * (BASE + TOP) - origin.y, 0.0) / up.y;
+    let seen = normalize(meets - vec3<f32>(eye.x, min(eye.y, LAND_TOP), eye.z));
+    var marched = textureSampleLevel(cloud_reflection, cloud_reflection_sampler, sky_disc(seen), 0.0);
+    // but far off that way slants through more of the clouds than this ray does, smearing them, so there the clouds straight over are read
+    let slant = smoothstep(1e-4, 2e-3, 1.0 - dot(up, seen));
+    if slant > 0.0 {
+        let off = abs(meets.xz - eye.xz) / OVERHEAD_REACH;
+        let over = textureSampleLevel(cloud_reflection, cloud_reflection_sampler, overhead(meets.xz, eye.xz), 0.0) * (1.0 - smoothstep(0.8, 1.0, max(off.x, off.y)));
+        marched = mix(marched, over, slant);
+    }
+    let cloud = lit_clouds(marched, origin, up, 1.0) * keep;
     return sky * (1.0 - cloud.a) + cloud.rgb;
 }
 
@@ -364,9 +374,15 @@ fn glint(normal: vec3<f32>, to_eye: vec3<f32>, variance: f32, world_position: ve
     let sun = &view_bindings::lights.directional_lights[SUN_LIGHT];
     var moonlit = vec3<f32>(0.0);
     if view_bindings::lights.n_directional_lights > 1u {
-        moonlit = moon_radiance() * highlight(normal, to_eye, variance, view_bindings::lights.directional_lights[MOON_LIGHT].direction_to_light);
+        moonlit = moon_radiance() * highlight(normal, to_eye, variance, view_bindings::lights.directional_lights[MOON_LIGHT].direction_to_light) * disc_showing(true);
     }
-    let sunlit = sun_radiance(uncurved(world_position)) * highlight(normal, to_eye, variance, (*sun).direction_to_light);
+    let shine = highlight(normal, to_eye, variance, (*sun).direction_to_light);
+    // most water is nowhere near the glint, so needn't look up the land's shadow
+    if shine < 1e-5 {
+        return moonlit;
+    }
+    // a glint is the disc mirrored, so goes where a cloud hides it, as well as in the clouds' shadow
+    let sunlit = sun_radiance(uncurved(world_position)) * shine * disc_showing(false);
     // in the land's shadow, no glint
     if ((*sun).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) == 0u {
         return sunlit + moonlit;
