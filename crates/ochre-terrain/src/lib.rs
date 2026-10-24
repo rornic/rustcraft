@@ -10,6 +10,8 @@ pub mod horizon;
 pub mod lod;
 pub mod material;
 pub mod pack;
+pub mod raycast;
+pub mod remesh;
 pub mod settings;
 pub mod world;
 
@@ -34,6 +36,7 @@ use lod::{
 use material::{
     ChunkMaterial, ShaderInputs, SprayMaterial, TerrainAssets, TerrainMaterials, WaterMaterial,
 };
+use remesh::{apply_remeshes, remesh_edits};
 
 /// Loads, meshes and unloads full-detail chunks and LOD terrain around the camera.
 pub struct TerrainPlugin;
@@ -63,8 +66,15 @@ impl Plugin for TerrainPlugin {
                     .chain()
                     .after(gather_chunks)
                     .before(unload_chunks),
+                // after the groups loading this frame, so one built from meshes made before a
+                // change is meshed again
+                (remesh_edits, apply_remeshes)
+                    .chain()
+                    .after(load_groups)
+                    .before(unload_chunks),
                 unload_chunks,
-                show_inner_leaves.after(load_groups),
+                // sees the inner leaves `apply_remeshes` spawns hidden this frame, or they flash
+                show_inner_leaves.after(apply_remeshes),
             ),
         );
     }

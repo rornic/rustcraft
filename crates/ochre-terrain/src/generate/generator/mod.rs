@@ -14,6 +14,7 @@ mod terrain;
 mod tests;
 
 pub use buffers::{ChunkMeshes, INNER_LEAVES_BAND, INNER_LEAVES_REACH};
+pub(crate) use chunk::LIGHT_MARGIN;
 pub use chunk::{generate_chunk, generate_chunk_mesh, generate_chunk_with, ChunkPasses};
 pub use lod::generate_lod_mesh;
 pub(super) use shading::FACE_NORMAL_OFFSET;

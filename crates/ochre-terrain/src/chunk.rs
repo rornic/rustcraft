@@ -67,6 +67,7 @@ struct Run {
     length: u16,
 }
 
+#[derive(Clone)]
 pub struct ChunkData {
     // Run-length encoded in `linear_index` order: most chunks are uniform or banded, so this is
     // far smaller than one entry per block, at the cost of `get`/`set` scanning the runs.

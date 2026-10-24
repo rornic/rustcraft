@@ -304,10 +304,11 @@ pub(super) fn sky_above(top: i64, cell: i64) -> u8 {
 
 // How far to each side of a chunk its light takes blocks into account: light that could
 // only arrive from further out would already have faded to deep shade.
-pub(super) const LIGHT_MARGIN: i32 = 8;
+pub(crate) const LIGHT_MARGIN: i32 = 8;
 
 // Sky light for the chunk and a block around it, from the chunk and its 26 neighbours, as
-// high as the top of the chunk above, with open sky above that.
+// high as the top of the chunk above, with open sky above that. `remesh::chunks_reading` keeps
+// to the same box.
 fn neighbourhood_light(source: &ChunkNeighbourhood, coord: ChunkCoordinate) -> SkyLight {
     let size = CHUNK_SIZE as i32;
     let min = IVec3::new(-LIGHT_MARGIN, -1, -LIGHT_MARGIN);

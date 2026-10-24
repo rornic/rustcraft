@@ -23,6 +23,8 @@ pub struct World {
     above: Arc<ChunkData>,
     pub region_store: Arc<RegionStore>,
     spawn: Vec3,
+    // blocks changed since `take_edits` was last asked, whose chunks need meshing again
+    edits: Vec<I64Vec3>,
 }
 
 impl World {
@@ -59,6 +61,7 @@ impl World {
                 spawn_height as f32 + lift as f32,
                 spawn_z as f32,
             ),
+            edits: Vec::new(),
         }
     }
 
@@ -128,6 +131,36 @@ impl World {
                 data.get_block_at(block.rem_euclid(I64Vec3::splat(size)).as_u16vec3())
             })
     }
+
+    /// Sets the block at `block`, in a chunk generated already, and remembers it was changed, see
+    /// `take_edits`. Returns whether it changed.
+    pub fn set_block_at(&mut self, block: I64Vec3, to: BlockType) -> bool {
+        let size = CHUNK_SIZE as i64;
+        // only the world's own chunks: what lies beyond it isn't for changing
+        let Some(data) = self.chunks.get_mut(&ChunkCoordinate::containing(block)) else {
+            return false;
+        };
+        let local = block.rem_euclid(I64Vec3::splat(size)).as_u16vec3();
+        if data.get_block_at(local) == to {
+            return false;
+        }
+        // a copy, if meshing still holds this one
+        Arc::make_mut(data).set_block_at(local, to);
+        self.edits.push(block);
+        true
+    }
+
+    /// Breaks the block at `block`, leaving air, unless it's one that can't be broken. Returns
+    /// what was broken.
+    pub fn break_block(&mut self, block: I64Vec3) -> Option<BlockType> {
+        let broken = self.get_block_at(block);
+        (broken.is_breakable() && self.set_block_at(block, BlockType::Air)).then_some(broken)
+    }
+
+    /// The blocks changed since this was last asked.
+    pub fn take_edits(&mut self) -> Vec<I64Vec3> {
+        std::mem::take(&mut self.edits)
+    }
 }
 
 impl Debug for World {
@@ -174,6 +207,44 @@ mod tests {
         // nor is a chunk buried by one not generated yet
         world.clear_chunk(ChunkCoordinate(I64Vec3::Y));
         assert!(!world.is_chunk_buried(centre));
+    }
+
+    #[test]
+    fn test_breaking_leaves_air_and_remembers_the_edit() {
+        let mut world = World::with_terrain(1, 16, ochre_world::worldmap::test_terrain(1));
+        let mut data = ChunkData::default();
+        data.set_block_at(bevy::math::U16Vec3::new(1, 2, 3), BlockType::Dirt);
+        let held = world.insert_chunk(ChunkCoordinate(I64Vec3::new(-1, 0, 0)), data);
+        let block = I64Vec3::new(-15, 2, 3);
+
+        assert_eq!(Some(BlockType::Dirt), world.break_block(block));
+        assert_eq!(BlockType::Air, world.get_block_at(block));
+        assert_eq!(vec![block], world.take_edits());
+        assert!(world.take_edits().is_empty());
+        // what meshing was handed before is left as it was
+        assert_eq!(
+            BlockType::Dirt,
+            held.get_block_at(bevy::math::U16Vec3::new(1, 2, 3))
+        );
+        // and there's nothing left to break
+        assert_eq!(None, world.break_block(block));
+        assert!(world.take_edits().is_empty());
+    }
+
+    #[test]
+    fn test_compacted_stone_air_and_ungenerated_chunks_are_not_broken() {
+        let mut world = World::with_terrain(1, 16, ochre_world::worldmap::test_terrain(1));
+        let mut data = ChunkData::default();
+        data.set_block_at(bevy::math::U16Vec3::ZERO, BlockType::CompactedStone);
+        world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), data);
+
+        assert_eq!(None, world.break_block(I64Vec3::ZERO));
+        assert_eq!(BlockType::CompactedStone, world.get_block_at(I64Vec3::ZERO));
+        assert_eq!(None, world.break_block(I64Vec3::new(1, 0, 0)));
+        // not generated, and under the world
+        assert_eq!(None, world.break_block(I64Vec3::new(100, 0, 0)));
+        assert_eq!(None, world.break_block(I64Vec3::new(0, -1, 0)));
+        assert!(world.take_edits().is_empty());
     }
 
     #[test]

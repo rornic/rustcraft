@@ -65,13 +65,15 @@ pub struct ChunkLoader {
     pub(super) spray_material: Handle<SprayMaterial>,
     max_in_flight_generating: usize,
     // see `DebugSettings::solid_leaves`
-    solid_leaves: bool,
+    pub(super) solid_leaves: bool,
     // the entity drawing each group of chunks, see `group::ChunkGroup`
     pub(super) groups: HashMap<LodKey, Entity>,
     // meshed chunks' meshes, until the rest of their group is ready to merge with them
     pub(super) held: HashMap<ChunkCoordinate, ChunkMeshes>,
     // groups with a held mesh, not yet being merged
     pub(super) waiting: HashSet<LodKey>,
+    // groups to mesh again once their chunks have settled, as blocks in them changed, see `remesh`
+    pub(super) remesh: HashSet<LodKey>,
 }
 
 // Loading spends up to a time budget a frame rather than a fixed count of chunks, so it keeps up
@@ -117,6 +119,7 @@ impl ChunkLoader {
             groups: HashMap::new(),
             held: HashMap::new(),
             waiting: HashSet::new(),
+            remesh: HashSet::new(),
         }
     }
 
@@ -130,6 +133,11 @@ impl ChunkLoader {
 
     pub fn chunk_entity(&self, coord: ChunkCoordinate) -> Option<Entity> {
         self.chunk_to_entity.get(&coord).copied()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn track_chunk(&mut self, coord: ChunkCoordinate, entity: Entity) {
+        self.chunk_to_entity.insert(coord, entity);
     }
 }
 
