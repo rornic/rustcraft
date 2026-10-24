@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use ochre_engine::settings::Settings;
 use ochre_gameplay::birds::BirdPlugin;
+use ochre_gameplay::breaking::BreakingPlugin;
 use ochre_gameplay::critters::CritterPlugin;
 use ochre_gameplay::debug::DebugOverlayPlugin;
 use ochre_gameplay::flythrough::FlythroughPlugin;
@@ -95,6 +96,7 @@ fn main() {
         TerrainRenderPlugin { renderer },
         SkyPlugin::new(&renderer),
         PlayerPlugin,
+        BreakingPlugin,
         FlythroughPlugin,
         DebugOverlayPlugin,
         AmbiencePlugin,

@@ -58,7 +58,7 @@ pub struct GroupedChunk;
 #[derive(Component)]
 pub(crate) struct InnerLeafFaces;
 
-fn group_aabb() -> Aabb {
+pub(crate) fn group_aabb() -> Aabb {
     let width = (2 * CHUNK_SIZE) as f32;
     Aabb::from_min_max(Vec3::ZERO, Vec3::splat(width))
 }
@@ -161,48 +161,7 @@ pub(crate) fn load_groups(
         };
         if merged.has_geometry() {
             commands.entity(entity).insert((BuiltGroup, group_aabb()));
-            if merged.opaque.count_vertices() > 0 {
-                commands.entity(entity).insert((
-                    Mesh3d(meshes.add(pack(merged.opaque))),
-                    MeshMaterial3d(loader.material.clone()),
-                ));
-            }
-            if let Some(water) = merged.water {
-                let water_material = loader.water_material.clone();
-                commands.entity(entity).with_children(|parent| {
-                    parent.spawn((
-                        Mesh3d(meshes.add(pack(water))),
-                        MeshMaterial3d(water_material),
-                        Transform::default(),
-                        group_aabb(),
-                    ));
-                });
-            }
-            if let Some(spray) = merged.spray {
-                let spray_material = loader.spray_material.clone();
-                commands.entity(entity).with_children(|parent| {
-                    parent.spawn((
-                        Mesh3d(meshes.add(spray)),
-                        MeshMaterial3d(spray_material),
-                        Transform::default(),
-                        group_aabb(),
-                    ));
-                });
-            }
-            if let Some(inner_leaves) = merged.inner_leaves {
-                let material = loader.material.clone();
-                commands.entity(entity).with_children(|parent| {
-                    parent.spawn((
-                        InnerLeafFaces,
-                        Mesh3d(meshes.add(pack(inner_leaves))),
-                        MeshMaterial3d(material),
-                        Transform::default(),
-                        group_aabb(),
-                        // shown by `show_inner_leaves` once it's near
-                        Visibility::Hidden,
-                    ));
-                });
-            }
+            draw_group(&mut commands, entity, merged, &loader, &mut meshes);
         }
         for &chunk in &build.chunks {
             if let Ok(mut chunk) = commands.get_entity(chunk) {
@@ -210,6 +169,59 @@ pub(crate) fn load_groups(
             }
         }
         commands.entity(entity).remove::<BuildChunkGroup>();
+    }
+}
+
+/// Draws `merged` as the group at `entity`: its opaque faces on the entity, and its water, spray and
+/// the faces between its leaves on children of it.
+pub(crate) fn draw_group(
+    commands: &mut Commands,
+    entity: Entity,
+    merged: ChunkMeshes,
+    loader: &ChunkLoader,
+    meshes: &mut Assets<Mesh>,
+) {
+    if merged.opaque.count_vertices() > 0 {
+        commands.entity(entity).insert((
+            Mesh3d(meshes.add(pack(merged.opaque))),
+            MeshMaterial3d(loader.material.clone()),
+        ));
+    }
+    if let Some(water) = merged.water {
+        let water_material = loader.water_material.clone();
+        commands.entity(entity).with_children(|parent| {
+            parent.spawn((
+                Mesh3d(meshes.add(pack(water))),
+                MeshMaterial3d(water_material),
+                Transform::default(),
+                group_aabb(),
+            ));
+        });
+    }
+    if let Some(spray) = merged.spray {
+        let spray_material = loader.spray_material.clone();
+        commands.entity(entity).with_children(|parent| {
+            parent.spawn((
+                Mesh3d(meshes.add(spray)),
+                MeshMaterial3d(spray_material),
+                Transform::default(),
+                group_aabb(),
+            ));
+        });
+    }
+    if let Some(inner_leaves) = merged.inner_leaves {
+        let material = loader.material.clone();
+        commands.entity(entity).with_children(|parent| {
+            parent.spawn((
+                InnerLeafFaces,
+                Mesh3d(meshes.add(pack(inner_leaves))),
+                MeshMaterial3d(material),
+                Transform::default(),
+                group_aabb(),
+                // shown by `show_inner_leaves` once it's near
+                Visibility::Hidden,
+            ));
+        });
     }
 }
 

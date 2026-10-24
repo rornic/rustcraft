@@ -59,6 +59,40 @@ impl BlockType {
         self.light_opacity() == crate::MAX_LIGHT
     }
 
+    // Whether the player can point at it: looking through air and water to what's past them.
+    pub fn is_targetable(&self) -> bool {
+        !matches!(self, BlockType::Air | BlockType::Water)
+    }
+
+    // Whether the player can break it. Compacted stone only gives way to explosives.
+    pub fn is_breakable(&self) -> bool {
+        self.is_targetable() && *self != BlockType::CompactedStone
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            BlockType::Air => "air",
+            BlockType::Stone => "stone",
+            BlockType::Grass => "grass",
+            BlockType::Sand => "sand",
+            BlockType::Water => "water",
+            BlockType::Snow => "snow",
+            BlockType::Log => "log",
+            BlockType::Leaves => "leaves",
+            BlockType::Dirt => "dirt",
+            BlockType::Gravel => "gravel",
+            BlockType::Ice => "ice",
+            BlockType::Sandstone => "sandstone",
+            BlockType::TallGrass => "tall grass",
+            BlockType::Fern => "fern",
+            BlockType::Poppy => "poppy",
+            BlockType::Dandelion => "dandelion",
+            BlockType::ShortGrass => "short grass",
+            BlockType::SeedGrass => "seed grass",
+            BlockType::CompactedStone => "compacted stone",
+        }
+    }
+
     // Plants on the ground: drawn as two quads crossed through the block, not as a cube, and
     // see-through, hiding nothing and shading nothing.
     pub fn is_flora(&self) -> bool {
@@ -246,6 +280,18 @@ mod tests {
         assert_eq!(1.0, BlockType::Stone.occlusion_weight());
         let w = BlockType::Water.occlusion_weight();
         assert!(w > 0.0 && w < 1.0);
+    }
+
+    #[test]
+    fn test_compacted_stone_air_and_water_cannot_be_broken() {
+        assert!(BlockType::Stone.is_breakable());
+        assert!(BlockType::Poppy.is_breakable());
+        assert!(!BlockType::CompactedStone.is_breakable());
+        // it can still be pointed at, to see what it is
+        assert!(BlockType::CompactedStone.is_targetable());
+        for passed_through in [BlockType::Air, BlockType::Water] {
+            assert!(!passed_through.is_targetable() && !passed_through.is_breakable());
+        }
     }
 
     #[test]

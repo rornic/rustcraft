@@ -14,3 +14,7 @@ ochre-terrain.workspace = true
 ochre-world.workspace = true
 bevy.workspace = true
 rand.workspace = true
+
+[dev-dependencies]
+# the tests build worlds on real world maps
+ochre-world = { workspace = true, features = ["test-support"] }

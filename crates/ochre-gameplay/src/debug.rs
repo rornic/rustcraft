@@ -12,6 +12,7 @@ use bevy::render::render_phase::{
 };
 use bevy::render::{diagnostic::RenderDiagnosticsPlugin, Render, RenderApp, RenderSystems};
 
+use crate::breaking::LookedAt;
 use crate::player::Player;
 use ochre_terrain::chunk_loader::Chunk;
 use ochre_terrain::lod::LodNode;
@@ -21,7 +22,8 @@ const TOGGLE_KEY: KeyCode = KeyCode::F1;
 const REFRESH_SECONDS: f32 = 0.25;
 const GPU_PASSES_SHOWN: usize = 8;
 
-/// F1 toggles a text readout of the player's climate, frame cost and loaded terrain.
+/// F1 toggles a text readout of the player's climate, the block it's looking at, frame cost and
+/// loaded terrain.
 pub struct DebugOverlayPlugin;
 
 impl Plugin for DebugOverlayPlugin {
@@ -147,6 +149,7 @@ fn update_overlay(
     chunks: Query<(), With<Chunk>>,
     lod_nodes: Query<&LodNode>,
     counts: Res<DrawCounts>,
+    looked_at: Option<Res<LookedAt>>,
     mut overlay: Query<(&mut Text, &Visibility), With<DebugOverlay>>,
 ) {
     let Ok((mut text, visibility)) = overlay.single_mut() else {
@@ -180,6 +183,22 @@ fn update_overlay(
             out,
             "biome: {biome}  temp: {:.2}  humidity: {:.2}",
             climate.temperature, climate.humidity
+        );
+    }
+    if let Some((hit, block)) = looked_at.and_then(|l| l.0) {
+        let b = hit.block;
+        let _ = writeln!(
+            out,
+            "looking at: {}{} ({} {} {})",
+            block.name(),
+            if block.is_breakable() {
+                ""
+            } else {
+                ", unbreakable"
+            },
+            b.x,
+            b.y,
+            b.z
         );
     }
 
