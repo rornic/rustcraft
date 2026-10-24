@@ -73,7 +73,8 @@ impl Plugin for TerrainPlugin {
                     .after(load_groups)
                     .before(unload_chunks),
                 unload_chunks,
-                show_inner_leaves.after(load_groups),
+                // sees the inner leaves `apply_remeshes` spawns hidden this frame, or they flash
+                show_inner_leaves.after(apply_remeshes),
             ),
         );
     }
