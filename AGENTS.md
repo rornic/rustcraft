@@ -38,6 +38,7 @@ ochre-gameplay  player, collision, birds, critters, debug overlay, flythrough (b
 - Terrain generation: `ochre-terrain/src/generate/` (columns, regions, trees, light), meshing in `generate/generator/`.
 - LODs: `ochre-terrain/src/lod/`. Chunk streaming: `chunk_loader.rs`. Both run on `TerrainPlugin`.
 - World map pipeline: `ochre-world/src/worldmap/` (erosion, hydrology, water, climate, then `source.rs` as the `TerrainSource`).
+- Lakes, rivers and the sea, and the rule that keeps them from leaking: `docs/water.md`. Read it before changing water.
 - Shaders: `assets/shaders/`. Block textures: `assets/textures/blocks.png`, built by the `block-textures` skill.
 - Examples double as tools: `worldprobe` (CLI probe of a spot), `world_map` (PNG), `water_audit`, `seams`, `lod_sim` (headless loading), `flight` (scripted flight report).
 

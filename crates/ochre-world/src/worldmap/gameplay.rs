@@ -379,7 +379,11 @@ fn crossings(map: &mut WorldMap, slope: &[f32]) {
                     let n = nz as usize * dim + nx as usize;
                     if map.water_kind[n] == WaterCell::None as u8 {
                         let d = ((dx * dx + dz * dz) as f32).sqrt();
-                        map.height[n] = map.height[n].min(surface + 2.0 + 0.8 * d);
+                        // never under the lake or sea beside it, whose rim it would cut, as this is
+                        // after the lakes are filled
+                        let held = map.still_beside(n) + 1.0;
+                        let flat = map.height[n].min(surface + 2.0 + 0.8 * d);
+                        map.height[n] = flat.max(held.min(map.height[n]));
                     }
                 }
             }
