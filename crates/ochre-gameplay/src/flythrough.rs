@@ -15,33 +15,35 @@ use ochre_terrain::world::World;
 const FPS: u32 = 60;
 // Real seconds the camera waits at the start for the terrain round it to load.
 const WARMUP: f32 = 5.0;
-// Blocks the camera keeps over the ground, water and trees, how fast it may rise and sink back, and how far ahead it looks.
-const CLEARANCE: f32 = 4.0;
-const RISE: f32 = 12.0;
-const SINK: f32 = 6.0;
-const AHEAD: [f32; 7] = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5];
+// Blocks the camera keeps over the ground and water, enough to clear trees, and over any block right round it.
+const CLEARANCE: f32 = 24.0;
+const BLOCK_CLEARANCE: f32 = 4.0;
+// Seconds either side the lift over the ground looks for the highest it needs, and eases over, so it rises and settles in long curves.
+const LIFT_REACH: f32 = 2.5;
 
 // (seconds, camera position, where it looks)
-const KEYS: [(f32, [f32; 3], [f32; 3]); 14] = [
-    (0.0, [9330.0, 512.0, -2000.0], [9420.0, 506.0, -2110.0]),
-    (4.0, [9420.0, 510.0, -2120.0], [9550.0, 503.0, -2350.0]),
-    // low across the lake to the spring on the far shore, then slow over its meadow
-    (16.0, [10000.0, 514.0, -3240.0], [10061.0, 506.0, -3304.0]),
-    (25.0, [10050.0, 513.0, -3290.0], [10085.0, 505.0, -3335.0]),
-    // up and away west to the mountain over the lake
-    (29.0, [9700.0, 640.0, -3150.0], [7225.0, 880.0, -2900.0]),
-    (39.0, [7420.0, 935.0, -2920.0], [6900.0, 880.0, -2880.0]),
-    // on the summit, looking round from the west by the north to the lake in the east
-    (42.0, [7235.0, 912.0, -2900.0], [6625.0, 860.0, -2900.0]),
-    (45.0, [7230.0, 914.0, -2900.0], [7225.0, 860.0, -3500.0]),
-    (48.0, [7225.0, 916.0, -2900.0], [7825.0, 820.0, -2900.0]),
-    // straight up, tilting down over the whole world
-    (53.0, [7300.0, 2400.0, -2920.0], [8600.0, 500.0, -2950.0]),
-    (58.0, [7400.0, 5000.0, -2950.0], [8200.0, 450.0, -2960.0]),
-    // and a look round from up there, east by the north to the west
-    (61.0, [7400.0, 5000.0, -2950.0], [11400.0, 500.0, -2950.0]),
-    (63.5, [7400.0, 5000.0, -2950.0], [7400.0, 500.0, -6950.0]),
-    (66.0, [7400.0, 5000.0, -2950.0], [3400.0, 500.0, -2950.0]),
+const KEYS: [(f32, [f32; 3], [f32; 3]); 17] = [
+    // high over the world, for its scale, looking round from the south by the east and north to the west
+    (0.0, [8120.0, 6000.0, -6000.0], [8120.0, 500.0, -2000.0]),
+    (3.0, [8120.0, 6000.0, -6000.0], [12120.0, 500.0, -6000.0]),
+    (6.0, [8120.0, 6000.0, -6000.0], [8120.0, 500.0, -10000.0]),
+    (9.0, [8120.0, 6000.0, -6000.0], [4120.0, 500.0, -6000.0]),
+    // down through the clouds to the ridge's summit, and round from the stream below it in the west by the north
+    (19.0, [8130.0, 925.0, -6000.0], [7183.0, 640.0, -5844.0]),
+    (22.0, [8130.0, 925.0, -6000.0], [8130.0, 860.0, -6600.0]),
+    (25.0, [8130.0, 925.0, -6000.0], [8730.0, 860.0, -6000.0]),
+    (28.0, [8130.0, 925.0, -6000.0], [8130.0, 860.0, -5400.0]),
+    (31.0, [8130.0, 925.0, -6000.0], [7183.0, 600.0, -5844.0]),
+    // over the ridge and down its far side to where the stream rises, then along it to the lake
+    (34.0, [7750.0, 900.0, -5940.0], [7183.0, 610.0, -5844.0]),
+    (38.0, [7260.0, 605.0, -5860.0], [7011.0, 595.0, -5758.0]),
+    (42.0, [7011.0, 600.0, -5758.0], [6793.0, 585.0, -5703.0]),
+    (46.0, [6793.0, 585.0, -5703.0], [6636.0, 560.0, -5639.0]),
+    (50.0, [6636.0, 560.0, -5639.0], [6480.0, 540.0, -5500.0]),
+    (54.0, [6480.0, 540.0, -5500.0], [6315.0, 525.0, -5449.0]),
+    (58.0, [6315.0, 530.0, -5449.0], [6100.0, 520.0, -5440.0]),
+    // out over the lake, rising a little
+    (67.0, [5500.0, 560.0, -5330.0], [4800.0, 530.0, -5200.0]),
 ];
 
 pub struct FlythroughPlugin;
@@ -50,8 +52,13 @@ impl Plugin for FlythroughPlugin {
     fn build(&self, app: &mut App) {
         if let Ok(dir) = std::env::var("OCHRE_FLYTHROUGH") {
             std::fs::create_dir_all(&dir).expect("flythrough frame directory");
-            app.insert_resource(Flythrough { dir, started: Instant::now(), frame: None, lift: 0.0 })
-                .add_systems(PostUpdate, fly.before(TransformSystems::Propagate));
+            app.insert_resource(Flythrough {
+                dir,
+                started: Instant::now(),
+                frame: None,
+                lift: Vec::new(),
+            })
+            .add_systems(PostUpdate, fly.before(TransformSystems::Propagate));
         }
     }
 }
@@ -62,7 +69,8 @@ struct Flythrough {
     started: Instant,
     // the frame being recorded, once warmed up
     frame: Option<u32>,
-    lift: f32,
+    // blocks over the path the camera rises each frame, worked out for the whole flight up front
+    lift: Vec<f32>,
 }
 
 // The path at `t` seconds: a Hermite curve through the keys, with monotone tangents so it never overshoots a key and swings back.
@@ -79,7 +87,11 @@ fn path(t: f32) -> (Vec3, Vec3) {
         let after = (value(i + 1) - value(i)) / (KEYS[i + 1].0 - KEYS[i].0);
         Vec3::from_array(std::array::from_fn(|k| {
             let (a, b) = (before[k], after[k]);
-            if a * b <= 0.0 { 0.0 } else { 2.0 * a * b / (a + b) }
+            if a * b <= 0.0 {
+                0.0
+            } else {
+                2.0 * a * b / (a + b)
+            }
         }))
     };
     let (position, look) = (|i: usize| at(i).1, |i: usize| at(i).2);
@@ -89,8 +101,15 @@ fn path(t: f32) -> (Vec3, Vec3) {
     let span = t1 - t0;
     let s = ((t - t0) / span).clamp(0.0, 1.0);
     let (s2, s3) = (s * s, s * s * s);
-    let (h00, h10, h01, h11) = (2.0 * s3 - 3.0 * s2 + 1.0, s3 - 2.0 * s2 + s, -2.0 * s3 + 3.0 * s2, s3 - s2);
-    let hermite = |a: Vec3, ma: Vec3, b: Vec3, mb: Vec3| a * h00 + ma * span * h10 + b * h01 + mb * span * h11;
+    let (h00, h10, h01, h11) = (
+        2.0 * s3 - 3.0 * s2 + 1.0,
+        s3 - 2.0 * s2 + s,
+        -2.0 * s3 + 3.0 * s2,
+        s3 - s2,
+    );
+    let hermite = |a: Vec3, ma: Vec3, b: Vec3, mb: Vec3| {
+        a * h00 + ma * span * h10 + b * h01 + mb * span * h11
+    };
     (hermite(p0, m0, p1, m1), hermite(q0, n0, q1, n1))
 }
 
@@ -109,29 +128,32 @@ fn fly(
         Some(frame) => frame,
         None if state.started.elapsed().as_secs_f32() < WARMUP => 0,
         None => {
-            commands.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / FPS as f64)));
+            commands.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / FPS as f64,
+            )));
             state.frame = Some(0);
             0
         }
     };
+    if state.lift.is_empty() {
+        let frames = (KEYS[KEYS.len() - 1].0 * FPS as f32) as usize + 1;
+        let need: Vec<f32> = (0..frames)
+            .map(|frame| {
+                let p = path(frame as f32 / FPS as f32).0;
+                ground_height(&world, p) + CLEARANCE - p.y
+            })
+            .collect();
+        state.lift = smooth_lift(&need, (LIFT_REACH * FPS as f32) as usize);
+    }
     let t = frame as f32 / FPS as f32;
     if t > KEYS[KEYS.len() - 1].0 {
         exit.write(AppExit::Success);
         return;
     }
     let (mut at, look) = path(t);
-    // kept clear of what's coming up along the path, rising early and smoothly over it and easing back down after
-    let wanted = AHEAD
-        .iter()
-        .map(|&ahead| {
-            let p = path(t + ahead).0;
-            clear_height(&world, p) - p.y
-        })
-        .fold(0.0, f32::max);
-    let step = (wanted - state.lift).clamp(-SINK / FPS as f32, RISE / FPS as f32);
-    state.lift += step;
-    // and never under the ground or a tree, even for a frame the smooth lift hasn't caught up
-    at.y = (at.y + state.lift).max(clear_height(&world, at) - CLEARANCE + 1.5);
+    at.y += state.lift[(frame as usize).min(state.lift.len() - 1)];
+    // and never in a block the ground's height missed, a tree or an overhang
+    at.y = at.y.max(block_height(&world, at));
     let facing = (look - at).normalize_or_zero();
     body.translation = at - Vec3::Y * EYE_HEIGHT;
     body.rotation = Quat::from_rotation_y(f32::atan2(-facing.x, -facing.z));
@@ -139,27 +161,64 @@ fn fly(
     eye.rotation = Quat::from_rotation_x(facing.y.clamp(-1.0, 1.0).asin());
     if let Some(frame) = state.frame {
         let file = format!("{}/frame_{frame:05}.png", state.dir);
-        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(file));
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(file));
         state.frame = Some(frame + 1);
     }
 }
 
-// How high the camera must be over `p`'s column: over the ground, water, and any solid block round it, trees included.
-fn clear_height(world: &World, p: Vec3) -> f32 {
-    let sample = world.region_store.terrain().sample(p.x as f64, p.z as f64);
-    let mut floor = (sample.height as f32).max(sample.water_surface);
+// The highest ground or water round `p`'s column, from the terrain itself, as the blocks far along the path aren't loaded yet.
+fn ground_height(world: &World, p: Vec3) -> f32 {
+    let terrain = world.region_store.terrain();
+    let mut top = f32::MIN;
+    for dx in [-8.0, 0.0, 8.0] {
+        for dz in [-8.0, 0.0, 8.0] {
+            let sample = terrain.sample((p.x + dx) as f64, (p.z + dz) as f64);
+            top = top.max((sample.height as f32).max(sample.water_surface));
+        }
+    }
+    top
+}
+
+// How high the camera must be over any solid block right round `p`, trees included.
+fn block_height(world: &World, p: Vec3) -> f32 {
+    let mut floor = f32::MIN;
     for dx in -1..=1 {
         for dz in -1..=1 {
             let (x, z) = (p.x.round() as i64 + dx, p.z.round() as i64 + dz);
             let top = (p.y.round() as i64 - 4..=p.y.round() as i64 + 16)
                 .rev()
-                .find(|&y| world.get_block_at(bevy::math::I64Vec3::new(x, y, z)).is_solid());
+                .find(|&y| {
+                    world
+                        .get_block_at(bevy::math::I64Vec3::new(x, y, z))
+                        .is_solid()
+                });
             if let Some(y) = top {
-                floor = floor.max(y as f32 + 0.5);
+                floor = floor.max(y as f32 + 0.5 + BLOCK_CLEARANCE);
             }
         }
     }
-    floor + CLEARANCE
+    floor
+}
+
+// The lift over each frame: never under what it `need`s, the highest need within `reach` frames either side, eased twice over that span so it curves in and out.
+fn smooth_lift(need: &[f32], reach: usize) -> Vec<f32> {
+    let window = |i: usize| i.saturating_sub(reach)..(i + reach + 1).min(need.len());
+    let mut lift: Vec<f32> = (0..need.len())
+        .map(|i| need[window(i)].iter().copied().fold(0.0, f32::max))
+        .collect();
+    // each frame of two means over half the span still only draws on frames whose highest covers its own need
+    let half = reach / 2;
+    for _ in 0..2 {
+        lift = (0..lift.len())
+            .map(|i| {
+                let span = i.saturating_sub(half)..(i + half + 1).min(lift.len());
+                lift[span.clone()].iter().sum::<f32>() / span.len() as f32
+            })
+            .collect();
+    }
+    lift
 }
 
 #[cfg(test)]
@@ -170,7 +229,10 @@ mod tests {
     fn test_path_passes_through_each_key_and_never_overshoots_between() {
         for (i, &(t, at, look)) in KEYS.iter().enumerate() {
             let (p, q) = path(t);
-            assert!(p.distance(Vec3::from(at)) < 1e-2 && q.distance(Vec3::from(look)) < 1e-2, "key {i}");
+            assert!(
+                p.distance(Vec3::from(at)) < 1e-2 && q.distance(Vec3::from(look)) < 1e-2,
+                "key {i}"
+            );
         }
         for pair in KEYS.windows(2) {
             let ((t0, a0, _), (t1, a1, _)) = (pair[0], pair[1]);
@@ -178,9 +240,31 @@ mod tests {
                 let p = path(t0 + (t1 - t0) * step as f32 / 50.0).0;
                 for k in 0..3 {
                     let (lo, hi) = (a0[k].min(a1[k]), a0[k].max(a1[k]));
-                    assert!((lo - 1e-2..=hi + 1e-2).contains(&p[k]), "overshoot between {t0} and {t1}");
+                    assert!(
+                        (lo - 1e-2..=hi + 1e-2).contains(&p[k]),
+                        "overshoot between {t0} and {t1}"
+                    );
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_lift_clears_every_need_and_changes_gently() {
+        // flat, then a sharp spike and a jagged ridge, as rough ground under a straight path
+        let need: Vec<f32> = (0..600)
+            .map(|i| match i {
+                100 => 80.0,
+                300..=400 => 40.0 + 30.0 * ((i % 7) as f32 / 7.0),
+                _ => -20.0,
+            })
+            .collect();
+        let lift = smooth_lift(&need, 150);
+        assert!(need.iter().zip(&lift).all(|(n, l)| l >= n && *l >= 0.0));
+        let steepest = lift
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
+        assert!(steepest < 1.5, "{steepest} blocks in a frame");
     }
 }

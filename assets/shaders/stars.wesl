@@ -4,6 +4,7 @@
 
 import bevy_pbr::render::mesh_view_bindings as view_bindings;
 import super::sky::{MOON_LIGHT, SUN_LIGHT, night_factor, night_glow};
+import super::cloud_cover::disc_showing;
 import super::lighting::moon_phase;
 
 // The sun's path is the circle through these, which are square to each other, and the pole it
@@ -12,6 +13,9 @@ const EAST: vec3<f32> = vec3<f32>(0.66436, 0.0, 0.74738);
 const PEAK: vec3<f32> = vec3<f32>(-0.44944, 0.79900, 0.39950);
 const POLE: vec3<f32> = vec3<f32>(-0.5972, -0.6013, 0.5308);
 
+// The stars run ahead of the moon, which keeps to the sun, by twice this many radians over a night, and ease back by day
+// while they're hidden, so they're the same each night, as the real moon falls behind them through its month.
+const NIGHT_DRIFT: f32 = 0.25;
 // The moon's size in radians, about four times the real moon's, and how bright its lit face is.
 const MOON_RADIUS: f32 = 0.035;
 const MOON_SCENE: f32 = 2.2;
@@ -72,10 +76,11 @@ fn rotate_about(axis: vec3<f32>, angle: f32, v: vec3<f32>) -> vec3<f32> {
 }
 
 // `direction` in the frame the stars are fixed in: the sky turned back by how far round its
-// path the sun has come.
+// path the sun has come, and on by `NIGHT_DRIFT`.
 fn star_frame(direction: vec3<f32>) -> vec3<f32> {
     let sun = view_bindings::lights.directional_lights[SUN_LIGHT].direction_to_light;
-    return rotate_about(POLE, -atan2(dot(sun, PEAK), dot(sun, EAST)), direction);
+    let angle = atan2(dot(sun, PEAK), dot(sun, EAST));
+    return rotate_about(POLE, -(angle + NIGHT_DRIFT * cos(angle)), direction);
 }
 
 // The light of one layer's star, if there's one in this direction's cell, for `footprint`
@@ -137,7 +142,8 @@ fn moon_disc(direction: vec3<f32>, footprint: f32) -> vec4<f32> {
     let albedo = mix(0.95, 0.5, seas * 0.85) * (0.85 + 0.3 * fbm(face * 9.0));
     let lit = mix(0.04, 1.0, smoothstep(-0.03, 0.06, dot(normal, to_sun)));
     let cover = 1.0 - smoothstep(MOON_RADIUS - footprint, MOON_RADIUS + footprint, angle);
-    return vec4<f32>(vec3<f32>(1.0, 0.97, 0.9) * albedo * lit * MOON_SCENE * cover, cover);
+    // behind cloud its face goes, but it still covers the stars behind it
+    return vec4<f32>(vec3<f32>(1.0, 0.97, 0.9) * albedo * lit * MOON_SCENE * cover * disc_showing(true), cover);
 }
 
 // The glow of moonlight in the air round the moon.
@@ -146,7 +152,7 @@ fn moon_halo(direction: vec3<f32>) -> vec3<f32> {
         return vec3<f32>(0.0);
     }
     let angle = acos(clamp(dot(direction, view_bindings::lights.directional_lights[MOON_LIGHT].direction_to_light), -1.0, 1.0));
-    return MOON_HALO * moon_phase() * (0.03 * exp(-angle / 0.12) + 0.008 * exp(-angle / 0.6));
+    return MOON_HALO * moon_phase() * (0.03 * exp(-angle / 0.12) + 0.008 * exp(-angle / 0.6)) * disc_showing(true);
 }
 
 // Everything the night adds to the sky towards `direction`, premultiplied, for `footprint`

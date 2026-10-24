@@ -11,6 +11,7 @@ use bevy::{
     },
     shader::ShaderRef,
 };
+use ochre_terrain::material::CloudLayer;
 
 /// Sorts the sky domes before every other blended thing, each pinned to the far plane so it draws only where nothing else is.
 pub const SKY_DEPTH_BIAS: f32 = -2.0e9;
@@ -19,8 +20,19 @@ pub const SKY_DEPTH_BIAS: f32 = -2.0e9;
 macro_rules! sky_dome {
     ($(#[$doc:meta])* $material:ident, $plugin:ident, $shader:literal) => {
         $(#[$doc])*
-        #[derive(Asset, TypePath, AsBindGroup, Debug, Clone, Default)]
-        pub struct $material {}
+        #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+        pub struct $material {
+            // how much of the sun and moon the clouds hide, see `cloud_cover.wesl`
+            #[texture(9)]
+            #[sampler(10)]
+            cloud_reflection: Handle<Image>,
+        }
+
+        impl From<Handle<Image>> for $material {
+            fn from(cloud_reflection: Handle<Image>) -> Self {
+                Self { cloud_reflection }
+            }
+        }
 
         impl Material for $material {
             fn vertex_shader() -> ShaderRef {
@@ -86,16 +98,24 @@ sky_dome!(
     "shaders/night_sky.wesl"
 );
 
-fn spawn_dome<M: Material + Default>(
+fn spawn_dome<M: Material + From<Handle<Image>>>(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<M>>,
+    clouds: Option<Res<CloudLayer>>,
     camera: Query<Entity, With<Camera3d>>,
 ) {
     let Ok(camera) = camera.single() else {
         return;
     };
-    commands.spawn(dome(&mut meshes, materials.add(M::default()), camera));
+    let reflection = clouds
+        .map(|clouds| clouds.reflection.clone())
+        .unwrap_or_default();
+    commands.spawn(dome(
+        &mut meshes,
+        materials.add(M::from(reflection)),
+        camera,
+    ));
 }
 
 /// A sphere hung round `camera`, drawing `material` over the sky.

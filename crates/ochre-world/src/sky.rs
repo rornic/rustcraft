@@ -63,9 +63,8 @@ const SKY_GAIN: f32 = 4.0;
 const CAMERA_EV100: f32 = Exposure::EV100_SUNLIGHT;
 const FIRST_CASCADE_DISTANCE: f32 = 20.0;
 const ENVIRONMENT_MAP_SIZE: u32 = 64;
-// About twice the real sun's size, and bright enough past white that bloom haloes it.
+// About twice the real sun's size; matches `DISC_SIZE` in `sun_glare.wesl`, which draws it so clouds can hide it.
 const SUN_DISC_SIZE: f32 = 0.02;
-const SUN_DISC_INTENSITY: f32 = 1.0;
 /// Colour of moonlight, cool against the sun's.
 const MOON_COLOR: Color = Color::srgb(0.65, 0.78, 1.0);
 /// How many times more light the shaders make of the moon's than its light gives, so the moon's
@@ -100,9 +99,10 @@ pub fn sun(shadow_distance: f32, cascades: usize) -> impl Bundle {
         },
         Sun,
         SunShadows(shining_from(sun_direction(START_TIME)).rotation),
+        // its size still dims the light as it sets; the disc itself is drawn by `sun_glare.wesl`
         SunDisk {
             angular_size: SUN_DISC_SIZE,
-            intensity: SUN_DISC_INTENSITY,
+            intensity: 0.0,
         },
         shining_from(sun_direction(START_TIME)),
         CascadeShadowConfigBuilder {

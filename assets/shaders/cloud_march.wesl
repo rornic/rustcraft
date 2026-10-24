@@ -10,6 +10,8 @@ const TOP: f32 = 2100.0;
 const LAND_TOP: f32 = 1024.0;
 // Light lost a block into the thickest cloud.
 const EXTINCTION: f32 = 0.025;
+// So little light still through that a march stops there, and counts it as none: the sun's disc is thousands of times brighter than the cloud, and would shine through what's left.
+const OPAQUE: f32 = 0.02;
 // How much of a ray through the slab is marched at full steps, in blocks, so they stay short along low rays, and how far on it's marched at fewer: past the clouds' fade nothing's left.
 const NEAR_REACH: f32 = 3000.0;
 const MARCH_REACH: f32 = 15000.0;
@@ -144,10 +146,11 @@ fn cloud_span(origin: vec3<f32>, direction: vec3<f32>, bend: f32) -> vec2<f32> {
     return span;
 }
 
-// A march's gathering: sun, moon-and-sky and haze reaching the eye in xyz, and transmittance.
+// A march's gathering: sun, moon-and-sky and haze reaching the eye in xyz, transmittance, and the distance to what it gathered, summed by how much each part gave.
 struct Marched {
     gathered: vec3<f32>,
     through: f32,
+    depth: f32,
 }
 
 // `so_far` on through the cumulus over `span`, steps widening with distance for detail close by.
@@ -179,8 +182,9 @@ fn march(so_far: Marched, origin: vec3<f32>, direction: vec3<f32>, bend: f32, sp
             let taken = (1.0 - exp(-filled * EXTINCTION * stride)) * (1.0 - smoothstep(FADE.x, FADE.y, away));
             let weight = out.through * taken;
             out.gathered += weight * vec3<f32>((1.0 - hazed) * lit, (1.0 - hazed) * mix(UNDERSIDE, 1.0, height), hazed);
+            out.depth += weight * t;
             out.through *= 1.0 - taken;
-            if out.through < 0.02 {
+            if out.through < OPAQUE {
                 break;
             }
         }
@@ -192,7 +196,7 @@ fn march(so_far: Marched, origin: vec3<f32>, direction: vec3<f32>, bend: f32, sp
 fn cirrus(so_far: Marched, origin: vec3<f32>, direction: vec3<f32>, t: f32, limit: f32, drift: vec2<f32>) -> Marched {
     var out = so_far;
     let away = t * length(direction.xz);
-    if t <= 0.0 || t >= limit || away >= FADE.y || out.through < 0.02 {
+    if t <= 0.0 || t >= limit || away >= FADE.y || out.through < OPAQUE {
         return out;
     }
     // short streaks, turned by swirls across the sky and broken into patches a few streaks across
@@ -211,12 +215,19 @@ fn cirrus(so_far: Marched, origin: vec3<f32>, direction: vec3<f32>, t: f32, limi
     let hazed = 1.0 - exp2(-away / HAZE);
     // thin, so lit straight through, with no more sunlight scattered to the eye than off a cumulus's face
     out.gathered += out.through * wisp * vec3<f32>((1.0 - hazed) / SUN_SCATTER, 1.0 - hazed, hazed);
+    out.depth += out.through * wisp * t;
     out.through *= 1.0 - wisp;
     return out;
 }
 
 // The clouds along a ray before `limit`, packed as `Marched` with coverage in w, jittered and bent with the world.
 fn march_clouds(origin: vec3<f32>, direction: vec3<f32>, bend: f32, limit: f32, steps: i32, octaves: i32, jitter: f32, to_sun: vec3<f32>, time: f32) -> vec4<f32> {
+    let out = march_ray(origin, direction, bend, limit, steps, octaves, jitter, to_sun, time);
+    return vec4<f32>(out.gathered, 1.0 - out.through);
+}
+
+// `march_clouds` unpacked.
+fn march_ray(origin: vec3<f32>, direction: vec3<f32>, bend: f32, limit: f32, steps: i32, octaves: i32, jitter: f32, to_sun: vec3<f32>, time: f32) -> Marched {
     // the clock wraps on the hour, when the wind has moved a whole number of patterns, see `clouds::WIND`
     let drift = cloud_layer.zw * time;
     var span = cloud_span(origin, direction, bend);
@@ -224,7 +235,7 @@ fn march_clouds(origin: vec3<f32>, direction: vec3<f32>, bend: f32, limit: f32, 
     // the cirrus, where the ray crosses its height: in front of the cumulus seen from above
     let sheet = below(origin, direction, bend, CIRRUS);
     let above = origin.y > CIRRUS;
-    var out = Marched(vec3<f32>(0.0), 1.0);
+    var out = Marched(vec3<f32>(0.0), 1.0, 0.0);
     if above {
         out = cirrus(out, origin, direction, sheet.x, limit, drift);
     }
@@ -236,7 +247,8 @@ fn march_clouds(origin: vec3<f32>, direction: vec3<f32>, bend: f32, limit: f32, 
     if !above {
         out = cirrus(out, origin, direction, sheet.y, limit, drift);
     }
-    return vec4<f32>(out.gathered, 1.0 - out.through);
+    out.through = saturate((out.through - OPAQUE) / (1.0 - OPAQUE));
+    return out;
 }
 
 // Distance to the first cloud a ray could meet, or `FAR`: the land never reaches that high, so nothing nearer hides them.
@@ -249,4 +261,32 @@ fn cloud_entry(origin: vec3<f32>, direction: vec3<f32>, bend: f32) -> f32 {
         entry = min(entry, crossing);
     }
     return entry;
+}
+
+// The reflections' map is two halves: on the left the sky over the eye drawn stereographically onto a disc, and on the right the clouds straight over the ground round the eye, this far each way, see `reflection` in `cloud_target.wesl`.
+const REFLECTION_TEXELS: f32 = 512.0;
+const OVERHEAD_REACH: f32 = 12288.0;
+
+// Where an upward `direction` lies in the reflections' sky disc.
+fn sky_disc(direction: vec3<f32>) -> vec2<f32> {
+    return map_half(direction.xz / (1.0 + direction.y) * 0.5 + 0.5, 0.0);
+}
+
+// Where the clouds over `xz` lie in the reflections' overhead half, for an eye over `eye`.
+fn overhead(xz: vec2<f32>, eye: vec2<f32>) -> vec2<f32> {
+    return map_half((xz - eye) / OVERHEAD_REACH * 0.5 + 0.5, 0.5);
+}
+
+// `uv` within the map's half from `start`, kept half a texel off its edges so neither half bleeds into the other.
+fn map_half(uv: vec2<f32>, start: f32) -> vec2<f32> {
+    let edge = 0.5 / REFLECTION_TEXELS;
+    let inside = clamp(uv, vec2<f32>(edge), vec2<f32>(1.0 - edge));
+    return vec2<f32>(start + inside.x * 0.5, inside.y);
+}
+
+// The way up through `uv` in the sky disc, undoing `sky_disc`.
+fn disc_sky(uv: vec2<f32>) -> vec3<f32> {
+    let p = uv * 2.0 - 1.0;
+    let r2 = dot(p, p);
+    return vec3<f32>(2.0 * p.x, 1.0 - r2, 2.0 * p.y) / (1.0 + r2);
 }

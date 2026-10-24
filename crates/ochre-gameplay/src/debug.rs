@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::render::render_phase::{
     BinnedPhaseItem, BinnedRenderPhase, ViewBinnedRenderPhases, ViewSortedRenderPhases,
 };
-use bevy::render::{Render, RenderApp, RenderSystems};
+use bevy::render::{diagnostic::RenderDiagnosticsPlugin, Render, RenderApp, RenderSystems};
 
 use crate::player::Player;
 use ochre_terrain::chunk_loader::Chunk;
@@ -19,6 +19,7 @@ use ochre_terrain::world::World;
 
 const TOGGLE_KEY: KeyCode = KeyCode::F1;
 const REFRESH_SECONDS: f32 = 0.25;
+const GPU_PASSES_SHOWN: usize = 8;
 
 /// F1 toggles a text readout of the player's climate, frame cost and loaded terrain.
 pub struct DebugOverlayPlugin;
@@ -27,6 +28,9 @@ impl Plugin for DebugOverlayPlugin {
     fn build(&self, app: &mut App) {
         if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
             app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+        }
+        if !app.is_plugin_added::<RenderDiagnosticsPlugin>() {
+            app.add_plugins(RenderDiagnosticsPlugin);
         }
         let counts = DrawCounts::default();
         app.insert_resource(counts.clone())
@@ -203,6 +207,33 @@ fn update_overlay(
     let _ = write!(out, "chunks:");
     for (level, count) in per_level.iter().enumerate() {
         let _ = write!(out, " L{level}={count}");
+    }
+
+    // GPU ms per render pass, from `RenderDiagnosticsPlugin`, the costliest first
+    let mut passes: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| d.path().as_str().ends_with("/elapsed_gpu"))
+        .filter_map(|d| {
+            Some((
+                d.path()
+                    .as_str()
+                    .trim_start_matches("render/")
+                    .trim_end_matches("/elapsed_gpu")
+                    .to_string(),
+                d.smoothed()?,
+            ))
+        })
+        .collect();
+    passes.sort_by(|a, b| b.1.total_cmp(&a.1));
+    // nested spans are inside their parent's time already
+    let total: f64 = passes
+        .iter()
+        .filter(|(pass, _)| !pass.contains('/'))
+        .map(|(_, ms)| ms)
+        .sum();
+    let _ = write!(out, "\ngpu: {total:.2} ms");
+    for (pass, ms) in passes.iter().take(GPU_PASSES_SHOWN) {
+        let _ = write!(out, "\n  {pass}: {ms:.2}");
     }
 
     if std::env::var("OCHRE_STATS").is_ok() {

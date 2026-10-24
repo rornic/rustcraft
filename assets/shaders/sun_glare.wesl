@@ -1,6 +1,7 @@
-// The sun's glare, drawn over the sky round it, see `sun_glare.rs`: a halo and a burst of
+// The sun's disc and its glare, drawn over the sky round it, see `sun_glare.rs`: a halo and a burst of
 // rays, as bright light scatters in an eye or a lens. Bevy's bloom leaves out a spot as small
-// as the sun's disc, to keep single pixels from flickering, so it's drawn here instead.
+// as the sun's disc, to keep single pixels from flickering, so it's drawn here instead. The disc is
+// drawn here too, not by Bevy's atmosphere, so the clouds in front can hide it, see `disc_showing`.
 
 import bevy_pbr::render::{
     forward_io::{Vertex, VertexOutput},
@@ -8,7 +9,8 @@ import bevy_pbr::render::{
     mesh_view_bindings as view_bindings,
     view_transformations::{position_world_to_clip, ndc_to_uv},
 };
-import super::lighting::sun_radiance;
+import super::lighting::{SKY_GAIN, sun_radiance};
+import super::cloud_cover::disc_showing;
 import super::sky::SUN_LIGHT;
 
 // The halo, bright close in and fainter far out: how bright each part is, as a share of
@@ -26,6 +28,8 @@ const RAY_REACH: f32 = 0.05;
 const REACH: f32 = 0.6;
 // How far round the sun's disc its cover is looked at, in radians, see `sun_showing`.
 const DISC: f32 = 0.01;
+// The disc's size across in radians, matching `SUN_DISC_SIZE` in `sky.rs`.
+const DISC_SIZE: f32 = 0.02;
 
 // Pinned to the far plane, so it only draws where there's nothing but sky.
 @vertex
@@ -78,6 +82,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let toward = normalize(in.world_position.xyz - eye);
     let to_sun = view_bindings::lights.directional_lights[SUN_LIGHT].direction_to_light;
     let off = acos(clamp(dot(toward, to_sun), -1.0, 1.0));
+    // the disc's edge softened over a pixel, as Bevy's atmosphere draws it, worked out before any fragment's discarded
+    let edge = max(0.5 * fwidth(off), 1e-6);
     if off > REACH {
         discard;
     }
@@ -87,7 +93,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let around = atan2(dot(toward, up), dot(toward, right));
     let rays = pow(abs(cos(around * RAYS * 0.5)), RAY_SHARPNESS) * RAY_GAIN * exp(-off / RAY_REACH);
     let halo = CORE * exp(-off / CORE_REACH) + HALO * exp(-off / HALO_REACH);
-    let glare = sun_radiance(eye) * (halo + rays) * sun_showing(to_sun);
+    let light = sun_radiance(eye);
+    let glare = light * (halo + rays) * sun_showing(to_sun);
+    // the sun's light spread over its disc, undoing the gain `sun_radiance` takes out, as Bevy's own disc is
+    let disc = light * SKY_GAIN / (DISC_SIZE * DISC_SIZE * 0.25 * 3.14159265) * (1.0 - smoothstep(DISC_SIZE * 0.5 - edge, DISC_SIZE * 0.5 + edge, off));
     // premultiplied, with nothing covered: it only adds light
-    return vec4<f32>(glare, 0.0);
+    return vec4<f32>((glare + disc) * disc_showing(false), 0.0);
 }
