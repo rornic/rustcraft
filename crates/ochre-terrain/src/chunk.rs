@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use bevy::math::{I64Vec3, U16Vec3, Vec3};
 
 use crate::generate::trees::TreeTints;
@@ -74,6 +76,8 @@ pub struct ChunkData {
     runs: Vec<Run>,
     /// The trees reaching into the chunk, to tint their leaves, see `TreeTints`.
     pub trees: TreeTints,
+    // flowing water's level by `linear_index`, see `flow`: water without one is still
+    flow: BTreeMap<u16, u8>,
 }
 
 pub const CHUNK_SIZE: u16 = 16;
@@ -106,6 +110,7 @@ impl Default for ChunkData {
                 length: CELLS as u16,
             }],
             trees: TreeTints::default(),
+            flow: BTreeMap::new(),
         }
     }
 }
@@ -124,6 +129,7 @@ impl ChunkData {
         Self {
             runs,
             trees: TreeTints::default(),
+            flow: BTreeMap::new(),
         }
     }
 
@@ -152,7 +158,9 @@ impl ChunkData {
 
     /// Bytes held on the heap for the chunk's blocks and trees.
     pub fn heap_size(&self) -> usize {
-        self.runs.capacity() * size_of::<Run>() + self.trees.heap_size()
+        self.runs.capacity() * size_of::<Run>()
+            + self.trees.heap_size()
+            + self.flow.len() * size_of::<(u16, u8)>()
     }
 
     /// Every non-air block's coordinate and type.
@@ -184,6 +192,28 @@ impl ChunkData {
         self.runs[self.locate(linear_index(coord)).0].block
     }
 
+    /// The level of the flowing water at `coord`, None for still water or any other block.
+    pub fn flow_at(&self, coord: U16Vec3) -> Option<u8> {
+        self.flow.get(&(linear_index(coord) as u16)).copied()
+    }
+
+    /// Every flowing water block's coordinate and level.
+    pub fn iter_flowing(&self) -> impl Iterator<Item = (U16Vec3, u8)> + '_ {
+        self.flow
+            .iter()
+            .map(|(&index, &level)| (coord_from_index(index as usize), level))
+    }
+
+    /// Makes the block at `coord` water flowing at `level`, or still water if None.
+    pub fn set_flow_at(&mut self, coord: U16Vec3, level: Option<u8>) {
+        self.set_block_at(coord, BlockType::Water);
+        let index = linear_index(coord) as u16;
+        match level {
+            Some(level) => self.flow.insert(index, level),
+            None => self.flow.remove(&index),
+        };
+    }
+
     pub fn set_block_at(&mut self, coord: U16Vec3, block: BlockType) {
         let index = linear_index(coord);
         let (at, start) = self.locate(index);
@@ -191,6 +221,7 @@ impl ChunkData {
         if existing.block == block {
             return;
         }
+        self.flow.remove(&(index as u16));
         let before = index - start;
         let after = existing.length as usize - before - 1;
         let run = |block, length: usize| Run {

@@ -155,7 +155,14 @@ fn test_a_rivers_surface_is_continuous_across_the_blocks_it_runs_down() {
     // falling all the way down, with no step at the corners where the blocks' tops change
     let heights: Vec<f32> = (0..8).map(|x| corner(x, 0.5)).collect();
     assert!(heights.windows(2).all(|w| w[0] > w[1]), "{heights:?}");
-    // a curtain, two blocks apart, is not averaged across
+    // nor is there a step down a rapid, more than a block a column but less than `WATER_SLOPE_MAX_STEP`
+    let mut rapid = |x: i32, _z: i32| Some(20.0 - 1.25 * x as f32);
+    let (a, b) = (
+        water_corner(&mut rapid, (0, 0), 20.0, (1, 1)).height,
+        water_corner(&mut rapid, (1, 0), 18.75, (-1, 1)).height,
+    );
+    assert!((a - b).abs() < 1e-5 && a < 20.0 && a > 18.75, "{a} {b}");
+    // a curtain, three blocks apart, is not averaged across
     let mut stepped = |x: i32, _z: i32| Some(if x <= 0 { 10.0 } else { 7.0 });
     assert_eq!(
         10.0,
@@ -2735,4 +2742,312 @@ fn test_the_foothills_round_a_range_are_much_rougher_than_the_lowland_far_from_o
         near > far * 3.0 && near > 0.9,
         "foothills {near} against lowland {far}"
     );
+}
+
+#[test]
+fn test_lakes_and_the_sea_have_no_open_block_beside_or_under_their_water() {
+    use ochre_base::terrain_source::{TerrainSource, WaterKind};
+    // still water spills into any air or flora beside or under it once an edit nearby stirs it, see `flow`
+    let open = |block: BlockType| block == BlockType::Air || block.is_flora();
+    let size = I64Vec3::splat(CHUNK_SIZE as i64);
+    for seed in [3, 5, 10] {
+        let terrain = ochre_world::worldmap::test_terrain(seed);
+        let regions = Arc::new(RegionStore::new(terrain.clone()));
+        let map = terrain.map();
+        for kind in [WaterKind::Ocean, WaterKind::Lake] {
+            let mut sites = Vec::new();
+            'cells: for cz in (0..map.dim()).step_by(3) {
+                for cx in (0..map.dim()).step_by(3) {
+                    let (x, z) = map.cell_centre(cx, cz);
+                    let sample = terrain.sample(x.round(), z.round());
+                    if sample.water_kind == kind
+                        && sample.water_surface > sample.height as f32 + 1.0
+                    {
+                        sites.push(I64Vec3::new(
+                            x as i64,
+                            sample.water_surface as i64,
+                            z as i64,
+                        ));
+                        if sites.len() >= 6 {
+                            break 'cells;
+                        }
+                    }
+                }
+            }
+            assert!(
+                !sites.is_empty(),
+                "seed {seed}: no {kind:?} on the test world"
+            );
+            let mut leaks = Vec::new();
+            for site in sites {
+                // a box of chunks round a point in the water, reaching its shore unless it's wide
+                let centre = site.div_euclid(size);
+                let mut chunks = HashMap::new();
+                for dx in -3..=3 {
+                    for dy in -1..=1 {
+                        for dz in -3..=3 {
+                            let coord = ChunkCoordinate(centre + I64Vec3::new(dx, dy, dz));
+                            if coord.0.y >= 0 {
+                                chunks.insert(coord.0, generate_chunk(regions.clone(), coord));
+                            }
+                        }
+                    }
+                }
+                let block_at = |block: I64Vec3| {
+                    chunks.get(&block.div_euclid(size)).map(|data: &ChunkData| {
+                        data.get_block_at(block.rem_euclid(size).as_u16vec3())
+                    })
+                };
+                for (coord, data) in &chunks {
+                    for (local, block) in data.iter_non_air() {
+                        let at = *coord * size + local.as_i64vec3();
+                        if block == BlockType::Water
+                            && [
+                                I64Vec3::X,
+                                I64Vec3::NEG_X,
+                                I64Vec3::Z,
+                                I64Vec3::NEG_Z,
+                                I64Vec3::NEG_Y,
+                            ]
+                            .into_iter()
+                            .any(|side| block_at(at + side).is_some_and(open))
+                        {
+                            leaks.push(at);
+                        }
+                    }
+                }
+            }
+            assert!(
+                leaks.is_empty(),
+                "seed {seed}: {} {kind:?} water blocks open beside or under, {:?}",
+                leaks.len(),
+                &leaks[..leaks.len().min(5)]
+            );
+        }
+    }
+}
+
+#[test]
+fn test_flowing_water_stands_over_its_floor_and_falls_away_from_its_source() {
+    let floor = 4;
+    let mut chunk = ChunkData::default();
+    for x in 0..CHUNK_SIZE {
+        for z in 0..CHUNK_SIZE {
+            chunk.set_block_at(U16Vec3::new(x, floor, z), BlockType::Stone);
+        }
+    }
+    // a channel's levels, highest beside its source at x = 1
+    let channel = 2u16..9;
+    for x in channel.clone() {
+        chunk.set_flow_at(U16Vec3::new(x, floor + 1, 8), Some(9 - x as u8));
+    }
+    let meshes = generate_chunk_mesh(
+        Arc::new(chunk),
+        vec![None; 26],
+        ChunkCoordinate(I64Vec3::new(0, 30, 0)),
+        &test_regions(),
+        false,
+    );
+    let water = meshes.water.expect("the channel's water is drawn");
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        water.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        panic!("water positions");
+    };
+    // the highest the water reaches along the line where the block at `x` meets the one before
+    let top = |x: u16| {
+        positions
+            .iter()
+            .filter(|p| (p[0] - (x as f32 - 0.5)).abs() < 0.01)
+            .map(|p| p[1])
+            .fold(f32::MIN, f32::max)
+    };
+    let floor_top = floor as f32 + 0.5;
+    for x in channel.clone() {
+        assert!(
+            top(x) > floor_top + 0.05,
+            "water at x = {x} is down in the floor, top {}",
+            top(x)
+        );
+    }
+    assert!(top(channel.start) > top(channel.end - 1) + 0.3);
+}
+
+#[test]
+fn test_water_falling_down_a_drop_draws_no_side_over_another() {
+    use crate::world::World;
+    // a channel at y = 8 from still water at x = 0, over a drop of three into a wide basin at y = 5
+    let (channel, basin) = (8u16, 5u16);
+    let mut data = ChunkData::from_cells(std::iter::repeat_n(
+        BlockType::Stone,
+        (CHUNK_SIZE as usize).pow(3),
+    ));
+    for x in 0..CHUNK_SIZE {
+        for z in 0..CHUNK_SIZE {
+            for y in channel + 1..CHUNK_SIZE {
+                data.set_block_at(U16Vec3::new(x, y, z), BlockType::Air);
+            }
+        }
+    }
+    for x in 2..5 {
+        data.set_block_at(U16Vec3::new(x, channel, 8), BlockType::Air);
+    }
+    for x in 5..15 {
+        for z in 6..=10 {
+            for y in basin..=channel {
+                data.set_block_at(U16Vec3::new(x, y, z), BlockType::Air);
+            }
+        }
+    }
+    data.set_flow_at(U16Vec3::new(0, channel, 8), None);
+    let mut world = World::with_terrain(1, 16, ochre_world::worldmap::test_terrain(1));
+    world.insert_chunk(ChunkCoordinate(I64Vec3::ZERO), data);
+    // the dam between the still water and the channel
+    world.set_block_at(I64Vec3::new(1, channel as i64, 8), BlockType::Air);
+    assert!((1..100).any(|_| crate::flow::step(&mut world) == 0));
+    for y in basin..channel {
+        assert_eq!(
+            Some(crate::flow::FALLING),
+            world.flow_at(I64Vec3::new(5, y as i64, 8))
+        );
+    }
+
+    let chunk = world
+        .get_chunk_data(ChunkCoordinate(I64Vec3::ZERO))
+        .unwrap();
+    let meshes = generate_chunk_mesh(
+        chunk,
+        vec![None; 26],
+        ChunkCoordinate(I64Vec3::ZERO),
+        &test_regions(),
+        false,
+    );
+    let water = meshes.water.expect("the water is drawn");
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        water.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        panic!("water positions");
+    };
+    // each upright face by its axis, plane and run across it, in hundredths, with the heights it spans
+    type Side = (usize, i32, i32, i32);
+    let mut sides: HashMap<Side, Vec<(f32, f32)>> = HashMap::new();
+    for quad in positions.chunks(4) {
+        for axis in [0, 2] {
+            let across = 2 - axis;
+            let at = |v: &[f32; 3], a: usize| (v[a] * 100.0).round() as i32;
+            if quad.iter().all(|v| at(v, axis) == at(&quad[0], axis)) {
+                let (low, high) = quad.iter().fold((i32::MAX, i32::MIN), |(lo, hi), v| {
+                    (lo.min(at(v, across)), hi.max(at(v, across)))
+                });
+                let ys = quad.iter().map(|v| v[1]);
+                let span = (
+                    ys.clone().fold(f32::MAX, f32::min),
+                    ys.fold(f32::MIN, f32::max),
+                );
+                sides
+                    .entry((axis, at(&quad[0], axis), low, high))
+                    .or_default()
+                    .push(span);
+            }
+        }
+    }
+    for (side, mut spans) in sides {
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for pair in spans.windows(2) {
+            assert!(
+                pair[1].0 >= pair[0].1 - 0.001,
+                "water sides overlap at {side:?}: {pair:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_flowing_water_under_still_water_leaves_the_surface_to_the_still_water() {
+    let mut chunk = ChunkData::default();
+    // a hole under a river, flooded: still water over falling water
+    chunk.set_flow_at(U16Vec3::new(5, 6, 5), None);
+    chunk.set_flow_at(U16Vec3::new(5, 5, 5), Some(crate::flow::FALLING));
+    // and open to the sky beside it
+    chunk.set_flow_at(U16Vec3::new(6, 5, 5), Some(5));
+    let source = ChunkNeighbourhood::new(&chunk, &no_neighbors());
+    assert!(!source.flowing(5, 5));
+    assert!(source.flowing(6, 5));
+    assert_eq!(
+        Some(5.0 + crate::flow::surface(5)),
+        source.water_level(6, 5)
+    );
+}
+
+#[test]
+fn test_a_steep_rivers_water_is_drawn_over_its_bed() {
+    use crate::world::World;
+    // a rapid climbing over a block a block from a spring, on a full size world, where the bed showed through in strips
+    let seed = 2790361079;
+    let terrain = Arc::new(ochre_world::worldmap::WorldTerrain::new(Arc::new(
+        ochre_world::worldmap::generate(seed, ochre_world::worldmap::WorldConfig::default()),
+    )));
+    let mut world = World::with_terrain(seed, 16, terrain);
+    let regions = world.region_store.clone();
+    let centre = I64Vec3::new(6731, 586, 16978).div_euclid(I64Vec3::splat(CHUNK_SIZE as i64));
+    let around = |reach: i64| {
+        (-reach..=reach).flat_map(move |dx| {
+            (-reach..=reach).flat_map(move |dy| {
+                (-reach..=reach).map(move |dz| ChunkCoordinate(centre + I64Vec3::new(dx, dy, dz)))
+            })
+        })
+    };
+    for coord in around(2) {
+        world.insert_chunk(coord, generate_chunk(regions.clone(), coord));
+    }
+    let mut checked = 0;
+    for coord in around(1) {
+        let meshes = generate_chunk_mesh(
+            world.get_chunk_data(coord).unwrap(),
+            world.adjacent_chunk_data(coord),
+            coord,
+            &regions,
+            false,
+        );
+        let Some(water) = meshes.water else {
+            continue;
+        };
+        let Some(VertexAttributeValues::Float32x3(positions)) =
+            water.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("water positions");
+        };
+        let origin = (coord.0 * CHUNK_SIZE as i64).as_vec3();
+        for quad in positions.chunks(4) {
+            let upright = |axis: usize| quad.iter().all(|v| (v[axis] - quad[0][axis]).abs() < 1e-3);
+            if upright(0) || upright(2) {
+                continue;
+            }
+            let middle = quad
+                .iter()
+                .fold(origin, |sum, v| sum + Vec3::from(*v) / 4.0);
+            let column = middle.round().as_i64vec3();
+            // the top water block at or under the face, and the bed under its water
+            let Some(top) = (0..4)
+                .map(|d| column - I64Vec3::Y * d)
+                .find(|&b| world.get_block_at(b) == BlockType::Water)
+            else {
+                continue;
+            };
+            let bed = (1..CHUNK_SIZE as i64)
+                .map(|d| top - I64Vec3::Y * d)
+                .find(|&b| world.get_block_at(b) != BlockType::Water)
+                .unwrap();
+            for v in quad {
+                checked += 1;
+                // a corner on a dry bank's edge is held just under its ground, see `WATER_BANK_MARGIN`
+                assert!(
+                    v[1] + origin.y > bed.y as f32 + 0.5 - 0.06,
+                    "water at {:?} drawn under its bed at {bed}",
+                    Vec3::from(*v) + origin
+                );
+            }
+        }
+    }
+    assert!(checked > 100);
 }

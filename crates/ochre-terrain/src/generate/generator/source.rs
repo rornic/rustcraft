@@ -1,8 +1,10 @@
 use super::shading::{spread_water_levels, WATER_SPREAD_REACH};
 use crate::chunk::{neighbor_26_index, ChunkData, CELLS, CHUNK_SIZE};
+use crate::flow::surface;
 use crate::generate::region_store::RegionStore;
 use bevy::math::IVec3;
 use bevy::math::Vec3;
+use bevy::platform::collections::HashMap;
 use ochre_base::block::BlockType;
 use ochre_base::terrain_source::SpringPart;
 use ochre_base::WATER_LEVEL;
@@ -39,6 +41,11 @@ pub(super) trait BlockSource {
     /// The fresh water's real surface, which its blocks are filled to, where `water_level` is spread out.
     fn water_block_level(&self, _x: i32, _z: i32) -> Option<f32> {
         None
+    }
+
+    /// Whether the column's water is flowing, see `flow`, which stands over the ground beside it.
+    fn flowing(&self, _x: i32, _z: i32) -> bool {
+        false
     }
 
     /// Whether the column is in the pool of a spring a river rises in.
@@ -124,6 +131,8 @@ pub(super) struct ChunkNeighbourhood<'a> {
     blocks: Vec<BlockType>,
     water: Option<(&'a RegionStore, IVec3)>,
     levels: OnceCell<Vec<Option<FreshColumn>>>,
+    // the surface of the flowing water in each column it's in, from the chunk's lowest block, see `flow`
+    flowing: HashMap<(i32, i32), f32>,
 }
 
 impl<'a> ChunkNeighbourhood<'a> {
@@ -132,6 +141,7 @@ impl<'a> ChunkNeighbourhood<'a> {
         let size = CHUNK_SIZE as i32;
         let mut blocks = vec![BlockType::Air; (SPAN * SPAN * SPAN) as usize];
         let mut cells = [BlockType::Air; CELLS];
+        let mut flowing_cells = Vec::new();
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for dz in -1..=1 {
@@ -142,6 +152,12 @@ impl<'a> ChunkNeighbourhood<'a> {
                             _ => continue,
                         },
                     };
+                    for (local, level) in data.iter_flowing() {
+                        let at = IVec3::new(dx, dy, dz) * size + local.as_ivec3();
+                        if (-1..=size).contains(&at.x) && (-1..=size).contains(&at.z) {
+                            flowing_cells.push((at, level));
+                        }
+                    }
                     data.decode_into(&mut cells);
                     // both grids run y innermost, so each column copies across whole
                     for x in 0..size {
@@ -156,11 +172,24 @@ impl<'a> ChunkNeighbourhood<'a> {
                 }
             }
         }
+        // a column's flowing surface is only where it's open above: flowing water under still water, as in a
+        // hole dug under a river, is the still water's
+        let mut flowing = HashMap::new();
+        for (at, level) in flowing_cells {
+            let above = at + IVec3::Y;
+            if Self::contains(above) && blocks[Self::index(above)] == BlockType::Water {
+                continue;
+            }
+            let top = at.y as f32 + surface(level);
+            let column = flowing.entry((at.x, at.z)).or_insert(top);
+            *column = f32::max(*column, top);
+        }
         Self {
             chunk,
             blocks,
             water: None,
             levels: OnceCell::new(),
+            flowing,
         }
     }
 
@@ -182,6 +211,13 @@ impl<'a> ChunkNeighbourhood<'a> {
     }
     // The fresh water in the column at `x`, `z`, if it has any.
     fn fresh_at(&self, x: i32, z: i32) -> Option<FreshColumn> {
+        if let Some(&level) = self.flowing.get(&(x, z)) {
+            return Some(FreshColumn {
+                block_level: level,
+                level,
+                pool: false,
+            });
+        }
         let (regions, origin) = self.water?;
         let size = CHUNK_SIZE as i32;
         let span = size + 2;
@@ -233,6 +269,10 @@ impl BlockSource for ChunkNeighbourhood<'_> {
 
     fn spring_pool(&self, x: i32, z: i32) -> bool {
         self.fresh_at(x, z).is_some_and(|fresh| fresh.pool)
+    }
+
+    fn flowing(&self, x: i32, z: i32) -> bool {
+        self.flowing.contains_key(&(x, z))
     }
 
     fn block(&self, coord: IVec3) -> BlockType {

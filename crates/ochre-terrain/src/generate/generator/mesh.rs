@@ -5,7 +5,7 @@ use super::buffers::{
 use super::greedy::mesh_opaque_greedy;
 use super::shading::{
     corner_signs, vertex_shore_distance, vertex_shore_factor, vertex_water_depth, water_corner,
-    WaterCorner, FACE_NORMAL_OFFSET, WATER_BANK_MARGIN, WATER_DROP,
+    WaterCorner, FACE_NORMAL_OFFSET, WATER_BANK_MARGIN, WATER_BED_MARGIN, WATER_DROP,
 };
 use super::source::{grid_index, BlockSource, BoxFaces, GridView};
 use super::terrain::is_solid;
@@ -109,6 +109,19 @@ pub(super) fn mesh_blocks(
             level,
             (dx, dz),
         );
+        // held over the bed of every column joining it, or a ramp down a steep run dips under the beds and they show through
+        let bed = corner
+            .columns()
+            .iter()
+            .filter_map(|&(x, z)| {
+                let top = water_block_top(source.water_block_level(x, z)?) as i32 - 1;
+                let water = (0..CHUNK_SIZE as i32)
+                    .take_while(|&d| source.terrain(IVec3::new(x, top - d, z)) == BlockType::Water)
+                    .count() as i32;
+                (water > 0).then_some((top - water + 1) as f32)
+            })
+            .fold(f32::NEG_INFINITY, f32::max);
+        corner.height = corner.height.max(bed + WATER_DROP + WATER_BED_MARGIN);
         // held under the ground of any dry column solid just under the corner, which its blocks all see alike
         let under = (corner.height - WATER_DROP).floor() as i32 - 1;
         let bank = [(dx, 0), (0, dz), (dx, dz)]
@@ -122,7 +135,9 @@ pub(super) fn mesh_blocks(
                     + c.y as f32
             })
             .fold(f32::INFINITY, f32::min);
-        corner.height = corner.height.min(bank + WATER_DROP - WATER_BANK_MARGIN);
+        if !source.flowing(block_coord.x, block_coord.z) {
+            corner.height = corner.height.min(bank + WATER_DROP - WATER_BANK_MARGIN);
+        }
         corners.borrow_mut().insert(key, corner);
         corner
     };
@@ -145,8 +160,18 @@ pub(super) fn mesh_blocks(
         let top_block = source
             .water_block_level(block_coord.x, block_coord.z)
             .is_some_and(|level| water_block_top(level) as i32 - 1 == block_coord.y);
+        let open = |block: BlockType| {
+            matches!(block, BlockType::Air | BlockType::Leaves) || block.is_flora()
+        };
+        let under = block_coord - IVec3::Y;
         let water_face_at = |i: usize| {
-            water_face(i, top, level.is_some() && top_block, &mut |position| {
+            // no skirt where flowing water under has a side of its own there, as down a fall, or the two overlap
+            let skirt = level.is_some()
+                && top_block
+                && !(source.flowing(block_coord.x, block_coord.z)
+                    && source.block(under) == BlockType::Water
+                    && open(source.block(under + FACE_NORMAL_OFFSET[i])));
+            water_face(i, top, skirt, &mut |position| {
                 let corner = corner_of(block_coord, level?, position);
                 // unclamped to the block, so blocks either side of a step meet at their shared corner, even outside it
                 let height = corner.height - WATER_DROP - block_coord.y as f32 - 0.5;
@@ -157,8 +182,7 @@ pub(super) fn mesh_blocks(
             })
         };
         for (i, offset) in FACE_NORMAL_OFFSET.into_iter().enumerate() {
-            let neighbour = source.block(block_coord + offset);
-            if !matches!(neighbour, BlockType::Air | BlockType::Leaves) && !neighbour.is_flora() {
+            if !open(source.block(block_coord + offset)) {
                 continue;
             }
             let face = water_face_at(i);

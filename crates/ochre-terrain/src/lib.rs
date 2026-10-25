@@ -4,6 +4,7 @@ pub mod chunk;
 pub mod chunk_loader;
 pub mod curvature;
 pub mod fade;
+pub mod flow;
 pub mod generate;
 pub mod group;
 pub mod horizon;
@@ -29,6 +30,7 @@ use chunk_loader::{
 };
 use curvature::CurvaturePlugin;
 use fade::{apply_fades, FadeMaterials};
+use flow::flow_water;
 use group::{build_groups, load_groups, show_inner_leaves};
 use lod::{
     load_lods, refresh_lod_visibility, retire_lods, spawn_lods, update_lod_selection, LodLoader,
@@ -68,7 +70,7 @@ impl Plugin for TerrainPlugin {
                     .before(unload_chunks),
                 // after the groups loading this frame, so one built from meshes made before a
                 // change is meshed again
-                (remesh_edits, apply_remeshes)
+                (flow_water, remesh_edits, apply_remeshes)
                     .chain()
                     .after(load_groups)
                     .before(unload_chunks),

@@ -3,7 +3,7 @@ use std::{fmt::Debug, sync::Arc};
 use bevy::prelude::Resource;
 use bevy::{
     math::{I64Vec3, Vec3},
-    platform::collections::HashMap,
+    platform::collections::{HashMap, HashSet},
 };
 
 use crate::generate::region_store::{resident_cap_for, RegionStore};
@@ -25,6 +25,8 @@ pub struct World {
     spawn: Vec3,
     // blocks changed since `take_edits` was last asked, whose chunks need meshing again
     edits: Vec<I64Vec3>,
+    // blocks whose water may flow differently since `take_stirred`: changed ones and those beside them
+    stirred: HashSet<I64Vec3>,
 }
 
 impl World {
@@ -62,6 +64,7 @@ impl World {
                 spawn_z as f32,
             ),
             edits: Vec::new(),
+            stirred: HashSet::new(),
         }
     }
 
@@ -146,8 +149,47 @@ impl World {
         }
         // a copy, if meshing still holds this one
         Arc::make_mut(data).set_block_at(local, to);
-        self.edits.push(block);
+        self.changed(block);
         true
+    }
+
+    /// The level of the water flowing at `block`, None for still water or any other block.
+    pub fn flow_at(&self, block: I64Vec3) -> Option<u8> {
+        let size = CHUNK_SIZE as i64;
+        self.chunk(ChunkCoordinate::containing(block))
+            .and_then(|data| data.flow_at(block.rem_euclid(I64Vec3::splat(size)).as_u16vec3()))
+    }
+
+    /// Makes the block at `block` water flowing at `level`, or still if None, in a chunk generated
+    /// already. Returns whether it changed.
+    pub(crate) fn set_flow_at(&mut self, block: I64Vec3, level: Option<u8>) -> bool {
+        let size = CHUNK_SIZE as i64;
+        let Some(data) = self.chunks.get_mut(&ChunkCoordinate::containing(block)) else {
+            return false;
+        };
+        let local = block.rem_euclid(I64Vec3::splat(size)).as_u16vec3();
+        if data.get_block_at(local) == BlockType::Water && data.flow_at(local) == level {
+            return false;
+        }
+        Arc::make_mut(data).set_flow_at(local, level);
+        self.changed(block);
+        true
+    }
+
+    fn changed(&mut self, block: I64Vec3) {
+        self.edits.push(block);
+        self.stirred.insert(block);
+        self.stirred
+            .extend(crate::flow::SIDES.map(|side| block + side));
+        self.stirred
+            .extend([block + I64Vec3::Y, block - I64Vec3::Y]);
+    }
+
+    /// The blocks stirred since this was last asked, in a fixed order.
+    pub(crate) fn take_stirred(&mut self) -> Vec<I64Vec3> {
+        let mut stirred: Vec<_> = self.stirred.drain().collect();
+        stirred.sort_unstable_by_key(|block| block.to_array());
+        stirred
     }
 
     /// Breaks the block at `block`, leaving air, unless it's one that can't be broken. Returns
