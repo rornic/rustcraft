@@ -197,3 +197,16 @@ Cost (game closed): terrain sample 274 ns (was 242); cold chunk p50 plains / mou
 (was 13.2 / 11.0 / 12.0), p99 52.7 / 52.1 / 47.6. Mountain chunks cost more with gullies, terraces and cliffs on
 them; still under the original baseline (26.2 / 27.1 / 19.8). GPU memory at spawn rose to 3.7 GB (from 2.7) with the
 rougher ground, so watch it in big ranges on a 6 GB card.
+
+## Round nine: flowing water
+
+`examples/flow_sim` loads round a spot headless, times frames with the water still, then breaks up to 8 banks of
+still water nearest the camera and times frames while it flows. Seed 2790361079 at `OCHRE_SPAWN=6730,16960,3`
+(a steep river in a gully) spills down the gully to 8,661 flowing blocks over about 45 seconds, then settles.
+
+The flow step itself is cheap: at most 0.63 ms for about 100 changed blocks, four times a second, and queueing
+their groups to mesh again 0.05 ms. The cost was swapping the new meshes in: `apply_remeshes` packed every mesh on
+the main thread, 0.36 ms a group, and a step finishes up to 20 groups at once, 7-8 ms. Packing now happens in the
+meshing task, for groups loading in as well (`pack_group`). Flowing frames, two runs: p99 4.38 to 1.57 / 1.61 ms,
+slowest 7.94 to 2.20 / 2.85 ms; still frames p99 0.77 either way. `lod_sim` (seed 7, 80 blocks/s) has no slow
+frames or new holes, and flies further in the same time, as its frames are faster.
