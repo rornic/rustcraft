@@ -14,7 +14,11 @@ use bevy::{
         resource::Resource,
         system::{Local, Query, Res, ResMut},
     },
-    input::{keyboard::KeyCode, mouse::MouseMotion, ButtonInput},
+    input::{
+        keyboard::KeyCode,
+        mouse::{MouseButton, MouseMotion},
+        ButtonInput,
+    },
     light::{NotShadowCaster, NotShadowReceiver},
     log::info,
     math::{Dir3, EulerRot, I64Vec3, Quat, Vec3, Vec3Swizzles},
@@ -31,6 +35,7 @@ use bevy::{
     },
     shader::ShaderRef,
     time::Time,
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow, Window},
 };
 
 use crate::collision::{move_and_collide, Aabb};
@@ -288,12 +293,45 @@ fn walk(
     player.against_wall = (hit.x || hit.z) && across != Vec3::ZERO;
 }
 
+/// Whether the cursor is held in the window, so the mouse turns the player.
+pub fn cursor_grabbed(cursor: Query<&CursorOptions, With<PrimaryWindow>>) -> bool {
+    cursor
+        .single()
+        .is_ok_and(|cursor| cursor.grab_mode != CursorGrabMode::None)
+}
+
+/// Holds the cursor in the window once it's clicked into, and lets it go on Escape or when the
+/// window loses focus.
+pub fn grab_cursor(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut windows: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
+) {
+    let Ok((window, mut cursor)) = windows.single_mut() else {
+        return;
+    };
+    let grabbed = cursor.grab_mode != CursorGrabMode::None;
+    if grabbed && (keys.just_pressed(KeyCode::Escape) || !window.focused) {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    } else if !grabbed && window.focused && buttons.just_pressed(MouseButton::Left) {
+        // X11 can't lock the cursor, so it's confined to the window there instead
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
+    }
+}
+
 fn player_look(
     time: Res<Time>,
     mut player_query: Query<&mut Transform, With<Player>>,
     mut camera_query: Query<PlayerCamera, (With<Camera>, Without<Player>)>,
     mut motion_evr: MessageReader<MouseMotion>,
+    cursor: Query<&CursorOptions, With<PrimaryWindow>>,
 ) {
+    if !cursor_grabbed(cursor) {
+        motion_evr.clear();
+        return;
+    }
     let (parent, mut camera) = camera_query.single_mut().expect("camera does not exist");
     let mut player = player_query
         .get_mut(parent.parent())
@@ -474,6 +512,7 @@ impl Plugin for PlayerPlugin {
                 Update,
                 (
                     player_move,
+                    grab_cursor,
                     player_look,
                     update_horizon,
                     update_underwater_effects,

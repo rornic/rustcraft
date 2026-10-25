@@ -4,6 +4,7 @@ use bevy::{
     prelude::*,
 };
 
+use crate::player::{cursor_grabbed, grab_cursor};
 use ochre_base::block::BlockType;
 use ochre_terrain::{
     raycast::{raycast, RayHit},
@@ -28,7 +29,13 @@ impl Plugin for BreakingPlugin {
             // what's broken is looked past at once, and outlined the same frame
             .add_systems(
                 Update,
-                (break_looked_at, look_at_block, show_outline).chain(),
+                (
+                    // the click that grabs the cursor doesn't break a block too
+                    break_looked_at.run_if(cursor_grabbed).before(grab_cursor),
+                    look_at_block,
+                    show_outline,
+                )
+                    .chain(),
             );
     }
 }
