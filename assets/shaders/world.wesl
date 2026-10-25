@@ -42,8 +42,12 @@ fn sun_shadow(world_position: vec4<f32>, normal: vec3<f32>, frag_coord: vec2<f32
         return 1.0;
     }
     let view_z = position_world_to_view(world_position.xyz).z;
-    let shadow = fetch_directional_shadow(SUN_LIGHT, world_position, normal, view_z, frag_coord);
     let reach = (*sun).cascades[(*sun).num_cascades - 1u].far_bound;
+    // faded out wholly, so nothing to look up
+    if -view_z >= reach {
+        return 1.0;
+    }
+    let shadow = fetch_directional_shadow(SUN_LIGHT, world_position, normal, view_z, frag_coord);
     return mix(shadow, 1.0, smoothstep(reach * SHADOW_FADE_START, reach, -view_z));
 }
 
@@ -73,6 +77,10 @@ const FLATTEN_MAX: f32 = 0.85;
 // four pixels tall, as the tile's green fringe is about a quarter of it, to under two.
 const GRASS_SIDE_FADE_START: f32 = 0.25;
 const GRASS_SIDE_FADE_END: f32 = 0.6;
+
+// Tiles up a pixel at which a face's texture is its mean colour: under a pixel across, the lookup
+// is the coarsest mip, which `block_mean` holds.
+const MEAN_BLOCK_RATE: f32 = 1.0;
 
 // The normal to light by: turned toward up with distance, which evens out the sun's and sky's contrast between faces.
 fn lit_normal(normal: vec3<f32>, world_position: vec3<f32>) -> vec3<f32> {
@@ -127,9 +135,16 @@ fn fragment(
     let normal = normalize(in.world_normal);
 
     let footprint = block_footprint(in.uv);
-    var color = block_sample(in.uv, in.color.a, footprint);
     // blocks per pixel up the face, worked out here as derivatives need uniform control flow
     let block_rate = length(vec2<f32>(dpdx(in.uv.y), dpdy(in.uv.y)));
+    // a tile under a pixel across filters to its mean, so skips the lookup; leaves and plants keep
+    // theirs for their holes
+    var color: vec4<f32>;
+    if block_rate < MEAN_BLOCK_RATE || is_leaf(in.color.a) || is_flora(in.color.a) {
+        color = block_sample(in.uv, in.color.a, footprint);
+    } else {
+        color = block_mean(in.color.a);
+    }
     // fades and far leaves dither with the depth prepass, see `world_prepass.wesl`
     let threshold = dither_threshold(in.position.xy);
     // coarse LOD cells, where a stretched texture would read as one giant block, and wide
@@ -170,10 +185,15 @@ fn fragment(
     // Once blocks are a few pixels tall the tile averages out to mostly dirt, while the grass
     // on top of them would fill the pixel, so they turn to it
     if in.uv_b.y < 0.0 {
-        let dirt = block_sample(in.uv, f32(constants::DIRT_CELL), footprint).rgb * -in.uv_b.y;
         let grass_top = block_mean(f32(constants::GRASS_TOP_CELL)).rgb * in.color.rgb;
-        let near = mix(dirt, tinted, color.a);
-        tinted = mix(near, grass_top, smoothstep(GRASS_SIDE_FADE_START, GRASS_SIDE_FADE_END, block_rate));
+        if block_rate >= GRASS_SIDE_FADE_END {
+            // wholly the grass on top, so the dirt under the fringe needs no lookup
+            tinted = grass_top;
+        } else {
+            let dirt = block_sample(in.uv, f32(constants::DIRT_CELL), footprint).rgb * -in.uv_b.y;
+            let near = mix(dirt, tinted, color.a);
+            tinted = mix(near, grass_top, smoothstep(GRASS_SIDE_FADE_START, GRASS_SIDE_FADE_END, block_rate));
+        }
         color.a = 1.0;
     }
 }
