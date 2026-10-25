@@ -6,7 +6,7 @@
 
 A 64 km voxel world with erosion-carved rivers, lakes and seas, streamed with octree LODs out to 32km.
 
-https://github.com/user-attachments/assets/b5bac704-e812-4367-990b-0ce3b0a5579f
+https://github.com/user-attachments/assets/2ed1a420-5e0e-4f3f-ac09-f39bcf45d7f6
 
 ## Features
 
