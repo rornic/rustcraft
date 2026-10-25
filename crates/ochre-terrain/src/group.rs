@@ -103,7 +103,7 @@ pub(crate) fn build_groups(
             .spawn((
                 ChunkGroup { key },
                 BuildChunkGroup {
-                    task: task_pool.spawn(async move { merge_chunk_meshes(parts) }),
+                    task: task_pool.spawn(async move { pack_group(merge_chunk_meshes(parts)) }),
                     chunks: entities,
                 },
                 Transform::from_translation(min),
@@ -172,7 +172,15 @@ pub(crate) fn load_groups(
     }
 }
 
-/// Draws `merged` as the group at `entity`: its opaque faces on the entity, and its water, spray and
+/// `merged` with the meshes `draw_group` draws packed, which is slow enough to do off the main thread.
+pub(crate) fn pack_group(mut merged: ChunkMeshes) -> ChunkMeshes {
+    merged.opaque = pack(merged.opaque);
+    merged.water = merged.water.map(pack);
+    merged.inner_leaves = merged.inner_leaves.map(pack);
+    merged
+}
+
+/// Draws `merged`, packed by `pack_group`, as the group at `entity`: its opaque faces on the entity, and its water, spray and
 /// the faces between its leaves on children of it.
 pub(crate) fn draw_group(
     commands: &mut Commands,
@@ -183,7 +191,7 @@ pub(crate) fn draw_group(
 ) {
     if merged.opaque.count_vertices() > 0 {
         commands.entity(entity).insert((
-            Mesh3d(meshes.add(pack(merged.opaque))),
+            Mesh3d(meshes.add(merged.opaque)),
             MeshMaterial3d(loader.material.clone()),
         ));
     }
@@ -191,7 +199,7 @@ pub(crate) fn draw_group(
         let water_material = loader.water_material.clone();
         commands.entity(entity).with_children(|parent| {
             parent.spawn((
-                Mesh3d(meshes.add(pack(water))),
+                Mesh3d(meshes.add(water)),
                 MeshMaterial3d(water_material),
                 Transform::default(),
                 group_aabb(),
@@ -214,7 +222,7 @@ pub(crate) fn draw_group(
         commands.entity(entity).with_children(|parent| {
             parent.spawn((
                 InnerLeafFaces,
-                Mesh3d(meshes.add(pack(inner_leaves))),
+                Mesh3d(meshes.add(inner_leaves)),
                 MeshMaterial3d(material),
                 Transform::default(),
                 group_aabb(),

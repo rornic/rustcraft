@@ -120,6 +120,20 @@ otherwise stand up through the river as strips), and a second river's bed isn't 
 water. This is the rule Minecraft's aquifers use: wherever two waters at different levels meet,
 ground stands between them.
 
+## Flowing water
+
+Generated water is still and never moves. Water the player lets out flows (`ochre-terrain/src/flow.rs`):
+it falls as far as it can, spreads up to 7 blocks sideways from where it rests, a level less each block,
+and dries up back from wherever it's cut off. Flowing levels live in `ChunkData` beside the blocks.
+
+The one rule now matters at block level, not only to the eye: still water beside or over air or flora
+spills the moment an edit nearby stirs it. `test_lakes_and_the_sea_have_no_open_block_beside_or_under_their_water`
+holds lakes and the sea to that. Rivers have open blocks at every step down their course, so flow never
+spreads over still water, only joins it. A waterfall's lip still spills when stirred.
+
+Neighbouring surfaces less than `WATER_SLOPE_MAX_STEP` (2 blocks) apart are drawn as one slope, so a
+rapid climbing more than a block a column is a ramp, not stairs. Bigger drops are curtains.
+
 ## Checking it
 
 - `cargo test --release -p ochre-world`: `test_no_lake_or_sea_cell_stands_over_the_dry_cells_beside_it`

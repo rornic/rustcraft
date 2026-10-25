@@ -178,8 +178,8 @@ pub(super) fn vertex_water_depth(
     total / 4.0
 }
 
-// Columns whose surfaces differ by more than this are a curtain between them, not one slope.
-pub(super) const WATER_SLOPE_MAX_STEP: f32 = 1.0;
+// Columns whose surfaces differ by more than this are a curtain between them, not one slope: less is a rapid, drawn as a ramp.
+pub(super) const WATER_SLOPE_MAX_STEP: f32 = 2.0;
 
 // The x and z signs, -1 or 1, of the top-face corner a vertex at `vertex_local_pos` is over.
 pub(super) fn corner_signs(vertex_local_pos: [f32; 3]) -> (i32, i32) {
@@ -199,6 +199,10 @@ pub(super) struct WaterCorner {
 impl WaterCorner {
     pub(super) fn joins(&self, column: (i32, i32)) -> bool {
         self.joined[..self.count].contains(&column)
+    }
+
+    pub(super) fn columns(&self) -> &[(i32, i32)] {
+        &self.joined[..self.count]
     }
 }
 
@@ -266,6 +270,8 @@ pub(super) const WATER_SPREAD_REACH: i32 = 5;
 const WATER_SPREAD_MAX_MOVE: f32 = 1.5;
 // How far under a bank's ground a water corner beside it is held, so raised water never stands over it.
 pub(super) const WATER_BANK_MARGIN: f32 = 0.05;
+// How far over the bed under it a water corner is held, so the bed never shows through.
+pub(super) const WATER_BED_MARGIN: f32 = 0.02;
 
 // `raw` (NaN where dry) averaged over the water within reach of each column of the grid `WATER_SPREAD_REACH` inside it
 // shortcut: the spread is only drawn, the blocks under it aren't moved; fill them at generation if swimming in it matters

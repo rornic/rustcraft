@@ -28,8 +28,8 @@ use crate::chunk_loader::{ChunkLoader, Unsettled};
 use crate::generate::generator::{generate_chunk_mesh, ChunkMeshes, LIGHT_MARGIN};
 use crate::generate::region_store::RegionStore;
 use crate::group::{
-    draw_group, group_aabb, merge_chunk_meshes, BuildChunkGroup, BuiltGroup, ChunkGroup,
-    GroupedChunk, MeshedChunk,
+    draw_group, group_aabb, merge_chunk_meshes, pack_group, BuildChunkGroup, BuiltGroup,
+    ChunkGroup, GroupedChunk, MeshedChunk,
 };
 use crate::lod::LodKey;
 use crate::world::World;
@@ -188,7 +188,11 @@ pub(crate) fn remesh_edits(
         let solid_leaves = loader.solid_leaves;
         // one meshing it already from before this change is dropped, and with it its task
         let remesh = RemeshGroup {
-            task: task_pool.spawn(async move { mesh_group(key, chunks, &regions, solid_leaves) }),
+            task: task_pool.spawn(async move {
+                let mut remeshed = mesh_group(key, chunks, &regions, solid_leaves);
+                remeshed.meshes = pack_group(remeshed.meshes);
+                remeshed
+            }),
         };
         match loader.group_entity(key) {
             Some(group) => {
