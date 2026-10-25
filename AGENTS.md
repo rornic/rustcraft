@@ -40,7 +40,7 @@ ochre-gameplay  player, collision, birds, critters, debug overlay, flythrough (b
 - World map pipeline: `ochre-world/src/worldmap/` (erosion, hydrology, water, climate, then `source.rs` as the `TerrainSource`).
 - Lakes, rivers and the sea, and the rule that keeps them from leaking: `docs/water.md`. Read it before changing water.
 - Shaders: `assets/shaders/`. Block textures: `assets/textures/blocks.png`, built by the `block-textures` skill.
-- Examples double as tools: `worldprobe` (CLI probe of a spot), `world_map` (PNG), `water_audit`, `seams`, `lod_sim` (headless loading), `flow_sim` (headless frame times while water flows), `flight` (scripted flight report).
+- Examples double as tools: `worldprobe` (CLI probe of a spot), `world_map` (PNG), `water_audit`, `seams`, `lod_sim` (headless loading), `flow_sim` (headless frame times while water flows), `shadow_cull` (what the sun's shadow cascades draw, see `docs/shadow-perf.md`), `flight` (scripted flight report).
 
 ## Conventions
 
