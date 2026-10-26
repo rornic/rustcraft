@@ -123,8 +123,8 @@ pub struct Sun;
 #[derive(Component)]
 struct SunShadows(Quat);
 
-// The shadow map turns four times a second, holding before it slides to its next angle.
-const SHADOW_STEP_TICKS: u64 = TICKS_PER_SECOND / 4;
+// The shadow map turns 20 times a second, holding before it slides to its next angle.
+const SHADOW_STEP_TICKS: u64 = TICKS_PER_SECOND / 20;
 const SHADOW_SLIDE: f32 = 0.5;
 
 /// On the moon, see `move_sky`. Without shadows, so Bevy puts it before the sun among the
@@ -377,11 +377,14 @@ mod tests {
     fn test_shadows_hold_then_slide_on_to_the_next_step() {
         let step = super::SHADOW_STEP_TICKS;
         let day = super::DAY_TICKS as f32;
+        assert_eq!(step, 1);
         let start = super::shadow_days(3 * step, 0.0);
-        assert_eq!(start, super::shadow_days(3 * step + step / 2, 0.3));
+        assert_eq!(start, super::shadow_days(3 * step, 0.3));
+        let middle = super::shadow_days(3 * step, 0.75);
         let end = super::shadow_days(4 * step - 1, 0.999);
-        assert!((end - 4.0 * step as f32 / day).abs() < 1e-5, "{end}");
-        assert!((super::shadow_days(4 * step, 0.0) - end).abs() < 1e-5);
+        assert!(start < middle && middle < end);
+        assert!((end - 4.0 * step as f32 / day).abs() < 1e-8, "{end}");
+        assert!((super::shadow_days(4 * step, 0.0) - end).abs() < 1e-8);
     }
 
     use super::*;
