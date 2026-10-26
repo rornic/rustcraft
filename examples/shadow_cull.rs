@@ -6,8 +6,7 @@
 //   cargo run --release --example shadow_cull -- [shadow distance in blocks] [cascades] [camera pitch in degrees]
 // Counts are CPU-side submissions, so they say how much geometry the shadow pass is given, not
 // how long the GPU takes over it. It also counts what would be left if each cascade kept only the
-// casters that can shadow something in its slice of the view: those in the hull of the slice and
-// the slice swept toward the sun, up to the top of the world.
+// casters that can shadow something in its slice of the view, swept toward the sun.
 use std::time::{Duration, Instant};
 
 use bevy::camera::primitives::{Aabb, Frustum};
@@ -24,7 +23,6 @@ use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 use bevy::shape::ViewFrustum;
 use ochre_base::block::Tile;
-use ochre_base::WORLD_HEIGHT;
 use ochre_engine::settings::{DebugSettings, RendererSettings, Settings};
 use ochre_terrain::chunk_loader::{GenerateChunkData, GenerateChunkMesh};
 use ochre_terrain::group::ChunkGroup;
@@ -33,6 +31,7 @@ use ochre_terrain::material::{
     ChunkMaterial, ShaderInputs, SprayMaterial, TerrainAssets, WaterMaterial,
 };
 use ochre_terrain::{insert_terrain_resources, task_pool_plugin, TerrainPlugin};
+use ochre_world::shadow::CasterHull;
 use ochre_world::worldmap::WorldConfig;
 
 // The game's camera, see `spawn_player`.
@@ -82,6 +81,7 @@ struct Caster {
     aabb: Aabb,
     transform: GlobalTransform,
     triangles: usize,
+    non_cutout: bool,
     // of those, drawn with holes cut out by the shadow pass's fragment shader
     leaves: usize,
     flora: usize,
@@ -125,14 +125,25 @@ fn casters(app: &mut App) -> Vec<Caster> {
         &Visibility,
         Option<&ChunkGroup>,
         Option<&LodNode>,
+        Option<&ChildOf>,
         // only land, as water and spray cast no shadows
         &MeshMaterial3d<ChunkMaterial>,
     )>();
     let meshes = world.resource::<Assets<Mesh>>();
-    for (mesh, aabb, transform, visibility, group, node, _) in query.iter(world) {
+    let materials = world.resource::<Assets<ChunkMaterial>>();
+    for (mesh, aabb, transform, visibility, group, node, parent, material) in query.iter(world) {
         if *visibility == Visibility::Hidden {
             continue;
         }
+        let parent = parent.map(|p| world.entity(p.parent()));
+        if parent
+            .as_ref()
+            .is_some_and(|p| p.get::<Visibility>() == Some(&Visibility::Hidden))
+        {
+            continue;
+        }
+        let group = group.or_else(|| parent.as_ref().and_then(|p| p.get::<ChunkGroup>()));
+        let node = node.or_else(|| parent.as_ref().and_then(|p| p.get::<LodNode>()));
         let Some(mesh) = meshes.get(&mesh.0) else {
             continue;
         };
@@ -149,6 +160,7 @@ fn casters(app: &mut App) -> Vec<Caster> {
             aabb: *aabb,
             transform: *transform,
             triangles,
+            non_cutout: materials.get(&material.0).is_some_and(|m| m.non_cutout),
             leaves,
             flora,
             class,
@@ -161,6 +173,7 @@ fn casters(app: &mut App) -> Vec<Caster> {
 struct Tally {
     meshes: usize,
     triangles: usize,
+    fragment_free: usize,
     leaves: usize,
     flora: usize,
     by_class: [usize; LEVELS + 1],
@@ -170,68 +183,26 @@ fn tally(
     casters: &[Caster],
     frustum: &Frustum,
     near: bool,
-    hull: Option<&[(Vec3A, f32)]>,
+    hull: Option<(&CasterHull, Vec3A, f32)>,
 ) -> Tally {
     let mut tally = Tally::default();
     for caster in casters {
         if frustum.intersects_obb(&caster.aabb, &caster.transform.affine(), near, true)
-            && hull.is_none_or(|planes| inside(planes, caster))
+            && hull.is_none_or(|(hull, eye, margin)| {
+                hull.intersects(&caster.aabb, &caster.transform.affine(), eye, margin)
+            })
         {
             tally.meshes += 1;
             tally.triangles += caster.triangles;
+            if caster.non_cutout {
+                tally.fragment_free += caster.triangles;
+            }
             tally.leaves += caster.leaves;
             tally.flora += caster.flora;
             tally.by_class[caster.class.min(LEVELS)] += caster.triangles;
         }
     }
     tally
-}
-
-// The planes, as outward normals and offsets, of the convex hull of `points`: every plane through
-// three of them with all the rest on one side. Slow, but there are 16 points.
-fn hull_planes(points: &[Vec3A]) -> Vec<(Vec3A, f32)> {
-    let mut planes: Vec<(Vec3A, f32)> = Vec::new();
-    for i in 0..points.len() {
-        for j in i + 1..points.len() {
-            for k in j + 1..points.len() {
-                let normal = (points[j] - points[i]).cross(points[k] - points[i]);
-                if normal.length() < 1e-3 {
-                    continue;
-                }
-                let normal = normal.normalize();
-                let d = -normal.dot(points[i]);
-                let sides = points.iter().map(|p| normal.dot(*p) + d);
-                let (above, below) =
-                    sides.fold((false, false), |(a, b), s| (a || s > 1e-2, b || s < -1e-2));
-                let plane = match (above, below) {
-                    (false, _) => (normal, d),
-                    (true, false) => (-normal, -d),
-                    _ => continue,
-                };
-                if !planes
-                    .iter()
-                    .any(|(n, e)| n.dot(plane.0) > 0.9999 && (e - plane.1).abs() < 0.05)
-                {
-                    planes.push(plane);
-                }
-            }
-        }
-    }
-    planes
-}
-
-// Whether any of `caster` lies inside the hull of `planes`.
-fn inside(planes: &[(Vec3A, f32)], caster: &Caster) -> bool {
-    let affine = caster.transform.affine();
-    let centre = affine.transform_point3a(caster.aabb.center);
-    let half = caster.aabb.half_extents;
-    planes.iter().all(|(normal, d)| {
-        let m = affine.matrix3;
-        let radius = half.x * normal.dot(m.x_axis).abs()
-            + half.y * normal.dot(m.y_axis).abs()
-            + half.z * normal.dot(m.z_axis).abs();
-        normal.dot(centre) + d - radius <= 0.0
-    })
 }
 
 fn classes(tally: &Tally) -> String {
@@ -388,12 +359,12 @@ fn main() {
         .zip(config.bounds.iter())
         .map(|(near, &far)| {
             let corners = projection.get_frustum_corners(-near, -far);
-            corners.map(|c| view.affine().transform_point3a(c))
+            corners.map(|c| view.affine().matrix3 * c)
         })
         .collect();
 
     // the camera looks along +x: the sun ahead, to the side, and behind
-    let mut sums = vec![(0usize, 0usize, 0usize, 0usize); cascades];
+    let mut sums = vec![(0usize, 0usize, 0usize, 0usize, 0usize); cascades];
     let mut scenarios = 0;
     for (name, azimuth) in [("ahead", 0.0f32), ("side", 90.0), ("behind", 180.0)] {
         for elevation in [5.0f32, 15.0, 30.0, 60.0, 85.0] {
@@ -415,21 +386,26 @@ fn main() {
                 let frustum = Frustum(ViewFrustum::from_clip_from_world(&cascade.clip_from_world));
                 // a caster can lie before the near plane, as Bevy's visibility check allows
                 let t = tally(&casters, &frustum, false, None);
-                // the slice and the slice swept toward the sun up to the top of the world
+                // Use the runtime hull, including its bias, sway and shadow-filter margin.
                 let sun = Vec3A::from(toward_sun);
-                let mut points: Vec<Vec3A> = slices[i].to_vec();
-                for p in slices[i] {
-                    let climb = (WORLD_HEIGHT as f32 - p.y).max(0.0);
-                    points.push(p + sun * climb / el.sin());
-                }
-                let planes = hull_planes(&points);
-                let kept = tally(&casters, &frustum, false, Some(&planes));
+                let hull = CasterHull::new(slices[i], sun);
+                let light = world.get::<DirectionalLight>(light).unwrap();
+                let margin = (4.0 + light.shadow_normal_bias.abs()) * cascade.texel_size
+                    + light.shadow_depth_bias.abs()
+                    + 0.3;
+                let kept = tally(
+                    &casters,
+                    &frustum,
+                    false,
+                    Some((&hull, view.translation().into(), margin)),
+                );
                 all += t.triangles;
                 kept_all += kept.triangles;
                 sums[i].0 += t.triangles;
                 sums[i].1 += kept.triangles;
                 sums[i].2 += t.leaves + t.flora;
                 sums[i].3 += t.meshes;
+                sums[i].4 += kept.fragment_free;
                 println!(
                     "  cascade {i}: texel {:5.2} blocks, {:5} meshes, {:7.0}k triangles ({}), swept hull keeps {:.0}k ({:.0}%)",
                     cascade.texel_size,
@@ -451,7 +427,8 @@ fn main() {
     let n = scenarios as f32;
     println!("\nmean over {scenarios} suns, shadow distance {shadow_distance}, {cascades} cascades (camera view: {:.0}k triangles):", main.triangles as f32 / 1000.0);
     let (mut total, mut total_kept) = (0.0, 0.0);
-    for (i, (t, kept, cutout, meshes)) in sums.iter().enumerate() {
+    let mut fragment_free = 0.0;
+    for (i, (t, kept, cutout, meshes, solid)) in sums.iter().enumerate() {
         println!(
             "  cascade {i}: {:7.0}k triangles ({:.0}% leaves or flora), {:5.0} meshes; swept hull {:.0}k",
             *t as f32 / n / 1000.0,
@@ -461,6 +438,7 @@ fn main() {
         );
         total += *t as f32 / n;
         total_kept += *kept as f32 / n;
+        fragment_free += *solid as f32 / n;
     }
     println!(
         "  all: {:.0}k triangles ({:.2}x the view), {:.0}k with the swept hull ({:.2}x)",
@@ -469,4 +447,5 @@ fn main() {
         total_kept / 1000.0,
         total_kept / main.triangles as f32
     );
+    println!("  {:.0}k retained triangles ({:.1}%) use fragment-free shadow pipelines on native depth-clip GPUs", fragment_free / 1000.0, 100.0 * fragment_free / total_kept.max(1.0));
 }

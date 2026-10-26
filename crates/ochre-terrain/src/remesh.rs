@@ -219,6 +219,7 @@ pub(crate) fn remesh_edits(
 pub(crate) fn apply_remeshes(
     mut commands: Commands,
     loader: bevy::ecs::system::Res<ChunkLoader>,
+    materials: bevy::ecs::system::Res<crate::material::TerrainMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut remeshing: Query<(Entity, &mut RemeshGroup, Has<BuiltGroup>)>,
 ) {
@@ -233,7 +234,14 @@ pub(crate) fn apply_remeshes(
         if !built {
             group.insert((BuiltGroup, group_aabb()));
         }
-        draw_group(&mut commands, entity, remeshed.meshes, &loader, &mut meshes);
+        draw_group(
+            &mut commands,
+            entity,
+            remeshed.meshes,
+            &loader,
+            &materials,
+            &mut meshes,
+        );
         for (chunk, drawn) in remeshed.drawn {
             let Some(chunk) = loader.chunk_entity(chunk) else {
                 continue;
@@ -484,6 +492,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()))
             .init_asset::<Mesh>()
+            .init_resource::<crate::material::TerrainMaterials>()
             .add_systems(Update, (remesh_edits, apply_remeshes).chain());
         let mut loader = ChunkLoader::new(
             LodLayout::new(32, 128, 2),
@@ -576,6 +585,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((TaskPoolPlugin::default(), AssetPlugin::default()))
             .init_asset::<Mesh>()
+            .init_resource::<crate::material::TerrainMaterials>()
             .add_systems(Update, (remesh_edits, apply_remeshes).chain())
             .insert_resource(ChunkLoader::new(
                 LodLayout::new(32, 128, 2),

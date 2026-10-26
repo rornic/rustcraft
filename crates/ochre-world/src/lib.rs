@@ -3,6 +3,7 @@
 
 pub mod ambience;
 pub mod clouds;
+pub mod shadow;
 pub mod sky;
 pub mod sky_dome;
 pub mod tonemap;

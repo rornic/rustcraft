@@ -6,6 +6,8 @@ lod_base_distance = 16
 lod_fade_seconds = 1.5
 shadow_distance = 64
 shadow_cascades = 3
+# low, medium, high or ultra; the cloud target height follows the window's aspect ratio.
+cloud_resolution = "medium"
 
 [debug]
 still_leaves = false

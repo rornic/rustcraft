@@ -22,6 +22,8 @@ pub struct RendererSettings {
     pub shadow_distance: u32,
     /// Shadow map cascades, each drawing the terrain in its slice again.
     pub shadow_cascades: usize,
+    /// Cloud march resolution preset. Height follows the window's aspect ratio.
+    pub cloud_resolution: CloudResolution,
     /// The most megabytes in one buffer the terrain's meshes are packed into. A buffer that fills
     /// is copied into a bigger one, with both alive for a moment, so smaller buffers mean a lower
     /// peak and less empty room in the last one.
@@ -31,6 +33,28 @@ pub struct RendererSettings {
     /// Pack terrain meshes' vertices into about half the bytes, see `crate::pack`. On unless a
     /// test of the two needs it off.
     pub pack_meshes: bool,
+}
+
+/// Maximum cloud target width; smaller windows still march at half display resolution.
+#[derive(Default, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudResolution {
+    Low,
+    #[default]
+    Medium,
+    High,
+    Ultra,
+}
+
+impl CloudResolution {
+    pub const fn width(self) -> u32 {
+        match self {
+            Self::Low => 320,
+            Self::Medium => 640,
+            Self::High => 960,
+            Self::Ultra => 1280,
+        }
+    }
 }
 
 /// Switches for testing what the renderer spends its time on, all off by default.
@@ -80,6 +104,7 @@ impl Default for RendererSettings {
             lod_fade_seconds: 1.5,
             shadow_distance: 64,
             shadow_cascades: 3,
+            cloud_resolution: CloudResolution::default(),
             mesh_slab_mb: 64,
             mesh_slab_growth: 1.25,
             pack_meshes: true,

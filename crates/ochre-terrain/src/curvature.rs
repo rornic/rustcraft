@@ -38,6 +38,11 @@ pub struct Curve {
 }
 
 impl Curve {
+    /// Whether terrain is drawn flat at this camera height.
+    pub fn is_flat_at(self, height: f32) -> bool {
+        self.bend_at(height) == 0.0
+    }
+
     /// The world whose horizon from the top of the world is `chunks` away. From sea level
     /// its horizon is half as far, see `horizon_distance`.
     pub(crate) const fn seen_from_the_top_to(chunks: f32) -> Self {

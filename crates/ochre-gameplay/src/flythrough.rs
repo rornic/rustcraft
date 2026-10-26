@@ -22,28 +22,34 @@ const BLOCK_CLEARANCE: f32 = 4.0;
 const LIFT_REACH: f32 = 2.5;
 
 // (seconds, camera position, where it looks)
-const KEYS: [(f32, [f32; 3], [f32; 3]); 17] = [
-    // high over the world, for its scale, looking round from the south by the east and north to the west
-    (0.0, [8120.0, 6000.0, -6000.0], [8120.0, 500.0, -2000.0]),
-    (3.0, [8120.0, 6000.0, -6000.0], [12120.0, 500.0, -6000.0]),
-    (6.0, [8120.0, 6000.0, -6000.0], [8120.0, 500.0, -10000.0]),
-    (9.0, [8120.0, 6000.0, -6000.0], [4120.0, 500.0, -6000.0]),
-    // down through the clouds to the ridge's summit, and round from the stream below it in the west by the north
-    (19.0, [8130.0, 925.0, -6000.0], [7183.0, 640.0, -5844.0]),
-    (22.0, [8130.0, 925.0, -6000.0], [8130.0, 860.0, -6600.0]),
-    (25.0, [8130.0, 925.0, -6000.0], [8730.0, 860.0, -6000.0]),
-    (28.0, [8130.0, 925.0, -6000.0], [8130.0, 860.0, -5400.0]),
-    (31.0, [8130.0, 925.0, -6000.0], [7183.0, 600.0, -5844.0]),
-    // over the ridge and down its far side to where the stream rises, then along it to the lake
-    (34.0, [7750.0, 900.0, -5940.0], [7183.0, 610.0, -5844.0]),
-    (38.0, [7260.0, 605.0, -5860.0], [7011.0, 595.0, -5758.0]),
-    (42.0, [7011.0, 600.0, -5758.0], [6793.0, 585.0, -5703.0]),
-    (46.0, [6793.0, 585.0, -5703.0], [6636.0, 560.0, -5639.0]),
-    (50.0, [6636.0, 560.0, -5639.0], [6480.0, 540.0, -5500.0]),
-    (54.0, [6480.0, 540.0, -5500.0], [6315.0, 525.0, -5449.0]),
-    (58.0, [6315.0, 530.0, -5449.0], [6100.0, 520.0, -5440.0]),
-    // out over the lake, rising a little
-    (67.0, [5500.0, 560.0, -5330.0], [4800.0, 530.0, -5200.0]),
+const KEYS: [(f32, [f32; 3], [f32; 3]); 22] = [
+    // high over the world, looking out to the horizon away from the sun, then down and round from the east by the south to the west
+    (0.0, [7520.0, 6000.0, -2800.0], [7520.0, 5600.0, -6800.0]),
+    (3.0, [7520.0, 6000.0, -2800.0], [7520.0, 5600.0, -6800.0]),
+    (6.0, [7520.0, 6000.0, -2800.0], [11520.0, 500.0, -2800.0]),
+    (9.0, [7520.0, 6000.0, -2800.0], [7520.0, 500.0, 1200.0]),
+    (12.0, [7520.0, 6000.0, -2800.0], [3520.0, 500.0, -2800.0]),
+    // down through the clouds to the summit, always looking north past it, then round by the east and south to the lake in the west
+    (17.0, [7520.0, 2600.0, -3600.0], [7520.0, 830.0, -5280.0]),
+    (22.0, [7520.0, 925.0, -4680.0], [7520.0, 830.0, -5280.0]),
+    (25.0, [7520.0, 925.0, -4680.0], [8120.0, 830.0, -4680.0]),
+    (28.0, [7520.0, 925.0, -4680.0], [7520.0, 830.0, -4080.0]),
+    (31.0, [7520.0, 925.0, -4680.0], [6900.0, 650.0, -4900.0]),
+    // down the ridge's west flank and out over the lake, north along it to where the stream leaves
+    (36.0, [6700.0, 700.0, -5100.0], [5800.0, 540.0, -5500.0]),
+    (41.0, [6100.0, 560.0, -5300.0], [5400.0, 520.0, -5700.0]),
+    (47.0, [5550.0, 545.0, -6000.0], [5400.0, 520.0, -6600.0]),
+    (53.0, [5380.0, 545.0, -6900.0], [5330.0, 520.0, -7500.0]),
+    // down the stream to the sea
+    (57.0, [5312.0, 540.0, -7376.0], [5360.0, 510.0, -7520.0]),
+    (60.5, [5400.0, 525.0, -7560.0], [5560.0, 500.0, -7690.0]),
+    (64.0, [5600.0, 515.0, -7720.0], [5700.0, 490.0, -7830.0]),
+    (67.5, [5800.0, 505.0, -7830.0], [5950.0, 485.0, -7870.0]),
+    (71.0, [6000.0, 495.0, -7900.0], [6080.0, 470.0, -8040.0]),
+    (74.5, [6080.0, 490.0, -8030.0], [6150.0, 455.0, -8200.0]),
+    (78.0, [6130.0, 480.0, -8140.0], [6170.0, 450.0, -8450.0]),
+    // out over the sea
+    (83.0, [6170.0, 500.0, -8500.0], [6200.0, 450.0, -9300.0]),
 ];
 
 pub struct FlythroughPlugin;
@@ -54,7 +60,7 @@ impl Plugin for FlythroughPlugin {
             std::fs::create_dir_all(&dir).expect("flythrough frame directory");
             app.insert_resource(Flythrough {
                 dir,
-                started: Instant::now(),
+                started: None,
                 frame: None,
                 lift: Vec::new(),
             })
@@ -66,7 +72,8 @@ impl Plugin for FlythroughPlugin {
 #[derive(Resource)]
 struct Flythrough {
     dir: String,
-    started: Instant,
+    // when the player first existed, which the warmup counts from
+    started: Option<Instant>,
     // the frame being recorded, once warmed up
     frame: Option<u32>,
     // blocks over the path the camera rises each frame, worked out for the whole flight up front
@@ -124,9 +131,10 @@ fn fly(
     let (Ok(mut body), Ok(mut eye)) = (player.single_mut(), camera.single_mut()) else {
         return;
     };
+    let started = *state.started.get_or_insert_with(Instant::now);
     let frame = match state.frame {
         Some(frame) => frame,
-        None if state.started.elapsed().as_secs_f32() < WARMUP => 0,
+        None if started.elapsed().as_secs_f32() < WARMUP => 0,
         None => {
             commands.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
                 1.0 / FPS as f64,

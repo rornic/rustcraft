@@ -39,6 +39,7 @@ use crate::sky_dome::dome;
 use ochre_terrain::curvature::Curvature;
 pub use ochre_terrain::material::CloudLayer;
 use ochre_terrain::material::{push_shader_defs, water_level};
+use ochre_terrain::settings::CloudResolution;
 
 /// Height of the clouds' undersides, far above the highest land; matches `BASE` in `cloud_march.wesl`.
 pub const CLOUD_BASE: f32 = 1500.0;
@@ -64,23 +65,30 @@ const TARGET_SCALE: u32 = 2;
 // Texels across each half of the reflections' map, matching `REFLECTION_TEXELS` in `cloud_march.wesl`.
 const REFLECTION_SIZE: u32 = 512;
 
-pub struct CloudPlugin;
+#[derive(Default)]
+pub struct CloudPlugin {
+    pub resolution: CloudResolution,
+}
+
+#[derive(Resource)]
+struct CloudTargetResolution(CloudResolution);
 
 impl Plugin for CloudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            MaterialPlugin::<CloudMaterial>::default(),
-            ExtractResourcePlugin::<CloudMarch>::default(),
-        ))
-        // before the Startup systems that build materials from the cloud layer
-        .add_systems(PreStartup, spawn_clouds)
-        // once the camera's spawned
-        .add_systems(PostStartup, spawn_cloud_dome)
-        .add_systems(Update, fit_cloud_target)
-        .add_systems(
-            PostUpdate,
-            aim_cloud_march.after(TransformSystems::Propagate),
-        );
+        app.insert_resource(CloudTargetResolution(self.resolution))
+            .add_plugins((
+                MaterialPlugin::<CloudMaterial>::default(),
+                ExtractResourcePlugin::<CloudMarch>::default(),
+            ))
+            // before the Startup systems that build materials from the cloud layer
+            .add_systems(PreStartup, spawn_clouds)
+            // once the camera's spawned
+            .add_systems(PostStartup, spawn_cloud_dome)
+            .add_systems(Update, fit_cloud_target)
+            .add_systems(
+                PostUpdate,
+                aim_cloud_march.after(TransformSystems::Propagate),
+            );
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app
                 .add_systems(RenderStartup, init_cloud_pipeline)
@@ -258,8 +266,12 @@ fn spawn_clouds(
     mut images: ResMut<Assets<Image>>,
     curvature: Res<Curvature>,
     window: Query<&Window, With<PrimaryWindow>>,
+    resolution: Res<CloudTargetResolution>,
 ) {
-    let size = target_size(window.single().map_or(UVec2::ONE, Window::physical_size));
+    let size = target_size(
+        window.single().map_or(UVec2::ONE, Window::physical_size),
+        resolution.0,
+    );
     let mut target = Image::new_target_texture(size.x, size.y, TextureFormat::Rgba16Float, None);
     target.sampler = ImageSampler::linear();
     let history = images.add(target.clone());
@@ -297,8 +309,11 @@ fn spawn_clouds(
 }
 
 // The size of the clouds' target for a window `size` pixels across.
-fn target_size(size: UVec2) -> UVec2 {
-    (size / TARGET_SCALE).max(UVec2::ONE)
+fn target_size(size: UVec2, resolution: CloudResolution) -> UVec2 {
+    let target = (size / TARGET_SCALE).max(UVec2::ONE);
+    let width = target.x.min(resolution.width());
+    let height = (u64::from(target.y) * u64::from(width) / u64::from(target.x)).max(1) as u32;
+    UVec2::new(width, height)
 }
 
 /// Spawns the dome over the main camera blending the clouds' target up over the scene.
@@ -329,11 +344,12 @@ fn fit_cloud_target(
     march: Option<Res<CloudMarch>>,
     mut images: ResMut<Assets<Image>>,
     mut clouds: ResMut<Assets<CloudMaterial>>,
+    resolution: Res<CloudTargetResolution>,
 ) {
     let (Ok(window), Some(march)) = (window.single(), march) else {
         return;
     };
-    let size = target_size(window.physical_size());
+    let size = target_size(window.physical_size(), resolution.0);
     if images
         .get(&march.target)
         .is_none_or(|image| image.size() == size)
@@ -553,6 +569,57 @@ fn march_clouds(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloud_target_caps_high_resolutions_and_keeps_smaller_views_half_size() {
+        for (window, expected) in [
+            (UVec2::new(1280, 720), UVec2::new(640, 360)),
+            (UVec2::new(1920, 1080), UVec2::new(640, 360)),
+            (UVec2::new(2560, 1440), UVec2::new(640, 360)),
+            (UVec2::new(3840, 2160), UVec2::new(640, 360)),
+            (UVec2::ZERO, UVec2::ONE),
+        ] {
+            assert_eq!(target_size(window, CloudResolution::Medium), expected);
+        }
+    }
+
+    #[test]
+    fn cloud_target_preserves_aspect_ratio_within_one_pixel_and_caps_width() {
+        for window in [
+            UVec2::new(3440, 1440),
+            UVec2::new(2160, 3840),
+            UVec2::new(5120, 1440),
+        ] {
+            let target = target_size(window, CloudResolution::Medium);
+            assert!(target.x <= CloudResolution::Medium.width());
+            let aspect = window.x as f64 / window.y as f64;
+            assert!((f64::from(target.x) - f64::from(target.y) * aspect).abs() <= 1.0 + aspect);
+        }
+        for window in [UVec2::new(u32::MAX, 1), UVec2::new(1, u32::MAX)] {
+            let target = target_size(window, CloudResolution::Medium);
+            assert!(target.min_element() >= 1);
+            assert!(target.x <= CloudResolution::Medium.width());
+        }
+    }
+
+    #[test]
+    fn cloud_resolution_presets_set_width_and_derive_height() {
+        for (resolution, width) in [
+            (CloudResolution::Low, 320),
+            (CloudResolution::Medium, 640),
+            (CloudResolution::High, 960),
+            (CloudResolution::Ultra, 1280),
+        ] {
+            assert_eq!(
+                target_size(UVec2::new(3840, 2160), resolution),
+                UVec2::new(width, width * 9 / 16)
+            );
+        }
+        assert_eq!(
+            target_size(UVec2::new(800, 600), CloudResolution::Ultra),
+            UVec2::new(400, 300)
+        );
+    }
 
     #[test]
     fn test_pattern_covers_the_share_of_sky_asked() {

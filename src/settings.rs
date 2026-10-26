@@ -2,7 +2,7 @@ use std::error::Error;
 
 use serde::Deserialize;
 
-pub use ochre_terrain::settings::{DebugSettings, RendererSettings};
+pub use ochre_terrain::settings::{CloudResolution, DebugSettings, RendererSettings};
 use ochre_world::worldmap::WorldConfig;
 
 /// Everything `settings.toml` holds, each part read by the crate it configures.
@@ -31,6 +31,10 @@ mod tests {
         let settings: Settings = toml::from_str("[renderer]\nrender_distance = 64").unwrap();
         assert_eq!(64, settings.renderer.render_distance);
         assert_eq!(32, settings.renderer.full_detail_distance);
+        assert_eq!(
+            super::CloudResolution::Medium,
+            settings.renderer.cloud_resolution
+        );
         assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);
         assert_eq!(WorldConfig::default(), settings.world);
     }
@@ -51,17 +55,36 @@ mod tests {
     }
 
     #[test]
+    fn test_cloud_resolution_presets_parse_and_reject_typos() {
+        for (name, preset) in [
+            ("low", super::CloudResolution::Low),
+            ("medium", super::CloudResolution::Medium),
+            ("high", super::CloudResolution::High),
+            ("ultra", super::CloudResolution::Ultra),
+        ] {
+            let settings: Settings =
+                toml::from_str(&format!("[renderer]\ncloud_resolution = '{name}'")).unwrap();
+            assert_eq!(preset, settings.renderer.cloud_resolution);
+        }
+        assert!(toml::from_str::<Settings>("[renderer]\ncloud_resolution = 'medum'").is_err());
+    }
+
+    #[test]
     fn test_settings_file_parses() {
         let file = std::fs::read_to_string("assets/settings.toml").unwrap();
         let settings: Settings = toml::from_str(&file).unwrap();
-        assert_eq!(24, settings.renderer.full_detail_distance);
+        assert_eq!(16, settings.renderer.full_detail_distance);
+        assert_eq!(
+            super::CloudResolution::Medium,
+            settings.renderer.cloud_resolution
+        );
         assert_eq!(Some(16), settings.renderer.lod_base_distance);
         assert_eq!(2, settings.renderer.lod_level_scale);
         assert_eq!(64, settings.renderer.mesh_slab_mb);
         assert!(settings.renderer.mesh_slab_growth > 1.0);
-        // full detail reaches further than the levels scale from, with level 1 still between it and level 2
+        // Full detail and the LOD base both start at 16 chunks.
         let layout = settings.renderer.lod_layout();
-        assert_eq!(24.0, layout.reach(0));
+        assert_eq!(16.0, layout.reach(0));
         assert_eq!([32.0, 64.0], [layout.reach(1), layout.reach(2)]);
         // the debug switches ship off
         assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);

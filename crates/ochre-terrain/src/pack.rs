@@ -74,7 +74,8 @@ fn give_bounds_size(mesh: &mut Mesh) -> bool {
 /// is returned as it was, which draws the same. Call it as late as possible: once a mesh is
 /// packed, code that reads its float attributes back no longer works.
 pub fn pack(mut mesh: Mesh) -> Mesh {
-    if !PACKED.load(Ordering::Relaxed) {
+    // Splitting foliage from ground can leave an empty solid mesh, with no bounds to quantize.
+    if mesh.count_vertices() == 0 || !PACKED.load(Ordering::Relaxed) {
         return mesh;
     }
     if !give_bounds_size(&mut mesh) {

@@ -210,3 +210,41 @@ the main thread, 0.36 ms a group, and a step finishes up to 20 groups at once, 7
 meshing task, for groups loading in as well (`pack_group`). Flowing frames, two runs: p99 4.38 to 1.57 / 1.61 ms,
 slowest 7.94 to 2.20 / 2.85 ms; still frames p99 0.77 either way. `lod_sim` (seed 7, 80 blocks/s) has no slow
 frames or new holes, and flies further in the same time, as its frames are faster.
+
+## Shadow caster pruning and solid shadow pipelines (2026-10-26)
+
+Options 1 and 3 from `shadow-perf.md` are implemented. The runtime prunes terrain casters against
+each cascade's camera slice swept toward the actual shadow direction, with filter/bias/sway
+padding and a fallback to Bevy's visibility when world curvature is active. Meshes are split
+into solid and cutout parts before packing on worker tasks. Solid directional shadows omit
+their fragment stage where native depth clipping is available. Camera fade materials retain
+their solid/cutout classification and masked rendering; emulated depth-clamp GPUs keep a fragment
+depth write. LOD splitting and packing also run on workers to avoid adding work to mesh upload frames.
+
+Seed 1, current settings, 512-block shadows, three cascades, level camera, 15 sun directions:
+mean submissions 2.365M to 1.083M triangles (54% fewer); 1.054M retained triangles (97.3%) are
+eligible for the pipeline without a fragment stage. `shadow_cull` uses the runtime hull and counts
+the split meshes, including child foliage. These are CPU submission counts; GPU time and frame-time
+p99 were not measured, so no GPU speedup or p99 improvement is claimed. Splitting can add a draw
+for a mesh containing both ground and foliage. See `shadow-perf.md` for correctness guards and
+the required rendered A/B check.
+
+`bench` before/after: chunk vertices 620,695 both times; LOD vertices 311,077 both times, with
+all eight levels matching exactly. Chunk meshing best of three 208.2 / 216.7 ms; LOD total
+78.9 / 79.6 ms. Generation is unchanged; splitting happens later, outside this benchmark.
+The seed-1 `lod_sim` route flags one persistent surface chunk after stopping with both the
+original branch code and this change. Temporary diagnostic edits were removed after the
+baseline comparison. This check does not establish that the existing loader has no gaps.
+
+## Cloud march resolution cap
+
+`renderer.cloud_resolution` selects a target width: low 320, medium 640, high 960, ultra 1280.
+Medium is the default. Height follows the window's aspect ratio, and smaller windows retain
+half display resolution. Both the march target and its temporal history use this calculation
+on startup and resize. At 16:9, medium reduces the 1440p main march from 921,600 to 230,400 rays
+per frame; at 4K, from 2,073,600 to 230,400. The fixed reflection target and march step counts
+are unchanged. Pixel counts depend on aspect ratio; this caps width rather than total area.
+
+The user reported that both 960×540 and 640×360 retained the desired cloud quality. The second
+cap uses 56% fewer main-march rays than the first at 16:9. GPU timings and frame-time p99 were
+not measured, so no proportional timing improvement is claimed. See `docs/clouds.md` for presets.
