@@ -58,6 +58,10 @@ pub struct GroupedChunk;
 #[derive(Component)]
 pub(crate) struct InnerLeafFaces;
 
+/// Terrain whose shadow pass can omit alpha testing. Retained when fade materials change.
+#[derive(Component)]
+pub(crate) struct SolidTerrain;
+
 pub(crate) fn group_aabb() -> Aabb {
     let width = (2 * CHUNK_SIZE) as f32;
     Aabb::from_min_max(Vec3::ZERO, Vec3::splat(width))
@@ -152,6 +156,7 @@ fn inner_leaves_near(key: LodKey, eye: Vec3) -> bool {
 pub(crate) fn load_groups(
     mut commands: Commands,
     loader: Res<ChunkLoader>,
+    materials: Res<crate::material::TerrainMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut building: Query<(Entity, &mut BuildChunkGroup)>,
 ) {
@@ -161,7 +166,14 @@ pub(crate) fn load_groups(
         };
         if merged.has_geometry() {
             commands.entity(entity).insert((BuiltGroup, group_aabb()));
-            draw_group(&mut commands, entity, merged, &loader, &mut meshes);
+            draw_group(
+                &mut commands,
+                entity,
+                merged,
+                &loader,
+                &materials,
+                &mut meshes,
+            );
         }
         for &chunk in &build.chunks {
             if let Ok(mut chunk) = commands.get_entity(chunk) {
@@ -174,7 +186,9 @@ pub(crate) fn load_groups(
 
 /// `merged` with the meshes `draw_group` draws packed, which is slow enough to do off the main thread.
 pub(crate) fn pack_group(mut merged: ChunkMeshes) -> ChunkMeshes {
+    (merged.opaque, merged.cutout) = crate::shadow_mesh::split(merged.opaque);
     merged.opaque = pack(merged.opaque);
+    merged.cutout = merged.cutout.map(pack);
     merged.water = merged.water.map(pack);
     merged.inner_leaves = merged.inner_leaves.map(pack);
     merged
@@ -187,13 +201,25 @@ pub(crate) fn draw_group(
     entity: Entity,
     merged: ChunkMeshes,
     loader: &ChunkLoader,
+    materials: &crate::material::TerrainMaterials,
     meshes: &mut Assets<Mesh>,
 ) {
     if merged.opaque.count_vertices() > 0 {
         commands.entity(entity).insert((
+            SolidTerrain,
             Mesh3d(meshes.add(merged.opaque)),
-            MeshMaterial3d(loader.material.clone()),
+            MeshMaterial3d(materials.solid_chunk.clone()),
         ));
+    }
+    if let Some(cutout) = merged.cutout {
+        commands.entity(entity).with_children(|parent| {
+            parent.spawn((
+                Mesh3d(meshes.add(cutout)),
+                MeshMaterial3d(loader.material.clone()),
+                Transform::default(),
+                group_aabb(),
+            ));
+        });
     }
     if let Some(water) = merged.water {
         let water_material = loader.water_material.clone();
@@ -309,12 +335,14 @@ fn merge_meshes(parts: Vec<(Vec3, Mesh)>) -> Option<Mesh> {
 /// The chunks' meshes as one, each moved by its offset in blocks.
 pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
     let mut opaque = Vec::new();
+    let mut cutout = Vec::new();
     let mut water = Vec::new();
     let mut inner_leaves = Vec::new();
     let mut spray = Vec::new();
     for (offset, meshes) in parts {
         spray.extend(meshes.spray.map(|mesh| (offset, mesh)));
         opaque.push((offset, meshes.opaque));
+        cutout.extend(meshes.cutout.map(|mesh| (offset, mesh)));
         water.extend(meshes.water.map(|mesh| (offset, mesh)));
         inner_leaves.extend(meshes.inner_leaves.map(|mesh| (offset, mesh)));
     }
@@ -327,6 +355,7 @@ pub fn merge_chunk_meshes(parts: Vec<(Vec3, ChunkMeshes)>) -> ChunkMeshes {
             )
         }),
         water: merge_meshes(water),
+        cutout: merge_meshes(cutout),
         spray: merge_meshes(spray),
         inner_leaves: merge_meshes(inner_leaves),
     }

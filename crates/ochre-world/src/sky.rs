@@ -33,15 +33,15 @@ use crate::weather::WeatherPlugin;
 use ochre_base::math::smoothstep;
 use ochre_terrain::chunk::CHUNK_SIZE;
 use ochre_terrain::curvature::WORLD_CURVE;
-use ochre_terrain::settings::RendererSettings;
+use ochre_terrain::settings::{CloudResolution, RendererSettings};
 
 /// How opaque fog gets at its far end.
 pub const FOG_MAX_OPACITY: f32 = 0.8;
 
 /// Where the sun is at noon: its path across the sky is the great circle through this and the horizon, see `path_basis`.
 pub(crate) const SUN_DIRECTION: Vec3 = Vec3::new(-0.45, 0.8, 0.4);
-/// Seconds in a game day.
-pub const DAY_SECONDS: f32 = 600.0;
+/// Seconds in a full day/night cycle: six hours, giving three hours of daylight.
+pub const DAY_SECONDS: f32 = 21_600.0;
 /// The clock counts whole ticks, so it stays exact however long the game runs.
 pub const TICKS_PER_SECOND: u64 = 20;
 pub const DAY_TICKS: u64 = DAY_SECONDS as u64 * TICKS_PER_SECOND;
@@ -123,7 +123,8 @@ pub struct Sun;
 #[derive(Component)]
 struct SunShadows(Quat);
 
-// The sun's shadows turn every tick, the finest the clock goes, sliding over the last this share of each.
+// The shadow map turns 20 times a second, holding before it slides to its next angle.
+const SHADOW_STEP_TICKS: u64 = TICKS_PER_SECOND / 20;
 const SHADOW_SLIDE: f32 = 0.5;
 
 /// On the moon, see `move_sky`. Without shadows, so Bevy puts it before the sun among the
@@ -216,10 +217,12 @@ fn move_sky(
     }
 }
 
-/// The day fraction the sun's shadows follow: held at the last tick, then slid to the next at its end.
+/// The day fraction the sun's shadows follow: held at the last step, then slid to the next at its end.
 fn shadow_days(ticks: u64, carry: f32) -> f32 {
-    let slid = smoothstep(1.0 - SHADOW_SLIDE, 1.0, carry);
-    ((ticks % DAY_TICKS) as f32 + slid) / DAY_TICKS as f32
+    let step = ticks - ticks % SHADOW_STEP_TICKS;
+    let into = ((ticks - step) as f32 + carry) / SHADOW_STEP_TICKS as f32;
+    let slid = smoothstep(1.0 - SHADOW_SLIDE, 1.0, into);
+    ((step % DAY_TICKS) as f32 + slid * SHADOW_STEP_TICKS as f32) / DAY_TICKS as f32
 }
 
 /// Turns the sun to `SunShadows` while its shadow maps fit, as turning them every frame makes the texels crawl.
@@ -314,6 +317,7 @@ pub struct SkyPlugin {
     /// How far the sun casts shadows, in blocks, and in how many slices.
     pub shadow_distance: f32,
     pub shadow_cascades: usize,
+    pub cloud_resolution: CloudResolution,
 }
 
 impl SkyPlugin {
@@ -322,6 +326,7 @@ impl SkyPlugin {
             shadow_distance: (renderer.shadow_distance as f32 * CHUNK_SIZE as f32)
                 .min(renderer.fog_distance()),
             shadow_cascades: renderer.shadow_cascades,
+            cloud_resolution: renderer.cloud_resolution,
         }
     }
 }
@@ -333,40 +338,53 @@ impl Plugin for SkyPlugin {
             .and_then(|time| time.parse().ok())
             .unwrap_or(START_TIME);
         let (distance, cascades) = (self.shadow_distance, self.shadow_cascades);
-        app.add_plugins((NightSkyPlugin, SunGlarePlugin, CloudPlugin, WeatherPlugin))
-            .insert_resource(TimeOfDay::from_days(start))
-            .add_systems(
-                Startup,
-                (spawn_atmosphere, move |mut commands: Commands| {
-                    commands.spawn(sun(distance, cascades));
-                    commands.spawn(moon());
-                }),
-            )
-            .add_systems(Update, move_sky)
-            // once the camera's moved, see `TransformSystems::Propagate`
-            .add_systems(
-                PostUpdate,
-                (
-                    match_sky_horizon.after(TransformSystems::Propagate),
-                    aim_sun_shadows
-                        .after(TransformSystems::Propagate)
-                        .before(SimulationLightSystems::UpdateDirectionalLightCascades),
-                    aim_sun_light.after(SimulationLightSystems::UpdateDirectionalLightCascades),
-                ),
-            );
+        app.add_plugins((
+            NightSkyPlugin,
+            SunGlarePlugin,
+            CloudPlugin {
+                resolution: self.cloud_resolution,
+            },
+            WeatherPlugin,
+        ))
+        .insert_resource(TimeOfDay::from_days(start))
+        .add_systems(
+            Startup,
+            (spawn_atmosphere, move |mut commands: Commands| {
+                commands.spawn(sun(distance, cascades));
+                commands.spawn(moon());
+            }),
+        )
+        .add_systems(Update, move_sky)
+        // once the camera's moved, see `TransformSystems::Propagate`
+        .add_systems(
+            PostUpdate,
+            (
+                match_sky_horizon.after(TransformSystems::Propagate),
+                aim_sun_shadows
+                    .after(TransformSystems::Propagate)
+                    .before(SimulationLightSystems::UpdateDirectionalLightCascades),
+                aim_sun_light.after(SimulationLightSystems::UpdateDirectionalLightCascades),
+                crate::shadow::prune_shadow_casters
+                    .after(SimulationLightSystems::CheckLightVisibility),
+            ),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_shadows_hold_then_slide_on_to_the_next_tick() {
+    fn test_shadows_hold_then_slide_on_to_the_next_step() {
+        let step = super::SHADOW_STEP_TICKS;
         let day = super::DAY_TICKS as f32;
-        let start = super::shadow_days(3, 0.0);
-        assert_eq!(start, super::shadow_days(3, 0.3));
-        let end = super::shadow_days(3, 0.999);
-        assert!((end - 4.0 / day).abs() < 1e-5, "{end}");
-        assert!((super::shadow_days(4, 0.0) - end).abs() < 1e-5);
+        assert_eq!(step, 1);
+        let start = super::shadow_days(3 * step, 0.0);
+        assert_eq!(start, super::shadow_days(3 * step, 0.3));
+        let middle = super::shadow_days(3 * step, 0.75);
+        let end = super::shadow_days(4 * step - 1, 0.999);
+        assert!(start < middle && middle < end);
+        assert!((end - 4.0 * step as f32 / day).abs() < 1e-8, "{end}");
+        assert!((super::shadow_days(4 * step, 0.0) - end).abs() < 1e-8);
     }
 
     use super::*;

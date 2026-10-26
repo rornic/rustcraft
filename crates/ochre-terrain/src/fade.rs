@@ -66,10 +66,12 @@ fn fade_step(progress: f32, out: bool) -> Option<usize> {
 pub struct FadeMaterials {
     seconds: f32,
     chunk: Handle<ChunkMaterial>,
+    solid_chunk: Handle<ChunkMaterial>,
     water: Handle<WaterMaterial>,
     solid_water: Handle<WaterMaterial>,
     // a material for each step of a fade, indexed [out as usize][step]
     chunk_steps: [Vec<Handle<ChunkMaterial>>; 2],
+    solid_chunk_steps: [Vec<Handle<ChunkMaterial>>; 2],
     water_steps: [Vec<Handle<WaterMaterial>>; 2],
     solid_water_steps: [Vec<Handle<WaterMaterial>>; 2],
 }
@@ -91,11 +93,13 @@ impl FadeMaterials {
     ) -> Self {
         let TerrainMaterials {
             chunk,
+            solid_chunk,
             water,
             solid_water,
             ..
         } = materials.clone();
         let base_chunk = chunk_materials.get(&chunk).unwrap().clone();
+        let base_solid_chunk = chunk_materials.get(&solid_chunk).unwrap().clone();
         let base_water = water_materials.get(&water).unwrap().clone();
         let base_solid = water_materials.get(&solid_water).unwrap().clone();
         let chunk_steps = [false, true].map(|out| {
@@ -118,6 +122,16 @@ impl FadeMaterials {
                 })
                 .collect()
         });
+        let solid_chunk_steps = [false, true].map(|out| {
+            (0..FADE_STEPS)
+                .map(|step| {
+                    chunk_materials.add(ChunkMaterial {
+                        fade: window(out, step),
+                        ..base_solid_chunk.clone()
+                    })
+                })
+                .collect()
+        });
         let solid_water_steps = [false, true].map(|out| {
             (0..FADE_STEPS)
                 .map(|step| {
@@ -131,9 +145,11 @@ impl FadeMaterials {
         Self {
             seconds,
             chunk,
+            solid_chunk,
             water,
             solid_water,
             chunk_steps,
+            solid_chunk_steps,
             water_steps,
             solid_water_steps,
         }
@@ -205,7 +221,10 @@ pub(crate) fn apply_fades(
     time: Res<Time>,
     materials: Res<FadeMaterials>,
     mut fading: Query<(Entity, &Fade, &mut Visibility, Option<&Children>)>,
-    mut chunk_materials: Query<&mut MeshMaterial3d<ChunkMaterial>>,
+    mut chunk_materials: Query<(
+        &mut MeshMaterial3d<ChunkMaterial>,
+        bevy::ecs::query::Has<crate::group::SolidTerrain>,
+    )>,
     mut water_materials: Query<(
         &mut MeshMaterial3d<WaterMaterial>,
         bevy::ecs::query::Has<SolidWater>,
@@ -215,7 +234,7 @@ pub(crate) fn apply_fades(
 
     for (entity, fade, mut visibility, children) in fading.iter_mut() {
         let progress = (now - fade.start) / materials.seconds.max(f32::EPSILON);
-        let (chunk, water, solid_water) = match fade_step(progress, fade.out) {
+        let (chunk, solid_chunk, water, solid_water) = match fade_step(progress, fade.out) {
             None => {
                 if fade.out && fade.despawn {
                     commands.entity(entity).despawn();
@@ -225,26 +244,34 @@ pub(crate) fn apply_fades(
                     *visibility = Visibility::Hidden;
                 }
                 commands.entity(entity).remove::<Fade>();
-                (&materials.chunk, &materials.water, &materials.solid_water)
+                (
+                    &materials.chunk,
+                    &materials.solid_chunk,
+                    &materials.water,
+                    &materials.solid_water,
+                )
             }
             Some(step) => {
                 let out = fade.out as usize;
                 (
                     &materials.chunk_steps[out][step],
+                    &materials.solid_chunk_steps[out][step],
                     &materials.water_steps[out][step],
                     &materials.solid_water_steps[out][step],
                 )
             }
         };
 
-        if let Ok(mut material) = chunk_materials.get_mut(entity) {
+        if let Ok((mut material, solid)) = chunk_materials.get_mut(entity) {
+            let chunk = if solid { solid_chunk } else { chunk };
             if material.0 != *chunk {
                 material.0 = chunk.clone();
             }
         }
         // water and the faces between leaves are drawn by child entities with their own materials
         for &child in children.into_iter().flatten() {
-            if let Ok(mut material) = chunk_materials.get_mut(child) {
+            if let Ok((mut material, solid)) = chunk_materials.get_mut(child) {
+                let chunk = if solid { solid_chunk } else { chunk };
                 if material.0 != *chunk {
                     material.0 = chunk.clone();
                 }
@@ -270,6 +297,87 @@ mod tests {
     };
 
     use super::{fade_in_window, fade_out_window, fade_step, set_shown, Fade, FADE_STEPS};
+
+    #[test]
+    fn solid_and_cutout_children_keep_their_pipeline_class_during_and_after_fades() {
+        use crate::{
+            group::SolidTerrain,
+            material::{
+                ChunkMaterial, ShaderInputs, SprayMaterial, TerrainAssets, TerrainMaterials,
+                WaterMaterial,
+            },
+            settings::DebugSettings,
+        };
+        use bevy::{
+            asset::Assets,
+            ecs::{hierarchy::ChildOf, system::RunSystemOnce},
+            pbr::{Material, MeshMaterial3d},
+            time::Time,
+        };
+        let mut world = World::new();
+        world.insert_resource(Assets::<ChunkMaterial>::default());
+        world.insert_resource(Assets::<WaterMaterial>::default());
+        world.insert_resource(Assets::<SprayMaterial>::default());
+        world.insert_resource(Time::<()>::default());
+        world
+            .run_system_once(|mut commands: Commands, mut assets: TerrainAssets| {
+                let materials = TerrainMaterials::new(
+                    DebugSettings::default(),
+                    &ShaderInputs::default(),
+                    &mut assets,
+                );
+                commands.insert_resource(super::FadeMaterials::new(
+                    1.0,
+                    &materials,
+                    &mut assets.chunk,
+                    &mut assets.water,
+                ));
+                commands.insert_resource(materials);
+            })
+            .unwrap();
+        let materials = world.resource::<TerrainMaterials>().clone();
+        let parent = world
+            .spawn((
+                SolidTerrain,
+                MeshMaterial3d(materials.solid_chunk),
+                Visibility::Inherited,
+                Fade {
+                    start: 0.0,
+                    out: false,
+                    despawn: false,
+                },
+            ))
+            .id();
+        let child = world
+            .spawn((ChildOf(parent), MeshMaterial3d(materials.chunk)))
+            .id();
+        for delta in [0.0, 0.3, 0.7] {
+            world
+                .resource_mut::<Time>()
+                .advance_by(std::time::Duration::from_secs_f32(delta));
+            world.run_system_once(super::apply_fades).unwrap();
+            let assets = world.resource::<Assets<ChunkMaterial>>();
+            let solid = assets
+                .get(
+                    &world
+                        .get::<MeshMaterial3d<ChunkMaterial>>(parent)
+                        .unwrap()
+                        .0,
+                )
+                .unwrap();
+            let cutout = assets
+                .get(&world.get::<MeshMaterial3d<ChunkMaterial>>(child).unwrap().0)
+                .unwrap();
+            assert!(solid.non_cutout);
+            assert!(!cutout.non_cutout);
+            assert_eq!(solid.fade, cutout.fade);
+            assert!(matches!(
+                solid.alpha_mode(),
+                bevy::prelude::AlphaMode::Mask(_)
+            ));
+        }
+        assert!(world.get::<Fade>(parent).is_none());
+    }
 
     // Every dither threshold the shader can produce, (level + 0.5) / 64.
     fn thresholds() -> impl Iterator<Item = f32> {

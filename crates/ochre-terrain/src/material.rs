@@ -106,7 +106,7 @@ fn mip_tiles(image: &mut Image, levels: u32) {
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-#[bind_group_data(DebugSettings)]
+#[bind_group_data(ChunkMaterialKey)]
 pub struct ChunkMaterial {
     #[uniform(0)]
     pub color: LinearRgba,
@@ -127,11 +127,22 @@ pub struct ChunkMaterial {
     pub curvature: Handle<ShaderBuffer>,
     // compiled into the shaders, see `specialize`
     pub debug: DebugSettings,
+    /// No leaf or flora holes. Camera passes still alpha-test LOD fades.
+    pub non_cutout: bool,
 }
 
-impl From<&ChunkMaterial> for DebugSettings {
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub struct ChunkMaterialKey {
+    pub debug: DebugSettings,
+    pub non_cutout: bool,
+}
+
+impl From<&ChunkMaterial> for ChunkMaterialKey {
     fn from(material: &ChunkMaterial) -> Self {
-        material.debug
+        Self {
+            debug: material.debug,
+            non_cutout: material.non_cutout,
+        }
     }
 }
 
@@ -155,13 +166,9 @@ impl Material for ChunkMaterial {
         "shaders/world_prepass.wesl".into()
     }
 
-    // solid leaves have no holes to cut, so are drawn as opaque
+    // Camera fades discard pixels even when leaves have no holes.
     fn alpha_mode(&self) -> AlphaMode {
-        if self.debug.solid_leaves {
-            AlphaMode::Opaque
-        } else {
-            AlphaMode::Mask(0.5)
-        }
+        AlphaMode::Mask(0.5)
     }
 
     fn specialize(
@@ -197,21 +204,37 @@ impl Material for ChunkMaterial {
             water_level(),
         ];
         // compiled in or out, so the switches leave no trace of the code they turn off
-        if key.bind_group_data.still_leaves {
+        if key.bind_group_data.debug.still_leaves {
             defs.push("STILL_LEAVES".into());
         }
-        if key.bind_group_data.solid_leaves {
+        if key.bind_group_data.debug.solid_leaves {
             defs.push("SOLID_LEAVES".into());
         }
         push_shader_defs(descriptor, &defs);
+        specialize_shadow(descriptor, key.bind_group_data.non_cutout);
         Ok(())
     }
 }
 
+fn specialize_shadow(descriptor: &mut RenderPipelineDescriptor, non_cutout: bool) {
+    if !non_cutout {
+        return;
+    }
+    push_shader_defs(descriptor, &["NON_CUTOUT".into()]);
+    let defs = &descriptor.vertex.shader_defs;
+    // Emulated depth clamping writes frag_depth and therefore still needs a fragment stage.
+    if defs.contains(&"VIEW_PROJECTION_ORTHOGRAPHIC".into())
+        && !defs.contains(&"UNCLIPPED_DEPTH_ORTHO_EMULATION".into())
+    {
+        descriptor.fragment = None;
+    }
+}
+
 /// The materials terrain draws with, before any fading.
-#[derive(Clone)]
+#[derive(Clone, Default, Resource)]
 pub struct TerrainMaterials {
     pub chunk: Handle<ChunkMaterial>,
+    pub solid_chunk: Handle<ChunkMaterial>,
     pub water: Handle<WaterMaterial>,
     pub solid_water: Handle<WaterMaterial>,
     pub spray: Handle<SprayMaterial>,
@@ -228,6 +251,12 @@ impl TerrainMaterials {
             cloud_layer: clouds.layer,
             curvature: inputs.curvature.clone(),
             debug,
+            non_cutout: false,
+        });
+        let base_chunk = assets.chunk.get(&chunk).unwrap().clone();
+        let solid_chunk = assets.chunk.add(ChunkMaterial {
+            non_cutout: true,
+            ..base_chunk
         });
         let water = WaterMaterial {
             color: LinearRgba::rgb(0.0, 0.85, 0.85),
@@ -241,6 +270,7 @@ impl TerrainMaterials {
         };
         Self {
             chunk,
+            solid_chunk,
             solid_water: assets.water.add(WaterMaterial {
                 solid: true,
                 ..water.clone()
@@ -399,6 +429,38 @@ impl Material for WaterMaterial {
 #[cfg(test)]
 mod tests {
     use bevy::color::{LinearRgba, Srgba};
+
+    #[test]
+    fn fragment_stage_is_removed_only_for_solid_native_directional_shadows() {
+        use bevy::render::render_resource::{FragmentState, RenderPipelineDescriptor};
+        for non_cutout in [false, true] {
+            for shadow in [false, true] {
+                for emulated in [false, true] {
+                    let mut descriptor = RenderPipelineDescriptor {
+                        fragment: Some(FragmentState::default()),
+                        ..Default::default()
+                    };
+                    if shadow {
+                        descriptor
+                            .vertex
+                            .shader_defs
+                            .push("VIEW_PROJECTION_ORTHOGRAPHIC".into());
+                    }
+                    if emulated {
+                        descriptor
+                            .vertex
+                            .shader_defs
+                            .push("UNCLIPPED_DEPTH_ORTHO_EMULATION".into());
+                    }
+                    super::specialize_shadow(&mut descriptor, non_cutout);
+                    assert_eq!(
+                        descriptor.fragment.is_none(),
+                        non_cutout && shadow && !emulated
+                    );
+                }
+            }
+        }
+    }
 
     // the workspace's assets, wherever the tests run from
     fn asset(path: &str) -> String {

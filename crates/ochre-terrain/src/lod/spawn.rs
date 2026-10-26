@@ -87,7 +87,9 @@ pub(crate) fn spawn_lods(
             .spawn((
                 LodNode { key },
                 GenerateLodMesh {
-                    task: task_pool.spawn(async move { generate_lod_mesh(regions, key) }),
+                    task: task_pool.spawn(async move {
+                        generate_lod_mesh(regions, key).map(crate::group::pack_group)
+                    }),
                 },
                 lod_transform(key),
                 Visibility::Hidden,

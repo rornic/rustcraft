@@ -307,6 +307,7 @@ pub(super) fn mesh_blocks(
 
     ChunkMeshes {
         opaque: opaque.build_mesh(),
+        cutout: None,
         water: water_mesh,
         spray: (!spray.vertices.is_empty()).then(|| spray.build_mesh()),
         inner_leaves: (!inner_leaves.vertices.is_empty()).then(|| inner_leaves.build_mesh()),

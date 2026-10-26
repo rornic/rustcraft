@@ -9,7 +9,6 @@ use crate::fade::Fade;
 use crate::fade::SolidWater;
 use crate::group::BuiltGroup;
 use crate::group::ChunkGroup;
-use crate::pack::pack;
 use bevy::asset::Assets;
 use bevy::camera::visibility::Visibility;
 use bevy::ecs::entity::Entity;
@@ -38,6 +37,7 @@ pub const SOLID_WATER_LEVEL: u8 = 2;
 pub(crate) fn load_lods(
     mut commands: Commands,
     mut lods: ResMut<LodLoader>,
+    materials: Res<crate::material::TerrainMaterials>,
     mut nodes_query: Query<(Entity, &LodNode, &mut GenerateLodMesh)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -54,9 +54,20 @@ pub(crate) fn load_lods(
             // open sea is all water, with no opaque faces to upload
             if chunk_meshes.opaque.count_vertices() > 0 {
                 commands.entity(entity).insert((
-                    Mesh3d(meshes.add(pack(chunk_meshes.opaque))),
-                    MeshMaterial3d(lods.material.clone()),
+                    crate::group::SolidTerrain,
+                    Mesh3d(meshes.add(chunk_meshes.opaque)),
+                    MeshMaterial3d(materials.solid_chunk.clone()),
                 ));
+            }
+            if let Some(cutout) = chunk_meshes.cutout {
+                commands.entity(entity).with_children(|parent| {
+                    parent.spawn((
+                        Mesh3d(meshes.add(cutout)),
+                        MeshMaterial3d(lods.material.clone()),
+                        Transform::default(),
+                        lod_aabb(),
+                    ));
+                });
             }
             if let Some(water_mesh) = chunk_meshes.water {
                 let solid = node.key.level >= SOLID_WATER_LEVEL;
@@ -68,7 +79,7 @@ pub(crate) fn load_lods(
                 .clone();
                 commands.entity(entity).with_children(|parent| {
                     let mut water = parent.spawn((
-                        Mesh3d(meshes.add(pack(water_mesh))),
+                        Mesh3d(meshes.add(water_mesh)),
                         MeshMaterial3d(water_material),
                         Transform::default(),
                         lod_aabb(),

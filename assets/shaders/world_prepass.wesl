@@ -36,7 +36,7 @@ fn vertex(vertex_in: prepass_io::Vertex) -> prepass_io::VertexOutput {
     out.color = vertex.color;
     out.position = position_world_to_clip(out.world_position.xyz);
     // a mesh fading out sits a little farther than it is, as in the main pass, see `fade.rs`
-@if(!UNCLIPPED_DEPTH_ORTHO_EMULATION) {
+@if(!VIEW_PROJECTION_ORTHOGRAPHIC) {
     out.position.z *= 1.0 - material_fade.z;
 }
 @if(UNCLIPPED_DEPTH_ORTHO_EMULATION) {
@@ -83,6 +83,7 @@ fn leaf_shadow_alpha(in: prepass_io::VertexOutput) -> f32 {
 // Only leaves and plants have holes, so only they pay for a texture sample. Untextured LOD
 // cells draw leaves solid, so cast solid shadows too.
 fn cut_leaf_holes(in: prepass_io::VertexOutput) {
+@if(!NON_CUTOUT) {
     // a plant's sprite is mostly air, so it casts its own shape whatever the leaves do
     if is_flora(in.color.a) && block_alpha(in.uv, in.color.a) < 0.5 {
         discard;
@@ -107,12 +108,13 @@ fn cut_leaf_holes(in: prepass_io::VertexOutput) {
     }
 }
 }
+}
 
 // The view's depth is dithered just as the main pass is, so a pixel a fading mesh gives up
 // doesn't keep its depth, which would reject whatever is behind it. Shadows aren't: dithered
 // in light space they would only flicker.
 fn dither_fade(in: prepass_io::VertexOutput) {
-@if(!UNCLIPPED_DEPTH_ORTHO_EMULATION) {
+@if(!VIEW_PROJECTION_ORTHOGRAPHIC) {
     let threshold = dither_threshold(in.position.xy);
     if threshold < material_fade.x || threshold >= material_fade.y {
         discard;

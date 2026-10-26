@@ -261,6 +261,8 @@ pub(super) enum InnerLeaves {
 
 pub struct ChunkMeshes {
     pub opaque: Mesh,
+    /// Outer foliage separated before upload, while generation retains its original mesh order.
+    pub cutout: Option<Mesh>,
     pub water: Option<Mesh>,
     /// Fresh water's spray, see `SprayMaterial`.
     pub spray: Option<Mesh>,
@@ -272,6 +274,7 @@ impl ChunkMeshes {
     /// Whether there's anything to draw: buried chunks mesh to nothing.
     pub fn has_geometry(&self) -> bool {
         self.opaque.count_vertices() > 0
+            || self.cutout.is_some()
             || self.water.is_some()
             || self.inner_leaves.is_some()
             || self.spray.is_some()
