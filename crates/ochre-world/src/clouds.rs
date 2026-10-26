@@ -60,7 +60,7 @@ const CLUSTERING: f64 = 0.8;
 // wraps back to zero on the hour.
 const WIND: Vec2 = Vec2::new(SPAN * 2.0 / 3600.0, SPAN / 3600.0);
 // The clouds are marched at this fraction of the screen's width and height, and blended up to it.
-const TARGET_SCALE: u32 = 4;
+const TARGET_SCALE: u32 = 2;
 // Texels across each half of the reflections' map, matching `REFLECTION_TEXELS` in `cloud_march.wesl`.
 const REFLECTION_SIZE: u32 = 512;
 

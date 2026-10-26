@@ -28,9 +28,13 @@ const BLEND: f32 = 0.12;
 const BLEND_PER_PIXEL: f32 = 0.03;
 // A ray that met no cloud at all is sure of it, so takes far more, or moving trails the history's clouds over what they uncover.
 const CLEAR_PER_PIXEL: f32 = 0.5;
+// A clear ray reprojects the history from no nearer than this. Where the camera is in the slab the slab is entered at the
+// camera itself, which reprojects nowhere, so every clear ray lost its history and the clouds' edges flickered.
+const CLEAR_DEPTH: f32 = 2500.0;
 
-// Few samples a pixel, offset per pixel and frame and blended into the history so they add up to many.
-const STEPS: i32 = 12;
+// Few samples a pixel, offset per pixel and frame and blended into the history so they add up to many. Fewer leave
+// the clouds' edges noisy even with the history, and inside the slab, where it's mostly discarded, every frame shows them.
+const STEPS: i32 = 16;
 // Steps and octaves for the reflections' sky map: few, as waves blur them.
 const REFLECTED_STEPS: i32 = 4;
 const REFLECTED_OCTAVES: i32 = 2;
@@ -60,7 +64,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let cover = 1.0 - ray.through;
     let marched = vec4<f32>(ray.gathered, cover);
     // last frame saw what was gathered where it lies, or the slab where the ray met nothing; moving shifts it against the sky
-    let depth = select(cloud_entry(eye, direction, bend), ray.depth / cover, cover > 0.01);
+    let depth = select(max(cloud_entry(eye, direction, bend), CLEAR_DEPTH), ray.depth / cover, cover > 0.01);
     let sky = last_seen(direction);
     let last = select(sky, last_seen(direction * depth + eye - cloud_view.last_eye.xyz), depth < FAR);
     if last.z == 0.0 {
