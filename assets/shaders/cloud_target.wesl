@@ -30,11 +30,11 @@ const BLEND_PER_PIXEL: f32 = 0.03;
 const CLEAR_PER_PIXEL: f32 = 0.5;
 // A clear ray reprojects the history from no nearer than this. Where the camera is in the slab the slab is entered at the
 // camera itself, which reprojects nowhere, so every clear ray lost its history and the clouds' edges flickered.
-const CLEAR_DEPTH: f32 = 2000.0;
+const CLEAR_DEPTH: f32 = 2500.0;
 
 // Few samples a pixel, offset per pixel and frame and blended into the history so they add up to many. Fewer leave
 // the clouds' edges noisy even with the history, and inside the slab, where it's mostly discarded, every frame shows them.
-const STEPS: i32 = 24;
+const STEPS: i32 = 16;
 // Steps and octaves for the reflections' sky map: few, as waves blur them.
 const REFLECTED_STEPS: i32 = 4;
 const REFLECTED_OCTAVES: i32 = 2;

@@ -13,7 +13,7 @@ use crate::player::{Player, EYE_HEIGHT};
 use ochre_terrain::world::World;
 
 const FPS: u32 = 60;
-// Real seconds the camera waits at the start for the terrain round it to load.
+// Real seconds, from the player spawning, the camera waits at the start for the terrain round it to load.
 const WARMUP: f32 = 5.0;
 // Blocks the camera keeps over the ground and water, enough to clear trees, and over any block right round it.
 const CLEARANCE: f32 = 24.0;

@@ -19,7 +19,7 @@ use bevy::{
         mouse::{MouseButton, MouseMotion},
         ButtonInput,
     },
-    light::{NotShadowCaster, NotShadowReceiver, ShadowFilteringMethod},
+    light::{NotShadowCaster, NotShadowReceiver},
     log::info,
     math::{Dir3, EulerRot, I64Vec3, Quat, Vec3, Vec3Swizzles},
     mesh::{Mesh, Mesh3d, MeshVertexBufferLayoutRef},
@@ -593,9 +593,6 @@ pub fn spawn_player(
                 ..default()
             },
             dry_color_grading(),
-            // one lookup in the shadow map a pixel, where Bevy's default takes nine: the shading is
-            // fragment bound, and TAA smooths the edges the shadow map's texels leave
-            ShadowFilteringMethod::Hardware2x2,
             // a light darkening toward the corners, which draws the eye in
             Vignette {
                 intensity: 0.35,
