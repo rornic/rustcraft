@@ -1,8 +1,8 @@
 //! The gameplay pass: reads the finished geography once and makes it playable. Ranges get passes
 //! so lowlands are not walled off from each other, rivers get crossings at reasonable intervals,
 //! and spawn regions, resources, caves and encounters are scattered across the land. What it
-//! finds is stored as `Feature`s on the map, and `validate` checks it all, so a seed that can't be
-//! made playable is refused rather than shipped.
+//! finds is stored as `Feature`s on the map. `validate` reports remaining geography issues for
+//! diagnostics; they do not prevent loading a seed.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -702,7 +702,7 @@ pub fn label(map: &mut WorldMap) {
     sites(map, &slope);
 }
 
-/// What is still wrong with the map after the pass has done what it can: empty if it is playable.
+/// Geography issues left after the pass has done what it can, for diagnostic reports.
 pub fn validate(map: &WorldMap) -> Vec<String> {
     let mut problems = Vec::new();
     let dim = map.dim();

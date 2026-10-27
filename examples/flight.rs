@@ -2,7 +2,7 @@
 // window or GPU), for comparing frame time and loading throughput between builds. The camera
 // settles at spawn, then walks, sprints and flies high over the same line of ground, and the
 // report gives each leg's frame time, chunks generated a second and generation queue depth.
-//   cargo run --release --example flight -- [--seed 1] [--out target/flight.txt] [--secs 30]
+//   cargo run --release --example flight -- [--seed 1] [--out target/flight.txt] [--secs 30] [--fly-height 900] [--render-distance 512]
 // The report is `key: value` lines, so two runs diff cleanly.
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -271,10 +271,17 @@ fn main() {
     };
     let seed = arg("--seed").unwrap_or_else(|| "1".into());
     let secs: f32 = arg("--secs").map_or(30.0, |s| s.parse().expect("--secs is a number"));
+    let fly_height: f32 =
+        arg("--fly-height").map_or(FLY_HEIGHT, |s| s.parse().expect("--fly-height is a number"));
     let out = arg("--out");
     std::env::set_var("OCHRE_SEED", &seed);
 
-    let settings = Settings::read("assets/settings.toml").expect("failed to read settings");
+    let mut settings = Settings::read("assets/settings.toml").expect("failed to read settings");
+    if let Some(distance) = arg("--render-distance") {
+        settings.renderer.render_distance = distance
+            .parse()
+            .expect("--render-distance is a number of chunks");
+    }
     let (renderer, world) = (settings.renderer, settings.world);
     let mut app = App::new();
     app.add_plugins((
@@ -319,8 +326,19 @@ fn main() {
     // the horizon pushes the render distance out with the height
     flight.climb = true;
     let x = flight.camera().x;
-    flight.place(Vec3::new(x, FLY_HEIGHT, spawn.z));
-    let mut high = flight.fly(secs, FLY_SPEED, Height::At(FLY_HEIGHT));
+    let mut min_clearance = f32::INFINITY;
+    let mut below_ground = 0;
+    for frame in 0..(secs / FRAME) as usize {
+        let ground = flight.ground(x + FLY_SPEED * FRAME * frame as f32, spawn.z);
+        let clearance = fly_height - ground;
+        min_clearance = min_clearance.min(clearance);
+        below_ground += (clearance < 0.0) as usize;
+    }
+    let _ = writeln!(report, "high height: {fly_height:.1}");
+    let _ = writeln!(report, "high minimum ground clearance: {min_clearance:.1}");
+    let _ = writeln!(report, "high frames below ground: {below_ground}");
+    flight.place(Vec3::new(x, fly_height, spawn.z));
+    let mut high = flight.fly(secs, FLY_SPEED, Height::At(fly_height));
     high.report("high", &mut report);
 
     print!("{report}");

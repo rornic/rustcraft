@@ -23,7 +23,7 @@ const SHORE_SMOOTH: f64 = 5.0;
 // How far either side of still water's level, in blocks, the ground is held to the side of it its
 // smooth ground is on, see `contain`, and over how far the ground's detail is calmed to nothing at
 // the water's edge, so a shore and the bed out from it are smooth.
-const HOLD: f64 = 1.5;
+pub(super) const HOLD: f64 = 1.5;
 const CALM: f64 = 8.0;
 
 // How far over still water's level, in blocks, ground surrounded by its cells is still under it: the water
@@ -69,7 +69,9 @@ fn channel(ground: f32, river: RiverHit) -> f32 {
     // but held over the water within `HOLD` of its edge, as still water's shore is: on a slope across
     // the river the bank would otherwise fall away under the water at once
     let held = river.surface + (river.distance - half).min(HOLD as f32);
-    (rim + (ground - rim) * t * (2.0 - t)).max(held)
+    (rim + (ground - rim) * t * (2.0 - t))
+        .max(held)
+        .max(river.bank_floor)
 }
 
 // Where the bed of the river under it is, a parabola across it.
@@ -784,6 +786,27 @@ mod sea_level_tests {
         assert_eq!(
             terrain.sample_for_cell(0.0, 16.0, 512.0).water_kind,
             WaterKind::None
+        );
+    }
+}
+
+#[cfg(test)]
+mod river_bank_tests {
+    use super::*;
+
+    #[test]
+    fn steep_bend_holds_water_on_its_outside_bank() {
+        let map = Arc::new(super::super::generate(42, Default::default()));
+        let terrain = WorldTerrain::new(map);
+        let wet = terrain.sample(-21752.0, 15523.0);
+        let bank = terrain.sample(-21752.0, 15524.0);
+        assert_eq!(wet.water_kind, WaterKind::River);
+        assert_eq!(bank.water_kind, WaterKind::None);
+        assert!(
+            bank.height >= wet.water_surface as f64,
+            "dry bank {} stands under river surface {}",
+            bank.height,
+            wet.water_surface
         );
     }
 }

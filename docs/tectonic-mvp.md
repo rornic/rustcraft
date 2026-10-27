@@ -78,6 +78,16 @@ Inspect drainage direction, terrain and water-surface profiles, flood-fill spill
 and the actual sampled water before accepting it. Visibility and routing are separate:
 the coarse-sampling fix makes rivers visible but does not prove their routes are right.
 
+A later desktop launch lost the graphics device after world generation. The rejected-seed
+warning preceded a retry; both reported freezes followed this path.
+The render failure has not been reproduced without a GPU; its headless comparison is
+recorded in [terrain-perf.md](terrain-perf.md). A temporary safe-render preset started,
+and a fixed seed then started with the original full render settings. The preset was
+removed and the original renderer settings remain.
+The random-seed geography rejection and retry have since been removed: each launch
+builds one map, including seeds whose geography still has issues. The map diagnostic
+validator remains available without affecting startup.
+
 ### Matching landscape comparisons
 
 Same seed, coordinates, scale and elevation palette; generator geometry intentionally changes.
@@ -130,14 +140,57 @@ evidence of a successful large river.
   The high-altitude leg regresses substantially and needs profiling before merge.
 - Water audits on seeds 1, 42 and 1337 report zero map-level uncontained cells.
   River-edge wall flags are 26/21/75, including 1/1/2 over 6 m. Seed 42's tall
-  flag is near `x=-21752, z=15520`. These are unresolved diagnostic findings, not
-  a clean water validation. Seed 1337 also has three coast wall flags below 6 m.
-  River/lake surface-step flags need inspection to distinguish falls and transitions
-  from artifacts. [Raw audit and flight reports](data/tectonic-mvp/) are retained.
+  flag is near `x=-21752, z=15520`. These are unresolved diagnostic findings.
+  [Raw audit and flight reports](data/tectonic-mvp/) are retained.
 - The seed-42 seam diagnostic completed; its reported ground steps are retained in
   the raw report. Completion is not evidence that every seam is artifact-free.
-- GPU rendering, in-game mountain silhouettes and cloud/shadow intersections have not
-  been validated on a graphics device. The coast-parallel river remains unresolved.
+- In-game mountain silhouettes and cloud/shadow intersections have not been systematically
+  reviewed on a graphics device. The coast-parallel river remains unresolved.
+
+### Draft follow-up from checkpoint 4883cfa
+
+The seed-42 river visible near the southern coast was traced with `worldprobe route` from
+`(3216,1392)` to the sea at `(6352,3632)`. Its map water surface falls from 59.9 m at
+`(3472,1488)` to sea level. At the `x=4000` transect, sampled dry ground north and south
+of the channel reaches 70.8 m at `z=1400` and 75.7 m at `z=2100`. This supports a local
+valley barrier, but the checkpoint did not identify the exact reported segment; a longer
+route or a better outlet elsewhere has not been excluded. Keep the visual issue open.
+The [detail view](images/tectonic-mvp/seed-42-coastal-river-detail.png) covers
+`x=0..8192, z=0..8192` at 8 m/pixel.
+
+The audit previously counted every water kind inside each 192 m window. Its three seed-1337
+"coast walls" were river water near the sampled coast cells, including a flagged river at
+`(-10212,26188)`. Counting only the sampled kind in each category gives zero lake and coast
+walls or surface steps for all three seeds. River walls remain 26/21/75 and steps remain
+529/981/2183 for seeds 1/42/1337. Seed 42's 6.8 m river wall lies on a steep reach whose
+water falls roughly 12 m over 24 blocks, consistent with the waterfall exception in
+[water.md](water.md). The other river flags still need block-level review. The corrected
+[review audit reports](data/tectonic-mvp/) retain example coordinates for each category.
+The [seed-42 wall view](images/tectonic-mvp/seed-42-river-wall-detail.png) covers
+`x=-21952..-21552, z=15320..15720` at 1 m/pixel.
+
+### Draft steep-bend correction
+
+At `(-21752,15523)` the seed-42 river surface was 775.51 m, while the dry column one block
+south stood at 774.12 m. The closest point on the steep curve moves downstream as the sample
+moves across its edge, so the dry bank used a lower river level. The bank now also reads the
+surface about one block upstream from nearby stretches of the same river. That dry column
+stands at 776.42 m; the water's downhill profile and audit wet-column counts are unchanged.
+Generator version 40 invalidates older saved terrain because the banks change.
+The matching [after view](images/tectonic-mvp/seed-42-river-wall-after.png) changes 102 of
+160,000 pixels in the [viewer diff](images/tectonic-mvp/seed-42-river-wall-diff.png), concentrated
+along banks; the blue river footprint remains in place.
+
+| Seed | River walls before / after | Over 6 m before / after | Lake and coast walls after |
+| --- | ---: | ---: | ---: |
+| 1 | 26 / 16 | 1 / 0 | 0 |
+| 42 | 21 / 16 | 1 / 0 | 0 |
+| 1337 | 75 / 48 | 2 / 0 | 0 |
+
+The [bend audit reports](data/tectonic-mvp/) use the same 4 m sampling windows as the review
+reports. Seed 2790361079, a known steep gully, has 11 river wall flags and none over 6 m.
+Remaining river flags, waterfall curtains, and GPU appearance still need visual
+review; a lower audit count alone does not establish that every steep bend looks right.
 
 ## Next iterations
 

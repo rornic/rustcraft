@@ -20,6 +20,7 @@ use bevy::ecs::system::Query;
 use bevy::ecs::system::Res;
 use bevy::ecs::system::ResMut;
 use bevy::pbr::MeshMaterial3d;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::Mesh3d;
 use bevy::render::mesh::Mesh;
 use bevy::tasks::futures;
@@ -136,9 +137,10 @@ pub(crate) fn retire_lods(
     if retired.is_empty() {
         return;
     }
+    let retired_keys: HashSet<LodKey> = retired.iter().copied().collect();
     let lods = &mut *lods;
     lods.retiring
-        .retain(|key| !retired.contains(key) && !lods.selected.contains(key));
+        .retain(|key| !retired_keys.contains(key) && !lods.selected.contains(key));
     for key in retired {
         if let Some(Some(entity)) = lods.remove_node(key) {
             let visible = visibility

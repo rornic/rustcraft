@@ -105,6 +105,10 @@ over several of its own stretches, whose different levels read as humps if taken
 
 `channel` cuts the bed and builds the banks, and holds the bank over the water within `HOLD` of its
 edge, as still water's shore is.
+On a steep bend, the closest point on the curve can move downhill by more than a block when the
+sample moves one block sideways. A dry bank beside the upper water must also hold that upper
+surface. `river_hits` takes the bank floor from about one block upstream on each nearby stretch
+of the same river, while the channel bed and water keep their original downhill profile.
 
 Where a river meets still water:
 - **joined**: its level within `JOIN` of the still water's, as at a mouth or outlet. Inside the
@@ -144,7 +148,8 @@ rapid climbing more than a block a column is a ramp, not stairs. Bigger drops ar
   crevices, joins, ramps, LOD water.
 - `cargo run --release --example water_audit -- <seed>` counts walls, steps and raised banks round
   rivers, lake shores and coasts, one `AUDIT` line each, for a sweep of seeds before and after a
-  change. Walls left on rivers are mostly waterfalls.
+  change. Each line counts only its own sampled water kind, even when a window also contains
+  another kind. Walls left on rivers are mostly waterfalls.
 - The `worldview` skill to look, and `worldprobe <seed> info x z` for one column's ground, dry
   ground, smooth ground, water and map cell.
 

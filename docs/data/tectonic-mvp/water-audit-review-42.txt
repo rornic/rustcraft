@@ -1,0 +1,27 @@
+map 3.91s
+terrain setup 49.51ms
+  rivers step -2.1 at 12024,-24704
+  rivers step -1.6 at 12076,-24692
+  rivers step -1.9 at 12076,-24688
+  rivers step -2.1 at 12076,-24684
+  rivers step -3.8 at 12092,-24684
+  rivers step -2.0 at 12092,-24680
+  rivers step -2.2 at 12092,-24676
+  rivers step -2.1 at 12092,-24672
+  rivers step -1.6 at 12116,-24648
+  rivers step -2.8 at 12116,-24644
+  rivers step -3.0 at 12112,-24640
+  rivers step -2.3 at 12120,-24636
+  rivers step -2.4 at 12148,-24628
+  rivers step -2.2 at 12184,-24624
+  rivers step -2.7 at 12180,-24620
+  rivers step -2.7 at 12172,-24616
+  rivers tall wall 6.8 at -21752,15520
+  deep cut 26 at 11344,-24976
+  deep cut 26 at 11376,-24944
+  deep cut 29 at 12368,-24496
+  deep cut 31 at 12400,-24496
+AUDIT seed=42 map uncontained=0 deep14=1322 deep25=179
+AUDIT seed=42 rivers windows=64 wet=10782 walls=21 tall_walls=1 steps=981 dry_near=6346 raised=28
+AUDIT seed=42 lakes windows=41 wet=54904 walls=0 tall_walls=0 steps=0 dry_near=2467 raised=18
+AUDIT seed=42 coasts windows=122 wet=160179 walls=0 tall_walls=0 steps=0 dry_near=5978 raised=0

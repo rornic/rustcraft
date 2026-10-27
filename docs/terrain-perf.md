@@ -275,3 +275,75 @@ Final viewer generation times were 13.0 s (42), 11.4 s (1) and 19.1 s (1337), wi
 concurrent builds/tests. Earlier baseline captures were not all taken under equivalent
 load, so no generation speedup or regression ratio is claimed. See
 [tectonic-mvp.md](tectonic-mvp.md) for same-scale visual comparisons and open issues.
+
+## Tectonic MVP draft follow-up from 4883cfa
+
+The fixed 900 m high-flight path stays at least 824 m above seed-1 ground, so flying
+through newly tall terrain does not explain its slow frames. Raising the camera to
+2200 m made high-flight p99 worse in a two-core diagnostic run (14.8 to 22.1 ms),
+consistent with more horizon and LOD work; the run was not an A/B of identical scenes.
+
+Temporary timers found 9–12 ms calls in `retire_lods` during the high leg. It checked
+membership in the retired vector while retaining the retirement queue, making a large
+retirement batch quadratic. A set now handles that membership check. On this 16-core host
+restricted to cores 0 and 1 with `taskset`, three alternating old/new pairs of
+`flight --seed 1 --secs 3` gave:
+
+| Pair | Old high p50/p99 (ms) | Draft high p50/p99 (ms) |
+| --- | ---: | ---: |
+| 1 | 6.302 / 16.551 | 4.407 / 11.229 |
+| 2 | 5.147 / 16.122 | 3.625 / 13.360 |
+| 3 | 6.397 / 18.657 | 4.559 / 11.434 |
+
+The draft wins both frame percentiles in each pair. LOD mesh throughput varies across
+the pairs and does not establish a throughput gain. `bench` matched exactly before and
+after: 712,019 chunk vertices and 330,471 LOD vertices, including every LOD level.
+These timings are diagnostic headless CPU runs and cannot be compared numerically with
+the original managed-environment checkpoint. GPU frame time remains unmeasured.
+
+Version 40's steep-bend bank correction adds one upstream profile lookup near river banks.
+`bench` still reports 712,019 chunk and 330,471 LOD vertices, with 224.5 ms chunk meshing
+and 97.7 ms LOD meshing in one run. A single two-core, three-second seed-1 flight had an
+11.566 ms high-leg p99, within the three version-39 draft runs above. That short run does
+not establish GPU cost or a precise frame-time change.
+
+## Startup device loss report (2026-10-27)
+
+A desktop launch warned that random seed 1522288356 was unplayable, then lost the GPU device
+about 39 seconds later. The cache shows that seed's map saved at 09:01:35 and a replacement
+seed 2413427271 saved at 09:01:39. The warning is a rejected map during the normal bounded
+retry loop; it did not stop world generation. The later `DeviceLost` and invalid mapped-buffer
+errors show a render-device failure, but do not identify its cause. No graphics device is
+accessible in this environment, so the GPU failure has not been reproduced here.
+
+For seed 2413427271, a six-second-per-leg headless flight completed at both view distances.
+At 512 chunks it held 405 MB of CPU mesh data after load and 459 MB after walking; at the
+configured 1024 chunks, 478 MB and 532 MB. Peak process RSS was 1.24 GB and 1.32 GB,
+respectively. These are CPU measures, not GPU allocation or frame time. The default game
+still needed a GPU check at the time of this measurement.
+
+A second launch with the original 1024-chunk settings and a different random seed also
+froze the desktop. Its log says seed 1737182360's map was ready and the player spawned
+before the final `bevy_time` warning; the earlier rejected seed was not the blocker.
+The user confirmed a temporary 256-chunk safe preset started, then confirmed a fixed
+seed started with the original 1024-chunk view, 16-chunk full detail and LOD base,
+64-chunk shadows and medium clouds. The safe preset and runtime overrides were removed;
+the original renderer settings remain in `assets/settings.toml`. The fixed-seed success
+shows the full render settings can start on this GPU, though it does not isolate the
+cause of the random-seed freezes. A two-second-per-leg headless flight on seed
+1737182360 at the temporary safe preset completed with 102 MB of mesh data after load,
+105 MB after walking and 624 MB peak process RSS.
+
+## One map per launch
+
+Both reported hangs followed the random-seed retry path: a geography issue caused the
+first map to be discarded, then another map was generated before terrain streaming.
+`load_world` now chooses one seed and loads or generates exactly one map. It does not run
+the geography validator at startup. The gameplay pass still carves passes and places
+spawn regions; the validator remains available to diagnostic map tools. This removes
+the second large map generation and its allocation churn from the startup path. It is
+plausible that the repeated work contributed to the desktop stalls, but the logs do
+not establish that. A fixed-seed launch with the full render settings succeeded on
+the user's GPU; random-seed startup with the one-map build has not been checked.
+At seed 2154739607, which the former validator rejected, a one-second-per-leg headless
+flight now loads that seed directly without a playability warning and completes all legs.

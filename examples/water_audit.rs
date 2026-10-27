@@ -29,6 +29,7 @@ fn audit(
     t: &WorldTerrain,
     map: &WorldMap,
     picks: &[usize],
+    kind: WaterKind,
     marks: &mut Vec<(&'static str, f64, f64, f64)>,
 ) -> Counts {
     let dim = map.dim();
@@ -52,14 +53,15 @@ fn audit(
                 if p.water_kind == WaterKind::None {
                     let near = [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)]
                         .iter()
-                        .any(|&(dx, dz)| {
-                            s[((z + dz) * n + x + dx) as usize].water_kind != WaterKind::None
-                        });
+                        .any(|&(dx, dz)| s[((z + dz) * n + x + dx) as usize].water_kind == kind);
                     if near {
                         c.dry_near += 1;
                         let (wx, wz) = at(x, z);
                         c.raised += (p.height - map.height_at(wx, wz) as f64 > 2.0) as usize;
                     }
+                    continue;
+                }
+                if p.water_kind != kind {
                     continue;
                 }
                 c.wet += 1;
@@ -73,7 +75,7 @@ fn audit(
                         }
                         c.walls += (d > 1.5) as usize;
                         c.tall_walls += (d > 6.0) as usize;
-                    } else if p.water_kind == q.water_kind
+                    } else if q.water_kind == kind
                         && (p.water_surface - q.water_surface).abs() >= 1.5
                     {
                         c.steps += 1;
@@ -175,26 +177,30 @@ fn main() {
         deep += (cut > 14.0) as usize;
         deep50 += (cut > 25.0) as usize;
     }
-    let mut marks = Vec::new();
     let rivers: Vec<usize> = (0..dim * dim)
         .filter(|&i| map.water_kind[i] == WaterCell::River as u8)
         .enumerate()
         .filter(|(n, _)| n % PICK_EVERY == PICK_EVERY - 1)
         .map(|(_, i)| i)
         .collect();
-    let kinds = [
-        ("rivers", audit(&t, &map, &rivers, &mut marks)),
-        (
-            "lakes",
-            audit(&t, &map, &edge_picks(&map, WaterCell::Lake), &mut marks),
-        ),
+    let mut kinds = Vec::new();
+    for (name, kind, picks) in [
+        ("rivers", WaterKind::River, rivers),
+        ("lakes", WaterKind::Lake, edge_picks(&map, WaterCell::Lake)),
         (
             "coasts",
-            audit(&t, &map, &edge_picks(&map, WaterCell::Ocean), &mut marks),
+            WaterKind::Ocean,
+            edge_picks(&map, WaterCell::Ocean),
         ),
-    ];
-    for m in &marks {
-        println!("  {} {:.1} at {:.0},{:.0}", m.0, m.3, m.1, m.2);
+    ] {
+        let mut marks = Vec::new();
+        let counts = audit(&t, &map, &picks, kind, &mut marks);
+        kinds.push((name, counts, marks));
+    }
+    for (name, _, marks) in &kinds {
+        for m in marks {
+            println!("  {name} {} {:.1} at {:.0},{:.0}", m.0, m.3, m.1, m.2);
+        }
     }
     for w in &worst {
         println!("  deep cut {:.0} at {:.0},{:.0}", w.2, w.0, w.1);
@@ -203,7 +209,7 @@ fn main() {
         "AUDIT seed={seed} map uncontained={} deep14={deep} deep25={deep50}",
         uncontained(&map)
     );
-    for (name, c) in kinds {
+    for (name, c, _) in kinds {
         println!(
             "AUDIT seed={seed} {name} windows={} wet={} walls={} tall_walls={} steps={} dry_near={} raised={}",
             c.windows, c.wet, c.walls, c.tall_walls, c.steps, c.dry_near, c.raised

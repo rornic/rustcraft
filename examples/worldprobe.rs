@@ -4,6 +4,7 @@
 //   cargo run --release --example worldprobe -- <seed> line <x> <z> <x|z> <len>   one row a block along an axis
 //   cargo run --release --example worldprobe -- <seed> grid <x> <z> <half>        ascii: water kind and block-rounded level
 //   cargo run --release --example worldprobe -- <seed> png <x> <z> <half> <out.png> [pixels_per_block]
+//   cargo run --release --example worldprobe -- <seed> route <x> <z> [cells]
 // Real blocks, from `generate_chunk_with`, so the cliff pass, trees and flora can each be switched off:
 //   ... <seed> slice <x> <z> <x|z> <len> <y0> <y1> [flags]   a vertical cross-section, one letter a block
 //   ... <seed> top <x> <z> <half> <out.png> [flags]           top-down surface blocks, 1 pixel a block
@@ -20,7 +21,7 @@ use ochre_terrain::generate::generator::{generate_chunk_with, ChunkPasses};
 use image::{Rgb, RgbImage};
 use ochre_base::terrain_source::{TerrainSource, WaterKind};
 use ochre_terrain::generate::region_store::RegionStore;
-use ochre_world::worldmap::{WaterCell, WorldConfig, WorldMap, WorldTerrain};
+use ochre_world::worldmap::{WaterCell, WorldConfig, WorldMap, WorldTerrain, NEIGHBOURS};
 
 fn kind_char(kind: WaterKind) -> char {
     match kind {
@@ -149,7 +150,7 @@ fn describe(
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.len() < 4 {
-        eprintln!("usage: worldprobe <seed> info|line|grid|png <x> <z> ...");
+        eprintln!("usage: worldprobe <seed> info|line|grid|png|route <x> <z> ...");
         std::process::exit(2);
     }
     let seed: u32 = args[0].parse().unwrap();
@@ -162,6 +163,37 @@ fn main() {
     let regions = Arc::new(RegionStore::new(terrain.clone()));
     match args[1].as_str() {
         "info" => println!("{}", describe(&terrain, &map, &regions, x, z)),
+        "route" => {
+            let cells: usize = args.get(4).map_or(256, |s| s.parse().unwrap());
+            let (u, v) = map.to_cell(x as f64, z as f64);
+            let dim = map.dim();
+            let mut i = map.index(
+                (u.round() as i64).clamp(0, dim as i64 - 1) as usize,
+                (v.round() as i64).clamp(0, dim as i64 - 1) as usize,
+            );
+            for step in 0..cells {
+                let (cx, cz) = (i % dim, i / dim);
+                let (wx, wz) = map.cell_centre(cx, cz);
+                let kind = WaterCell::from_u8(map.water_kind[i]);
+                let d = map.down[i];
+                let next = if d == 255 {
+                    None
+                } else {
+                    let (dx, dz) = NEIGHBOURS[d as usize];
+                    let (nx, nz) = (cx as i64 + dx, cz as i64 + dz);
+                    ((0..dim as i64).contains(&nx) && (0..dim as i64).contains(&nz))
+                        .then(|| map.index(nx as usize, nz as usize))
+                };
+                if step.is_multiple_of(8) || kind != WaterCell::River || next.is_none() {
+                    println!(
+                        "{step:4} {wx:7.0},{wz:7.0} ground={:.1} {:?} surface={:.1} flow={:.0} down={:?}",
+                        map.height[i], kind, map.water_surface[i], map.flow[i], next.map(|n| map.cell_centre(n % dim, n / dim))
+                    );
+                }
+                let Some(n) = next else { break };
+                i = n;
+            }
+        }
         "line" => {
             let along_x = args[4] == "x";
             let len: i64 = args[5].parse().unwrap();

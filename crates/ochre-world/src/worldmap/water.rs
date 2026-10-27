@@ -17,6 +17,8 @@ pub struct RiverHit {
     pub surface: f32,
     /// Height of the riverbed at the centre line.
     pub bed: f32,
+    /// The highest nearby bank floor from this river's bends, including other stretches.
+    pub bank_floor: f32,
 }
 
 // Points a river's water level is worked out at along each stretch between two cells, which is
@@ -704,14 +706,27 @@ impl WorldMap {
                         } else {
                             depth_for_width(width)
                         },
+                    bank_floor: if (0.0..super::source::HOLD as f32).contains(&margin) {
+                        profiles.level(
+                            i,
+                            (best_t as f32 - 1.0 / self.config.map_cell as f32).max(0.0),
+                        ) + margin
+                    } else {
+                        f32::NEG_INFINITY
+                    },
                 };
                 found.push((margin, hit, profiles.stem[n as usize]));
             }
         }
         let nearest = found.iter().min_by(|a, b| a.0.total_cmp(&b.0)).copied();
-        let Some((_, first, river)) = nearest else {
+        let Some((_, mut first, river)) = nearest else {
             return [None, None];
         };
+        first.bank_floor = found
+            .iter()
+            .filter(|(_, _, stem)| *stem == river)
+            .map(|(_, hit, _)| hit.bank_floor)
+            .fold(f32::NEG_INFINITY, f32::max);
         // not another stretch of the same river: a wide one's reach over several of them
         let other = found
             .iter()
