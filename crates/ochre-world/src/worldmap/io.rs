@@ -139,6 +139,9 @@ impl WorldMap {
             out.extend(f.z.to_le_bytes());
             out.extend(f.value.to_le_bytes());
         }
+        // Geology follows the original map layers.
+        put_bytes(&mut out, &self.geology);
+        put_layer(&mut out, &self.strata_offset);
         let sum = checksum(&out);
         out.extend(sum.to_le_bytes());
         out
@@ -184,7 +187,7 @@ impl WorldMap {
         };
         config.validate().map_err(bad)?;
         let cells = config.dim() * config.dim();
-        Ok(Self {
+        let mut map = Self {
             version,
             seed,
             config,
@@ -193,6 +196,8 @@ impl WorldMap {
             plate: r.bytes(cells)?,
             boundary: r.bytes(cells)?,
             uplift: r.layer(cells)?,
+            geology: vec![0; cells],
+            strata_offset: vec![0.0; cells],
             precipitation: r.layer(cells)?,
             flow: r.layer(cells)?,
             down: r.bytes(cells)?,
@@ -207,7 +212,13 @@ impl WorldMap {
             range: r.bytes(cells)?,
             ford: r.bytes(cells)?,
             features: r.features()?,
-        })
+        };
+        map.geology = r.bytes(cells)?;
+        map.strata_offset = r.layer(cells)?;
+        if !r.0.is_empty() {
+            return Err(bad("unexpected data after geology layers"));
+        }
+        Ok(map)
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
@@ -274,6 +285,20 @@ mod tests {
     fn test_map_round_trips_through_bytes() {
         let map = small();
         assert_eq!(map, WorldMap::from_bytes(&map.to_bytes()).unwrap());
+    }
+
+    #[test]
+    fn old_map_with_different_terrain_version_is_rejected() {
+        let map = small();
+        let mut old = map.to_bytes();
+        // Reproduce the pre-geology version-40 layout, with a valid checksum.
+        old.truncate(old.len() - 8 - 16 - map.height.len() * 5);
+        old[4..8].copy_from_slice(&40u32.to_le_bytes());
+        old.extend(checksum(&old).to_le_bytes());
+        assert!(WorldMap::from_bytes(&old)
+            .unwrap_err()
+            .to_string()
+            .contains("generator version"));
     }
 
     #[test]

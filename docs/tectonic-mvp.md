@@ -12,7 +12,7 @@ across at 32 m/cell; it represents a compressed region, not an entire planet.
 - Twelve seeded plates carry motion. Continental crust crosses plate boundaries.
   Relative convergence makes collision belts or asymmetric subduction ranges/trenches.
   Other boundary types are identified but do not yet get specialized landforms.
-- Erosion and water routing keep their existing rules and run over the new ground.
+- Erosion and water routing run over the new ground. Stream erosion varies with rock type.
   Fixed peak rescaling is removed; the vertical budget is not a mountain shape algorithm.
 - Flood queues use signed sortable height keys. Raw positive-float bit ordering cannot be
   used for negative ocean elevations. Monotone height interpolation preserves steep lake rims.
@@ -23,7 +23,7 @@ across at 32 m/cell; it represents a compressed region, not an entire planet.
   precipitation versus evaporative demand, without percentile-based biome quotas.
 - Curvature retains its previous radius independently of build height. Clouds move above
   the intended summits. Snow and treeline elevations are tuned for the larger relief.
-- Generator version 39 invalidates older maps. Cache identity includes bounds, geology
+- Generator version 42 invalidates older maps. Cache identity includes bounds, geology
   and climate configuration; no legacy generator is kept for existing worlds.
 - Range connectivity uses inland water surface slopes, keeping riverbed depth separate
   from mountain barriers. River crossing availability is still checked independently.
@@ -90,13 +90,8 @@ validator remains available without affecting startup.
 
 ### Matching landscape comparisons
 
-Same seed, coordinates, scale and elevation palette; generator geometry intentionally changes.
-
-| Seed | Before | After |
-| --- | --- | --- |
-| 42 | ![Seed 42 before](images/tectonic-mvp/seed-42-before-landscape.png) | ![Seed 42 after](images/tectonic-mvp/seed-42-after-landscape.png) |
-| 1 | ![Seed 1 before](images/tectonic-mvp/seed-1-before-landscape.png) | ![Seed 1 after](images/tectonic-mvp/seed-1-after-landscape.png) |
-| 1337 | ![Seed 1337 before](images/tectonic-mvp/seed-1337-before-landscape.png) | ![Seed 1337 after](images/tectonic-mvp/seed-1337-after-landscape.png) |
+Comparisons used the same seed, coordinates, scale and elevation palette; generator
+geometry intentionally changes.
 
 Seed 42 rises from a previous maximum of 542 m above sea level to 1451 m. The new
 maximums for seeds 1 and 1337 are 1828 m and 1984 m. These are map heights before
@@ -104,18 +99,6 @@ block-scale detail. The warped plate boundaries improve the straight initial bel
 geological shape and erosion still need further visual work.
 
 ### Review overlays (seed 42)
-
-| Moisture before | Moisture after |
-| --- | --- |
-| ![Moisture before](images/tectonic-mvp/seed-42-before-moisture.png) | ![Moisture after](images/tectonic-mvp/seed-42-after-moisture.png) |
-
-| Plates, boundaries and motion | Precipitation |
-| --- | --- |
-| ![Plate overlay](images/tectonic-mvp/seed-42-plates.png) | ![Precipitation](images/tectonic-mvp/seed-42-precipitation.png) |
-
-| River network (display widths exaggerated) | Temperature after elevation cooling |
-| --- | --- |
-| ![River network](images/tectonic-mvp/seed-42-rivers.png) | ![Surface temperature](images/tectonic-mvp/seed-42-surface-temperature.png) |
 
 The region is 64 km across. Seed 42's widest physical river is 84.3 m at
 `x=-14384, z=848`, with effective runoff area 35.16 km². Seeds 1 and 1337 have maximum
@@ -136,14 +119,13 @@ evidence of a successful large river.
   syntax checks passed. Release viewer, flight, benchmark, water audit and seam tools built.
 - Signed flood ordering, water at zero, coarse river sampling, cache configuration,
   deterministic terrain, variable vertical bands and range connectivity have regression coverage.
-- Headless streaming timings are recorded in [terrain-perf.md](terrain-perf.md).
-  The high-altitude leg regresses substantially and needs profiling before merge.
+- Headless streaming timings and follow-up profiling are recorded in
+  [terrain-perf.md](terrain-perf.md). GPU timings remain unmeasured.
 - Water audits on seeds 1, 42 and 1337 report zero map-level uncontained cells.
   River-edge wall flags are 26/21/75, including 1/1/2 over 6 m. Seed 42's tall
   flag is near `x=-21752, z=15520`. These are unresolved diagnostic findings.
-  [Raw audit and flight reports](data/tectonic-mvp/) are retained.
-- The seed-42 seam diagnostic completed; its reported ground steps are retained in
-  the raw report. Completion is not evidence that every seam is artifact-free.
+- The seed-42 seam diagnostic completed. Completion is not evidence that every seam is
+  artifact-free.
 - In-game mountain silhouettes and cloud/shadow intersections have not been systematically
   reviewed on a graphics device. The coast-parallel river remains unresolved.
 
@@ -155,8 +137,7 @@ The seed-42 river visible near the southern coast was traced with `worldprobe ro
 of the channel reaches 70.8 m at `z=1400` and 75.7 m at `z=2100`. This supports a local
 valley barrier, but the checkpoint did not identify the exact reported segment; a longer
 route or a better outlet elsewhere has not been excluded. Keep the visual issue open.
-The [detail view](images/tectonic-mvp/seed-42-coastal-river-detail.png) covers
-`x=0..8192, z=0..8192` at 8 m/pixel.
+The detail view covered `x=0..8192, z=0..8192` at 8 m/pixel.
 
 The audit previously counted every water kind inside each 192 m window. Its three seed-1337
 "coast walls" were river water near the sampled coast cells, including a flagged river at
@@ -164,22 +145,20 @@ The audit previously counted every water kind inside each 192 m window. Its thre
 walls or surface steps for all three seeds. River walls remain 26/21/75 and steps remain
 529/981/2183 for seeds 1/42/1337. Seed 42's 6.8 m river wall lies on a steep reach whose
 water falls roughly 12 m over 24 blocks, consistent with the waterfall exception in
-[water.md](water.md). The other river flags still need block-level review. The corrected
-[review audit reports](data/tectonic-mvp/) retain example coordinates for each category.
-The [seed-42 wall view](images/tectonic-mvp/seed-42-river-wall-detail.png) covers
-`x=-21952..-21552, z=15320..15720` at 1 m/pixel.
+[water.md](water.md). The other river flags still need block-level review. The seed-42 wall
+view covered `x=-21952..-21552, z=15320..15720` at 1 m/pixel.
 
 ### Draft steep-bend correction
 
 At `(-21752,15523)` the seed-42 river surface was 775.51 m, while the dry column one block
 south stood at 774.12 m. The closest point on the steep curve moves downstream as the sample
-moves across its edge, so the dry bank used a lower river level. The bank now also reads the
+moves across its edge, so the dry bank used a lower river level. The version-40 fix read the
 surface about one block upstream from nearby stretches of the same river. That dry column
 stands at 776.42 m; the water's downhill profile and audit wet-column counts are unchanged.
+The later block-neighbour containment check replaces that upstream estimate.
 Generator version 40 invalidates older saved terrain because the banks change.
-The matching [after view](images/tectonic-mvp/seed-42-river-wall-after.png) changes 102 of
-160,000 pixels in the [viewer diff](images/tectonic-mvp/seed-42-river-wall-diff.png), concentrated
-along banks; the blue river footprint remains in place.
+The matching viewer comparison changed 102 of 160,000 pixels, concentrated along banks;
+the river footprint remained in place.
 
 | Seed | River walls before / after | Over 6 m before / after | Lake and coast walls after |
 | --- | ---: | ---: | ---: |
@@ -187,8 +166,8 @@ along banks; the blue river footprint remains in place.
 | 42 | 21 / 16 | 1 / 0 | 0 |
 | 1337 | 75 / 48 | 2 / 0 | 0 |
 
-The [bend audit reports](data/tectonic-mvp/) use the same 4 m sampling windows as the review
-reports. Seed 2790361079, a known steep gully, has 11 river wall flags and none over 6 m.
+The bend audits use the same 4 m sampling windows as the review reports. Seed 2790361079,
+a known steep gully, has 11 river wall flags and none over 6 m.
 Remaining river flags, waterfall curtains, and GPU appearance still need visual
 review; a lower audit count alone does not establish that every steep bend looks right.
 
@@ -204,3 +183,73 @@ review; a lower audit count alone does not establish that every steep bend looks
 Every iteration needs matching viewer exports, deterministic fixture tests, water audits,
 seam/loading checks and timing comparisons. Geological plausibility supports the scenery;
 it does not substitute for looking at it from the ground.
+
+### Later rock pass
+
+After the initial landform, climate and visual stages, expand the rock palette and give
+each addition a role in terrain and appearance:
+
+- **Granite:** intrusive mountain cores, domes and fractured cliffs.
+- **Shale:** layered sedimentary rock alongside limestone and sandstone; retain clay as
+  a softer sediment or deposit.
+- **Gneiss:** banded metamorphic rock in mountain belts, alongside marble.
+- **Andesite:** volcanic rock for island arcs and volcanoes, alongside basalt.
+
+Start with granite and shale, then add gneiss and andesite as their landforms develop.
+Tune erosion and make the strata visible with the block texture pass; names and textures
+alone will not create distinctive landforms.
+
+## Rock data: first landform-variety step
+
+The world map now records broad volcanic, metamorphic and sedimentary provinces, based
+on the seeded tectonic fields. Volcanic provinces sample as basalt, metamorphic ones as
+marble. Sedimentary provinces alternate limestone, clay and sandstone beds every 160 m,
+with a smoothly varying vertical offset. `WorldMap::rock_at` samples those beds at an
+arbitrary elevation; the viewer's `geology` layer colors the rock at the surface. This is
+a simplified starting model, not a geological history or a final visual treatment.
+At this stage provinces are sampled at 32 m map-cell resolution, and their bedding is
+smoothly offset rather than folded or faulted.
+
+The geology layer uses dark for basalt, pale for marble, tan for limestone, red for clay
+and orange for sandstone.
+
+Stream erosion now reads the rock at the current surface on each pass. Basalt and marble
+have lower stream erodibility than limestone; clay and sandstone have higher values.
+Hydraulic droplets and thermal slumping still use the same rules for all rocks. Terrain
+blocks and textures do not yet use the rock data.
+
+The first erosion trial exposed a river profile discontinuity on seed 1: adjacent samples
+at `(11508,-2708)` and `(11508,-2707)` differed by nearly 8 m because two consecutive
+stretches disagreed at their shared endpoint. Profiles now meet there; the difference is
+about 1.7 m. Tests retain this join, a block-level bank edge, a spring rim and the
+earlier steep-bend fixture.
+
+In the four seed audits, lake and coast walls were
+zero. The fine check found no open block edges among the sampled river columns; the
+four-block river check still reported 2, 0, 5 and 1 walls over 6 m for seeds 1, 42,
+1337 and 2790361079. Some are steep reaches with intervening banks. These are sampled
+checks, and the remaining waterfall and bend flags still need visual review.
+
+The new erosion changes terrain, so generator version 41 uses new map caches. Version-40
+terrain and its saved edits do not match the new world. Different block materials and
+textures are deferred to the visual composition pass. Rifts, island arcs, geological age
+and additional landform work remain in this iteration.
+
+Matching views of seed 1 at 64 m/pixel and a seed-42 mountain basin at 4 m/pixel compare
+the geology-data-only build with rock-dependent erosion. The basin view shows how a terrain
+change can also change a lake and its drainage.
+
+### Mountain river flats
+
+On seed 3942325500, a river's bank hold raised the surrounding terrain to a constant
+height far beyond its channel. At `(20749,-1920)` it raised ground by about 16 m. The
+channel now eases into the terrain over its bank width; at full block detail, dry ground
+beside actual water is held to the water's block height. This replaces the separate
+upstream bank-floor estimate, so bends and spring edges use the same check. The new
+terrain uses generator version 42. See [water.md](water.md) for the containment rule and
+the sampling limits of the water audit.
+
+Both views cover `x=20600..21624, z=-2320..-1296` at one block per pixel. In the
+five seed audits, no sampled river column had an open neighbouring block. The
+four-block scan still flags steep banks and falls; it is
+not a direct test of whether the intervening blocks contain the water.

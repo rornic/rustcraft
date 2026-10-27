@@ -361,7 +361,11 @@ pub(crate) fn stream_power(map: &mut WorldMap) {
                 } else {
                     1.0
                 };
-            let f = STREAM_K * flow[i].sqrt() * cell / dist;
+            let f = STREAM_K
+                * map.rock_at_cell(i, before[i]).stream_erodibility()
+                * flow[i].sqrt()
+                * cell
+                / dist;
             // the new height can't pass the downstream cell's: that would run water uphill
             map.height[i] = ((before[i] + f * map.height[d]) / (1.0 + f)).min(before[i]);
         }

@@ -9,6 +9,7 @@ pub mod detail;
 pub mod erosion;
 pub mod features;
 pub mod gameplay;
+pub mod geology;
 pub mod hydrology;
 pub mod io;
 mod source;
@@ -22,7 +23,7 @@ pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 40;
+pub const GENERATOR_VERSION: u32 = 42;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
 #[derive(Debug, Copy, Clone, PartialEq, serde::Deserialize)]
@@ -115,6 +116,9 @@ pub struct WorldMap {
     pub plate: Vec<u8>,
     pub boundary: Vec<u8>,
     pub uplift: Vec<f32>,
+    /// Geological province and the elevation offset of its sedimentary beds.
+    pub geology: Vec<u8>,
+    pub strata_offset: Vec<f32>,
     /// Background precipitation before local freshwater effects, in calibrated relative units.
     pub precipitation: Vec<f32>,
     /// Cells of land draining through each cell, itself included.
@@ -174,6 +178,8 @@ impl WorldMap {
             plate: vec![0; cells],
             boundary: vec![0; cells],
             uplift: vec![0.0; cells],
+            geology: vec![0; cells],
+            strata_offset: vec![0.0; cells],
             precipitation: vec![0.0; cells],
             flow: vec![0.0; cells],
             down: vec![NO_FLOW; cells],
@@ -393,6 +399,7 @@ pub(crate) fn par_rows<T: Send>(dim: usize, layer: &mut [T], f: impl Fn(usize, &
 pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     config.validate().expect("invalid world config");
     let mut map = tectonics::generate(seed, config);
+    geology::generate(&mut map);
     // water first, so basins are cut open before the rain wears the ground, then again over the
     // eroded ground, where the rivers really run
     hydrology::run(&mut map, false);

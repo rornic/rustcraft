@@ -19,6 +19,7 @@
   <div id="layers"></div>
   <div>boundaries: red collision, purple subduction, cyan extension, yellow shear. White arrows show plate motion.</div>
   <div>uplift: 0–1400 m. Rain: calibrated relative units. Temperature: 0–1, blue cold / red warm.</div>
+  <div>geology: dark basalt, pale marble, tan limestone, red clay, orange sandstone.</div>
   <div>rivers: drainage paths with a minimum visible line width. Click for actual water and inspect /summary for maximum river width.</div>
   <h4>view</h4>
   <div>x <input id="vx" type="number"> z <input id="vz" type="number"> <button id="go">go</button></div>
@@ -36,7 +37,7 @@
 const LAYERS = [
   ["height", 1], ["blocks", 0], ["biomes", 0], ["trees", 0], ["temperature", 0], ["moisture", 0],
   ["continentalness", 0], ["roughness", 0], ["range", 0], ["flow", 0],
-  ["plates", 0], ["boundaries", 0], ["uplift", 0], ["motion", 0],
+  ["plates", 0], ["boundaries", 0], ["uplift", 0], ["geology", 0], ["motion", 0],
   ["precipitation", 0], ["surface_temperature", 0], ["rivers", 0],
   ["hillshade", 1], ["contours", 0], ["water", 0.6], ["waterlevel", 0], ["flowdir", 0],
   ["features", 0], ["cells", 0],

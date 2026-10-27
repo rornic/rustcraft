@@ -11,9 +11,6 @@ https://github.com/user-attachments/assets/2ed1a420-5e0e-4f3f-ac09-f39bcf45d7f6
 ## Features
 
 - **64 km x 64 km world.** Generated from a seed in a few seconds. Droplet erosion carves valleys, hydrology routes rivers to lakes and the sea, and a climate pass sets temperature and moisture.
-- **Procedural tectonics.** Moving plate directions shape collision ranges and subduction coasts, with independent continental crust and erosion over the resulting relief.
-- **Signed elevations.** Configurable vertical bounds default to -1024 through 2048 blocks, with sea level at zero.
-- **Regional climate.** Ocean moisture follows prevailing winds, rains on rising terrain and leaves sheltered interiors dry; altitude cools the land.
 - **Biomes.** Desert, forest, plains, glacier and mountain, with snow caps, cliffs, trees and flora placed per biome.
 - **Octree level of detail.** Terrain streams in around the player and falls back to coarser meshes with a cross-fade, so the curved horizon reaches 16 km at the default render distance.
 - **Water that behaves.** Lakes, rivers and seas sit at consistent levels and don't leak. Water flows into space you open beside it.
@@ -24,8 +21,6 @@ https://github.com/user-attachments/assets/2ed1a420-5e0e-4f3f-ac09-f39bcf45d7f6
 ## Run it
 
 A simple sandbox example is included to showcase atmospheric audio, foliage, water, critters and basic weather.
-
-See [the tectonic MVP notes](docs/tectonic-mvp.md) for configuration, worldviewer overlays and the iteration roadmap.
 
 ```
 cargo run --release --example sandbox

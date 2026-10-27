@@ -347,3 +347,61 @@ not establish that. A fixed-seed launch with the full render settings succeeded 
 the user's GPU; random-seed startup with the one-map build has not been checked.
 At seed 2154739607, which the former validator rejected, a one-second-per-leg headless
 flight now loads that seed directly without a playability warning and completes all legs.
+
+## Initial rock data prototype
+
+The geology fields add five bytes per map cell (20 MiB at the default 2048-square map),
+plus temporary generation and serialization storage. This initial prototype did not
+feed geology into erosion. Its release `bench` at seed 1 matched the previous build at
+every level: 712,019 chunk and 330,471 LOD vertices.
+
+Loading an old cached seed-1 map and initializing a zero-length headless flight on two
+cores took 0.33–0.39 s before and 0.44–0.45 s with geology reconstruction over three
+alternating pairs. Peak process RSS was about 433 MB before and 465 MB after. This was
+measured on the prototype that reconstructed geology from older caches; the subsequent
+erosion change uses version-41 caches instead.
+
+Three alternating old/new headless flights, restricted to two cores, used seed 1 and
+three seconds per leg. High-flight p99 was 11.234/13.277, 10.393/10.838 and
+12.543/12.557 ms (old/new). The new build is higher in these short pairs, by 0.014–2.043
+ms. The extra retained map data may change cache or memory pressure, but these runs do
+not establish a cause; frame time and GPU cost need longer checks. The sample counts
+and timing variance make this a diagnostic rather than a stable performance baseline.
+
+## Rock-dependent stream erosion
+
+The version-41 erosion and water changes alter terrain, spawn surroundings and mesh
+counts. At seed 1, `bench` reports 693,310 chunk and 323,777 LOD vertices, against
+712,019 and 330,471 before; exact vertex equality does not apply to this change.
+Three alternating two-core headless flights, three seconds per leg, gave high-flight p99
+of 10.468/11.105, 13.321/10.597 and 13.598/10.605 ms (before/after). Sprint p99 was
+3.586/3.529, 3.717/4.983 and 4.717/4.631 ms. The second sprint pair regressed by
+1.266 ms; changed terrain and spawn can change streaming work, but these short runs do
+not isolate the cause. No GPU timing is available.
+
+## Mountain river containment
+
+The first general neighbour check sampled all four neighbours throughout the indexed
+river area. On seed 1, one `bench` run spent 650.1 ms building regions, against 179.8 ms
+before the change. A conservative bound using meander movement and possible river-width
+variation skips neighbour sampling where water cannot reach an adjacent block; the same
+benchmark then took 208.2 ms. Mesh output intentionally changed with the bank geometry:
+693,310/693,664 chunk and 323,777/323,873 LOD vertices before/after.
+
+Three alternating two-core headless flights, three seconds per leg, used render distance
+1024 and full-detail distance 16. Load p99 was 4.064/3.223, 1.539/3.980 and 3.636/3.104 ms;
+high-flight p99 was 11.259/11.637, 11.137/10.281 and 9.407/11.062 ms (before/after).
+The second loading and first and third high-flight pairs regressed. Neighbour sampling
+adds work and bank geometry changes the scene; these short, variable runs do not isolate
+their contribution. No GPU timing was collected. These measurements precede the final
+short-circuit that skips width-bound calculations when the nearest river already qualifies.
+The final short-circuit retained the same vertex counts and five water-audit summaries;
+one `bench` run measured 206.6 ms for regions and 98.5 ms for LOD meshing.
+After the clipped-mouth search was included, `bench` still matched those vertex counts,
+with 208.2 ms for regions and 104.2 ms for LOD meshing in one run.
+
+Three more alternating two-core flights used the current full-detail distance of 12.
+Load p99 was 3.185/3.405, 3.338/3.214 and 3.556/2.280 ms; high-flight p99 was
+11.622/11.995, 10.436/11.517 and 11.768/11.257 ms (before/after). High-flight p99 rose
+in the first two pairs by 0.373 and 1.081 ms. The new neighbour checks add work near
+water and the terrain differs; the short runs do not establish how much each contributed.
