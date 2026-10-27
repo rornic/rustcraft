@@ -102,9 +102,17 @@ valley reach, plus the meander, so a point looks only at its own cell's list, ho
 Each stretch also knows its river (`stem`, the run of widest feeders it's part of), so the second river a
 point sees is another river, never another stretch of a wide one: a river wider than its cells reaches
 over several of its own stretches, whose different levels read as humps if taken for a second river.
+Consecutive profiles share their endpoint level: a lower downstream start brings the upstream
+endpoint down to it, carrying the drop in the last profile interval instead of jumping between
+different heights at the same point.
 
-`channel` cuts the bed and builds the banks, and holds the bank over the water within `HOLD` of its
-edge, as still water's shore is.
+`channel` cuts the bed and eases the bank into the surrounding terrain over its width.
+At full block detail, a dry column near a river then checks its four actual neighbours. If a
+neighbour contains water, the dry column is raised to the block containing that water's
+surface. The same containment check handles bends, springs and adjacent still water without
+estimating a neighbouring level from an upstream curve point. A conservative geometric
+search bound avoids checking neighbours far from water; LOD cells keep the channel's smooth
+geometry rather than this block-level correction.
 
 Where a river meets still water:
 - **joined**: its level within `JOIN` of the still water's, as at a mouth or outlet. Inside the
@@ -144,7 +152,11 @@ rapid climbing more than a block a column is a ramp, not stairs. Bigger drops ar
   crevices, joins, ramps, LOD water.
 - `cargo run --release --example water_audit -- <seed>` counts walls, steps and raised banks round
   rivers, lake shores and coasts, one `AUDIT` line each, for a sweep of seeds before and after a
-  change. Walls left on rivers are mostly waterfalls.
+  change. Each line counts only its own sampled water kind, even when a window also contains
+  another kind. `--fine` also checks the four immediate neighbours of sampled river columns,
+  reporting height gaps and edges where the rounded dry ground lies below the water block.
+  This samples the existing windows rather than every river column. Walls left on rivers are
+  mostly waterfalls.
 - The `worldview` skill to look, and `worldprobe <seed> info x z` for one column's ground, dry
   ground, smooth ground, water and map cell.
 

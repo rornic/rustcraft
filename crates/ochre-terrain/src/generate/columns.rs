@@ -53,7 +53,7 @@ pub struct ColumnGrid {
     heights: Vec<f32>,
     biomes: Vec<BiomeId>,
     trees: Vec<f32>,
-    // the height of the water over each cell, 0 where there is none
+    // water elevation, NEG_INFINITY where absent (zero is valid ocean water)
     water: Vec<f32>,
     /// The lowest ground and highest ground or inland water under the node's cells, and the cell beyond each edge.
     pub lowest: f32,
@@ -83,14 +83,19 @@ impl ColumnGrid {
                 grid.heights.push(sample.height as f32);
                 grid.biomes.push(sample.biome);
                 grid.trees.push(sample.trees as f32);
-                grid.water.push(sample.water_surface);
+                grid.water.push(if sample.water_kind == WaterKind::None {
+                    f32::NEG_INFINITY
+                } else {
+                    sample.water_surface
+                });
                 if (-1..=size).contains(&cx) && (-1..=size).contains(&cz) {
                     grid.lowest = grid.lowest.min(sample.height as f32);
                     // the sea is left out: nodes under it are known to be water
-                    let inland = if sample.water_kind == WaterKind::Ocean {
-                        0.0
-                    } else {
+                    let inland = if matches!(sample.water_kind, WaterKind::Lake | WaterKind::River)
+                    {
                         sample.water_surface
+                    } else {
+                        f32::NEG_INFINITY
                     };
                     grid.highest = grid.highest.max((sample.height as f32).max(inland));
                 }
@@ -135,7 +140,7 @@ impl ColumnGrid {
     /// The height of the water's surface over the cell in whole blocks, or the sea's where it's dry.
     pub fn water_top(&self, cx: i32, cz: i32) -> i64 {
         match self.water[Self::index(cx, cz)] {
-            surface if surface > 0.0 => water_block_top(surface),
+            surface if surface.is_finite() => water_block_top(surface),
             _ => WATER_LEVEL,
         }
     }

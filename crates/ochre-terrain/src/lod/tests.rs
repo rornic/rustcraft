@@ -436,7 +436,7 @@ fn test_known_empty_nodes_have_nothing_to_mesh() {
     use crate::chunk::CHUNK_SIZE;
     use crate::generate::{generator::generate_lod_mesh, region_store::RegionStore};
     use bevy::math::I64Vec2;
-    use ochre_base::{WATER_LEVEL, WORLD_HEIGHT};
+    use ochre_base::WATER_LEVEL;
     use std::sync::Arc;
 
     let noise = ochre_world::worldmap::test_terrain(42);
@@ -450,21 +450,24 @@ fn test_known_empty_nodes_have_nothing_to_mesh() {
     let patches = [find(&|h| h > 250.0), find(&|h| h < -300.0)];
 
     let regions = Arc::new(RegionStore::new(noise.clone()));
-    let layers = (WORLD_HEIGHT / CHUNK_SIZE as u64) as i64;
+    let layers = noise.bounds().layers();
     let nodes: Vec<LodKey> = patches
         .iter()
         .flat_map(|&p| {
+            let layers = layers.clone();
             let corner = chunk(p.x / CHUNK_SIZE as i64, 0, p.y / CHUNK_SIZE as i64);
             (1..=2u8).flat_map(move |level| {
+                let layers = layers.clone();
                 let across = 16 >> level;
                 let first = LodKey::containing(corner, level).coord;
                 (0..across).flat_map(move |x| {
-                    (0..layers >> level).flat_map(move |y| {
-                        (0..across).map(move |z| LodKey {
-                            level,
-                            coord: first + I64Vec3::new(x, y, z),
+                    (layers.start.div_euclid(1 << level)..layers.end.div_euclid(1 << level))
+                        .flat_map(move |y| {
+                            (0..across).map(move |z| LodKey {
+                                level,
+                                coord: first + I64Vec3::new(x, y, z),
+                            })
                         })
-                    })
                 })
             })
         })
@@ -576,7 +579,7 @@ fn test_unwanted_chunk_hidden_once_covering_node_ready() {
 fn loader() -> LodLoader {
     LodLoader::new(
         layout(4),
-        1024,
+        ochre_base::WorldBounds::default(),
         Handle::default(),
         Handle::default(),
         Handle::default(),

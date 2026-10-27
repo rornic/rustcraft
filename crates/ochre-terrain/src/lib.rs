@@ -133,7 +133,7 @@ pub fn insert_terrain_resources(
     commands: &mut Commands,
     renderer: &RendererSettings,
     debug: DebugSettings,
-    world_height: u64,
+    world_bounds: ochre_base::WorldBounds,
     inputs: &ShaderInputs,
     assets: &mut TerrainAssets,
 ) {
@@ -148,14 +148,14 @@ pub fn insert_terrain_resources(
     ));
     commands.insert_resource(LodLoader::new(
         layout,
-        world_height,
+        world_bounds,
         materials.chunk.clone(),
         materials.water.clone(),
         materials.solid_water,
     ));
     commands.insert_resource(ChunkLoader::new(
         layout,
-        world_height,
+        world_bounds,
         debug.solid_leaves,
         materials.chunk,
         materials.water,

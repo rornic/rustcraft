@@ -199,7 +199,7 @@ impl HeightSampler<'_> {
         let surface = self
             .region(coord)
             .water_at(world_x - origin.x, world_z - origin.y);
-        if surface > 0.0 {
+        if surface.is_finite() {
             water_block_top(surface)
         } else {
             WATER_LEVEL

@@ -27,6 +27,7 @@ fn synthetic_map() -> WorldMap {
     let config = WorldConfig {
         size: DIM as i64 * 32,
         map_cell: 32,
+        ..Default::default()
     };
     let mut map = WorldMap::empty(SEED, config);
     for cz in 0..DIM {
@@ -62,10 +63,9 @@ fn synthetic_map() -> WorldMap {
     for cz in 100..112 {
         for cx in 60..72 {
             let i = map.index(cx, cz);
-            map.height[i] =
-                505.0 - 0.1 * ((cx as f32 - 66.0).powi(2) + (cz as f32 - 106.0).powi(2));
+            map.height[i] = 57.0 - 0.1 * ((cx as f32 - 66.0).powi(2) + (cz as f32 - 106.0).powi(2));
             map.water_kind[i] = WaterCell::Lake as u8;
-            map.water_surface[i] = 504.0;
+            map.water_surface[i] = 56.0;
         }
     }
     // a river from the lake east along row 106, wider as it goes, then north down to the sea
@@ -74,7 +74,7 @@ fn synthetic_map() -> WorldMap {
     path.extend((0..106).rev().map(|cz| (200, cz)));
     for (n, &(cx, cz)) in path.iter().enumerate() {
         let i = map.index(cx, cz);
-        let bed = 500.0 - n as f32 * 0.35;
+        let bed = 52.0 - n as f32 * 0.35;
         if bed < WATER_LEVEL as f32 - 5.0 {
             break;
         }
@@ -168,5 +168,5 @@ fn test_chunks_from_a_fixed_map_and_seed_hash_the_same_on_every_machine() {
     }
     // pinned: a change here means every machine's chunks changed, and with them any edits stored
     // as deltas against generated terrain, so bump `worldmap::GENERATOR_VERSION` with it
-    assert_eq!(3_699_854_269_434_751_682, first, "chunk hash changed");
+    assert_eq!(7_078_080_955_881_901_181, first, "chunk hash changed");
 }

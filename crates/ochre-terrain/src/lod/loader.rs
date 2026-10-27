@@ -189,7 +189,7 @@ impl LodLoader {
 
     pub fn new(
         layout: LodLayout,
-        world_height: u64,
+        world_bounds: ochre_base::WorldBounds,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
         solid_water_material: Handle<WaterMaterial>,
@@ -198,8 +198,8 @@ impl LodLoader {
             set_layout: layout,
             layout,
             band: LodBand {
-                min_y: 0,
-                max_y: (world_height as i64 + CHUNK_SIZE as i64 - 1) / CHUNK_SIZE as i64,
+                min_y: world_bounds.layers().start,
+                max_y: world_bounds.layers().end,
             },
             anchor: None,
             selected: Arc::new(HashSet::new()),

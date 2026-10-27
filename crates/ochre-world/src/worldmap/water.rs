@@ -225,6 +225,20 @@ impl RiverProfiles {
             _ => &[],
         }
     }
+
+    /// Width bound for adjacent columns, and whether a clipped mouth needs a direct check.
+    pub(super) fn neighbour_bounds(&self, cell: usize) -> (f32, bool) {
+        self.near(cell)
+            .iter()
+            .fold((0.0f32, false), |(width, mouth), &n| {
+                let n = n as usize;
+                let s = self.stretches[n];
+                (
+                    width.max((s.width - s.end_width).abs() * 0.5),
+                    mouth || self.ends[n] < 1.0,
+                )
+            })
+    }
 }
 
 impl WorldMap {
@@ -630,6 +644,14 @@ impl WorldMap {
                 }
             }
         }
+        // The next stretch can start lower than the preceding one ends. Both represent the
+        // same point, so bring each upstream endpoint down to that shared level. The final
+        // profile interval carries the drop instead of a discontinuity between stretches.
+        for &n in order.iter().rev() {
+            if let Some(&next) = at.get(&stretches[n].to) {
+                profiles.data[n][PROFILE_POINTS] = profiles.data[next][0];
+            }
+        }
         profiles
     }
 
@@ -738,6 +760,7 @@ mod tests {
         let config = WorldConfig {
             size: 32 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let mut map = WorldMap::empty(1, config);
         // east along row 10 to the corner at cell 15, then south down column 15
@@ -778,6 +801,7 @@ mod tests {
         let config = WorldConfig {
             size: 32 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let mut map = WorldMap::empty(1, config);
         // a river running east along row 10, from cell 5 to cell 15
@@ -819,8 +843,8 @@ mod tests {
                 if next != RiverProfiles::NONE {
                     let on = profiles.data[next as usize][0];
                     assert!(
-                        on <= levels[PROFILE_POINTS] + 1e-3,
-                        "seed {seed} cell {i} rises into {on}: {levels:?}"
+                        (on - levels[PROFILE_POINTS]).abs() < 1e-3,
+                        "seed {seed} cell {i} joins {on}: {levels:?}"
                     );
                 }
             }

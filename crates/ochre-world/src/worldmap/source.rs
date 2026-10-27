@@ -23,7 +23,7 @@ const SHORE_SMOOTH: f64 = 5.0;
 // How far either side of still water's level, in blocks, the ground is held to the side of it its
 // smooth ground is on, see `contain`, and over how far the ground's detail is calmed to nothing at
 // the water's edge, so a shore and the bed out from it are smooth.
-const HOLD: f64 = 1.5;
+pub(super) const HOLD: f64 = 1.5;
 const CALM: f64 = 8.0;
 
 // How far over still water's level, in blocks, ground surrounded by its cells is still under it: the water
@@ -42,7 +42,7 @@ const VALLEY_ABOVE_SEA: f64 = 0.6;
 // How far past a river's banks, in blocks, its valley floor eases back out into the land's own ground.
 const VALLEY_WIDTH: f64 = 40.0;
 
-// Cells at least this wide leave a river's channel to the map's own carving.
+// Wider cells resolve only rivers at least a cell wide; finer cells retain every stream.
 const RIVER_DETAIL_CELL: f64 = 16.0;
 // A river rises in a round pool this many blocks across its middle, deepening from the first to the second
 // under its level, in a rim of ground this wide held over it.
@@ -65,11 +65,9 @@ fn channel(ground: f32, river: RiverHit) -> f32 {
     // and over the block the water's surface lies in by at least half of it, or the water stands over the bank
     let rim = (river.surface + freeboard(river.width)).max(river.surface.ceil() - 0.4);
     let t = ((river.distance - half) / bank_width(river)).clamp(0.0, 1.0);
-    // eased out, so the bank climbs from the water at once instead of lying as a dry shelf beside it,
-    // but held over the water within `HOLD` of its edge, as still water's shore is: on a slope across
-    // the river the bank would otherwise fall away under the water at once
-    let held = river.surface + (river.distance - half).min(HOLD as f32);
-    (rim + (ground - rim) * t * (2.0 - t)).max(held)
+    // The bank joins the surrounding terrain over its width. Block-level containment
+    // is applied separately against actual neighbouring water, after all water is known.
+    rim + (ground - rim) * t * (2.0 - t)
 }
 
 // Where the bed of the river under it is, a parabola across it.
@@ -137,6 +135,9 @@ pub(super) fn river_reach(width: f32) -> f32 {
 
 // The most `meander` moves a point, in blocks.
 const MEANDER_REACH: f32 = 34.0 + 9.0;
+// A one-block step, including the maximum local movement of both meander components.
+// The Perlin gradient and fade bounds put it below 4.1 blocks; five is a conservative bound.
+const NEIGHBOUR_MEANDER_REACH: f32 = 5.0;
 
 // How far a river's line is moved off its straight run between cell centres at a point: slow
 // bends a few hundred blocks long, with smaller wiggles on them.
@@ -487,18 +488,14 @@ impl WorldTerrain {
     pub fn map(&self) -> &Arc<WorldMap> {
         &self.map
     }
-}
 
-impl TerrainSource for WorldTerrain {
-    fn seed(&self) -> u32 {
-        self.map.seed
-    }
-
-    fn biomes(&self) -> &Biomes {
-        &self.biomes
-    }
-
-    fn sample_for_cell(&self, x: f64, z: f64, cell: f64) -> TerrainSample {
+    fn sample_uncontained(
+        &self,
+        x: f64,
+        z: f64,
+        cell: f64,
+        check_neighbors: bool,
+    ) -> (TerrainSample, bool) {
         let map = &self.map;
         let seed = map.seed;
         let biome = self.biome_at(x, z);
@@ -510,16 +507,24 @@ impl TerrainSource for WorldTerrain {
             u.round().clamp(0.0, max) as usize,
             v.round().clamp(0.0, max) as usize,
         );
-        let meandered =
-            (cell <= RIVER_DETAIL_CELL && !self.profiles.near(here).is_empty()).then(|| {
-                let (mx, mz) = meander(seed, x, z);
-                (x + mx, z + mz)
-            });
+        let meandered = (!self.profiles.near(here).is_empty()).then(|| {
+            let (mx, mz) = meander(seed, x, z);
+            (x + mx, z + mz)
+        });
         // the nearest river and, where one joins another, the other too
         let rivers = meandered.map_or([None, None], |(mx, mz)| {
-            map.river_hits(&self.profiles, mx, mz)
+            let mut resolved = [None, None];
+            let mut n = 0;
+            for hit in map.river_hits(&self.profiles, mx, mz).into_iter().flatten() {
+                if cell <= RIVER_DETAIL_CELL || hit.width as f64 >= cell {
+                    resolved[n] = Some(hit);
+                    n += 1;
+                }
+            }
+            resolved
         });
         let spring = meandered
+            .filter(|_| cell <= RIVER_DETAIL_CELL)
             .and_then(|(mx, mz)| self.spring_near(mx, mz))
             .filter(|&(distance, _)| distance < SPRING_POOL + SPRING_RIM + SPRING_MOUND);
         let spring_part = match spring {
@@ -624,7 +629,10 @@ impl TerrainSource for WorldTerrain {
                 ground = ground.max(surface.ceil() as f64 + 0.2 - out);
             }
         }
-        let ground = ground.max(0.0);
+        let ground = ground.clamp(
+            (map.config.bounds.min_y + 16) as f64,
+            (map.config.bounds.max_y - 64) as f64,
+        );
 
         // where two meet, the wider river's level is the water's
         let river_water = rivers
@@ -651,8 +659,27 @@ impl TerrainSource for WorldTerrain {
             } else {
                 (0.0, WaterKind::None)
             };
-        let wet = water_surface > 0.0;
-        TerrainSample {
+        let wet = water_kind != WaterKind::None;
+        // Skip the four neighbour samples if even the widest possible stretch cannot reach
+        // an adjacent block. The profile index includes a cell and the full meander reach.
+        let near_river = check_neighbors
+            && !wet
+            && cell <= 1.0
+            && (spring.is_some()
+                || meandered.is_some_and(|(mx, mz)| {
+                    let margin = rivers[0].map(|r| r.distance - r.width / 2.0);
+                    if margin.is_some_and(|d| d <= NEIGHBOUR_MEANDER_REACH) {
+                        return true;
+                    }
+                    let (mu, mv) = map.to_cell(mx, mz);
+                    let cell = map.index(
+                        mu.round().clamp(0.0, max) as usize,
+                        mv.round().clamp(0.0, max) as usize,
+                    );
+                    let (width, mouth) = self.profiles.neighbour_bounds(cell);
+                    mouth || margin.is_some_and(|d| d <= NEIGHBOUR_MEANDER_REACH + width)
+                }));
+        let sample = TerrainSample {
             continentalness: map.bilinear(&map.continentalness, x, z) as f64,
             height: ground,
             biome,
@@ -665,7 +692,40 @@ impl TerrainSource for WorldTerrain {
             water_surface,
             water_kind,
             spring: spring_part,
+        };
+        (sample, near_river)
+    }
+}
+
+impl TerrainSource for WorldTerrain {
+    fn bounds(&self) -> ochre_base::WorldBounds {
+        self.map.config.bounds
+    }
+
+    fn seed(&self) -> u32 {
+        self.map.seed
+    }
+
+    fn biomes(&self) -> &Biomes {
+        &self.biomes
+    }
+
+    fn sample_for_cell(&self, x: f64, z: f64, cell: f64) -> TerrainSample {
+        let (mut sample, near_river) = self.sample_uncontained(x, z, cell, true);
+        // A dry block beside water must reach that water's top block. Use uncontained
+        // neighbour samples so this is one local operation, independent of sample order.
+        if cell <= 1.0 && near_river && sample.water_kind == WaterKind::None {
+            for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                let (neighbour, _) = self.sample_uncontained(x + dx, z + dz, cell, false);
+                if neighbour.water_kind != WaterKind::None {
+                    let water_top = ochre_terrain::generate::region_store::water_block_top(
+                        neighbour.water_surface,
+                    );
+                    sample.height = sample.height.max(water_top as f64 - 0.4);
+                }
+            }
         }
+        sample
     }
 
     // How warm it is at the ground here, which falls with height at the rate snow lines climb at,
@@ -699,5 +759,257 @@ impl TerrainSource for WorldTerrain {
             .min_by_key(|f| (f.x as i64).abs() + (f.z as i64).abs());
         let (x, z) = nearest.map_or((0, 0), |f| (f.x as i64, f.z as i64));
         (x, z, self.height(x as f64, z as f64))
+    }
+}
+
+#[cfg(test)]
+mod sea_level_tests {
+    use super::*;
+
+    #[test]
+    fn ocean_at_zero_is_wet_and_has_a_negative_bed() {
+        let mut map = WorldMap::empty(
+            42,
+            super::super::WorldConfig {
+                size: 1024,
+                ..Default::default()
+            },
+        );
+        map.height.fill(-100.0);
+        map.continentalness.fill(-0.5);
+        map.water_kind.fill(WaterCell::Ocean as u8);
+        map.temperature.fill(0.68);
+        map.trees.fill(255);
+        let terrain = WorldTerrain::new(std::sync::Arc::new(map));
+        let s = terrain.sample(0.0, 0.0);
+        assert_eq!(s.water_kind, WaterKind::Ocean);
+        assert_eq!(s.water_surface, 0.0);
+        assert!(s.height < -50.0);
+        assert_eq!(s.trees, 0.0);
+        let water = terrain.water(0.0, 0.0);
+        assert_eq!(water.kind, WaterKind::Ocean);
+        assert!(water.depth > 50.0);
+    }
+
+    #[test]
+    fn broad_rivers_remain_water_in_coarse_cells() {
+        let mut map = WorldMap::empty(
+            42,
+            super::super::WorldConfig {
+                size: 2048,
+                ..Default::default()
+            },
+        );
+        map.height.fill(100.0);
+        map.temperature.fill(0.5);
+        let dim = map.dim();
+        for x in 0..dim {
+            let i = map.index(x, dim / 2);
+            map.height[i] = 96.0;
+            map.water_kind[i] = WaterCell::River as u8;
+            map.water_surface[i] = 100.0;
+            map.river_width[i] = 300.0;
+            map.flow[i] = 1000.0;
+            map.down[i] = if x + 1 < dim {
+                0
+            } else {
+                super::super::NO_FLOW
+            };
+        }
+        let terrain = WorldTerrain::new(std::sync::Arc::new(map));
+        for cell in [1.0, 32.0, 64.0, 128.0] {
+            let s = terrain.sample_for_cell(0.0, 16.0, cell);
+            assert_eq!(
+                s.water_kind,
+                WaterKind::River,
+                "river disappeared at cell {cell}"
+            );
+            assert!(s.height < s.water_surface as f64);
+        }
+        assert_eq!(
+            terrain.sample_for_cell(0.0, 16.0, 512.0).water_kind,
+            WaterKind::None
+        );
+    }
+}
+
+#[cfg(test)]
+mod river_bank_tests {
+    use super::*;
+
+    #[test]
+    fn neighbour_meander_search_bound_covers_block_steps() {
+        for seed in [1, 42, 3942325500] {
+            for x in (-32000..=32000).step_by(1799) {
+                for z in (-32000..=32000).step_by(1811) {
+                    let (x, z) = (x as f64, z as f64);
+                    let (mx, mz) = meander(seed, x, z);
+                    for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                        let (nx, nz) = meander(seed, x + dx, z + dz);
+                        let distance = (dx + nx - mx).hypot(dz + nz - mz);
+                        assert!(
+                            distance <= NEIGHBOUR_MEANDER_REACH as f64,
+                            "seed {seed} at {x},{z}: step moved {distance}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn river_bank_joins_ground_beyond_its_width() {
+        let mut river = RiverHit {
+            distance: 1.0,
+            width: 2.0,
+            surface: 100.0,
+            bed: 99.0,
+        };
+        assert!(channel(80.0, river) >= 100.2);
+        river.distance = 100.0;
+        assert_eq!(channel(80.0, river), 80.0);
+    }
+
+    #[test]
+    fn mountain_ground_far_from_a_river_keeps_its_own_height() {
+        let map = Arc::new(super::super::generate(3942325500, Default::default()));
+        let terrain = WorldTerrain::new(map);
+        let (x, z) = (20749.0, -1920.0);
+        let ground = terrain.sample(x, z);
+        let dry = terrain.dry_ground(x, z, 1.0);
+        assert_eq!(ground.water_kind, WaterKind::None);
+        assert!(
+            (ground.height - dry).abs() < 0.01,
+            "distant ground {} was raised above dry terrain {dry}",
+            ground.height
+        );
+        let water = terrain.sample(14216.0, -5208.0);
+        let bank = terrain.sample(14217.0, -5208.0);
+        assert_eq!(water.water_kind, WaterKind::River);
+        assert_eq!(bank.water_kind, WaterKind::None);
+        assert!(
+            ochre_terrain::generate::region_store::bed_top(bank.height as f32, bank.water_surface)
+                >= ochre_terrain::generate::region_store::water_block_top(water.water_surface),
+            "bank {} does not hold neighboring water {}",
+            bank.height,
+            water.water_surface
+        );
+        let mut wet_columns = 0;
+        for z in (-2200..-1600).step_by(8) {
+            for x in (20700..21300).step_by(8) {
+                let water = terrain.sample(x as f64, z as f64);
+                if water.water_kind != WaterKind::River {
+                    continue;
+                }
+                wet_columns += 1;
+                for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let bank = terrain.sample((x + dx) as f64, (z + dz) as f64);
+                    if bank.water_kind == WaterKind::None {
+                        assert!(
+                            ochre_terrain::generate::region_store::bed_top(
+                                bank.height as f32,
+                                bank.water_surface
+                            ) >= ochre_terrain::generate::region_store::water_block_top(
+                                water.water_surface
+                            ),
+                            "water at {x},{z} is open toward {},{}",
+                            x + dx,
+                            z + dz
+                        );
+                    }
+                }
+            }
+        }
+        assert!(wet_columns > 0, "the sampled valley needs river coverage");
+    }
+
+    #[test]
+    fn joining_stretches_do_not_jump_in_level() {
+        let map = Arc::new(super::super::generate(1, Default::default()));
+        let terrain = WorldTerrain::new(map);
+        let up = terrain.sample(11508.0, -2708.0);
+        let down = terrain.sample(11508.0, -2707.0);
+        assert_eq!(up.water_kind, WaterKind::River);
+        assert_eq!(down.water_kind, WaterKind::River);
+        assert!(
+            (up.water_surface - down.water_surface).abs() < 2.0,
+            "the join jumps from {} to {}",
+            up.water_surface,
+            down.water_surface
+        );
+        for (x, z, water) in [(11508.0, -2708.0, up), (11508.0, -2707.0, down)] {
+            for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                let neighbour = terrain.sample(x + dx, z + dz);
+                if neighbour.water_kind == WaterKind::None {
+                    assert!(
+                        water.water_surface as f64 - neighbour.height <= 1.5,
+                        "water at {x},{z} stands over dry ground at {},{}",
+                        x + dx,
+                        z + dz
+                    );
+                }
+            }
+        }
+
+        // The dry neighbour must reach the water's block, even when both rounded
+        // heights are close enough that their continuous surfaces look contained.
+        let water = terrain.sample(7876.0, -5840.0);
+        let bank = terrain.sample(7876.0, -5839.0);
+        assert_eq!(water.water_kind, WaterKind::River);
+        assert_eq!(bank.water_kind, WaterKind::None);
+        assert!(
+            ochre_terrain::generate::region_store::bed_top(bank.height as f32, bank.water_surface)
+                >= ochre_terrain::generate::region_store::water_block_top(water.water_surface),
+            "bank {} does not hold water {}",
+            bank.height,
+            water.water_surface
+        );
+    }
+
+    #[test]
+    fn spring_rim_holds_water_near_its_outlet() {
+        let map = Arc::new(super::super::generate(42, Default::default()));
+        let terrain = WorldTerrain::new(map);
+        let water = terrain.sample(-16912.0, -17996.0);
+        let bank = terrain.sample(-16913.0, -17996.0);
+        assert_eq!(water.water_kind, WaterKind::River);
+        assert_eq!(bank.water_kind, WaterKind::None);
+        assert!(
+            ochre_terrain::generate::region_store::bed_top(bank.height as f32, bank.water_surface)
+                >= ochre_terrain::generate::region_store::water_block_top(water.water_surface),
+            "spring rim {} does not hold water {}",
+            bank.height,
+            water.water_surface
+        );
+    }
+
+    #[test]
+    fn steep_bend_holds_water_on_its_outside_bank() {
+        // Recreate the earlier seed-42 terrain; rock-dependent erosion moves this bend.
+        let config = Default::default();
+        let mut map = super::super::tectonics::generate(42, config);
+        super::super::hydrology::run(&mut map, false);
+        super::super::erosion::run(&mut map);
+        let floor = (config.bounds.min_y + 16) as f32;
+        map.height.iter_mut().for_each(|h| *h = h.max(floor));
+        super::super::gameplay::carve_passes(&mut map);
+        super::super::hydrology::scatter(&mut map);
+        super::super::hydrology::run(&mut map, true);
+        map.height.iter_mut().for_each(|h| *h = h.max(floor));
+        super::super::climate::run(&mut map);
+        super::super::detail::roughness_layer(&mut map);
+        super::super::gameplay::label(&mut map);
+        let map = Arc::new(map);
+        let terrain = WorldTerrain::new(map);
+        let wet = terrain.sample(-21752.0, 15523.0);
+        let bank = terrain.sample(-21752.0, 15524.0);
+        assert_eq!(wet.water_kind, WaterKind::River);
+        assert_eq!(bank.water_kind, WaterKind::None);
+        assert!(
+            bank.height >= wet.water_surface as f64,
+            "dry bank {} stands under river surface {}",
+            bank.height,
+            wet.water_surface
+        );
     }
 }

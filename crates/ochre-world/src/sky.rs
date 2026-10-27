@@ -219,7 +219,7 @@ fn move_sky(
 
 /// The day fraction the sun's shadows follow: held at the last step, then slid to the next at its end.
 fn shadow_days(ticks: u64, carry: f32) -> f32 {
-    let step = ticks - ticks % SHADOW_STEP_TICKS;
+    let step = ticks.div_euclid(SHADOW_STEP_TICKS) * SHADOW_STEP_TICKS;
     let into = ((ticks - step) as f32 + carry) / SHADOW_STEP_TICKS as f32;
     let slid = smoothstep(1.0 - SHADOW_SLIDE, 1.0, into);
     ((step % DAY_TICKS) as f32 + slid * SHADOW_STEP_TICKS as f32) / DAY_TICKS as f32

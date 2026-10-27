@@ -17,6 +17,7 @@ pub use buffers::{ChunkMeshes, INNER_LEAVES_BAND, INNER_LEAVES_REACH};
 pub(crate) use chunk::LIGHT_MARGIN;
 pub use chunk::{generate_chunk, generate_chunk_mesh, generate_chunk_with, ChunkPasses};
 pub use lod::generate_lod_mesh;
+pub(crate) use lod::SKIRT_CELLS;
 pub(super) use shading::FACE_NORMAL_OFFSET;
 pub(super) use terrain::{block_gradient, column_block};
 pub use terrain::{surface_block, FREEZE_TEMPERATURE};

@@ -248,3 +248,160 @@ are unchanged. Pixel counts depend on aspect ratio; this caps width rather than 
 The user reported that both 960×540 and 640×360 retained the desired cloud quality. The second
 cap uses 56% fewer main-march rays than the first at 16:9. GPU timings and frame-time p99 were
 not measured, so no proportional timing improvement is claimed. See `docs/clouds.md` for presets.
+
+## Tectonic MVP checkpoint (2026-10-27)
+
+Release Rust 1.97.1, managed CPU-only environment (2 vCPUs), seed 1, render distance
+1024. `flight --seed 1 --secs 3` uses 179 frames per leg, separate world caches and
+unchanged renderer settings. Before is 96679cb; after is the version-39 tectonic MVP.
+Geometry and spawn surroundings differ, so vertex equality does not apply. These short
+runs are diagnostic, not a stable frame-time benchmark or GPU measurement.
+
+| Headless frame p99 (ms) | Before | After |
+| --- | ---: | ---: |
+| Loading | 8.101 | 6.298 |
+| Walking | 5.730 | 4.816 |
+| Sprinting | 7.791 | 5.779 |
+| High-altitude flight | 11.997 | 41.383 |
+
+Walk-stage mesh storage was 158 MB before and 159 MB after. High-altitude LOD throughput
+fell from 257.0 to 110.5 meshes/s. The larger vertical bounds and increased relief change
+the scene and loading workload; they are hypotheses to profile, not an established cause
+of the p99 regression. This checkpoint is a draft and should not merge until that
+regression is understood or reduced. Normal ground legs do not establish high-altitude
+performance.
+
+Final viewer generation times were 13.0 s (42), 11.4 s (1) and 19.1 s (1337), without
+concurrent builds/tests. Earlier baseline captures were not all taken under equivalent
+load, so no generation speedup or regression ratio is claimed. See
+[tectonic-mvp.md](tectonic-mvp.md) for same-scale visual comparisons and open issues.
+
+## Tectonic MVP draft follow-up from 4883cfa
+
+The fixed 900 m high-flight path stays at least 824 m above seed-1 ground, so flying
+through newly tall terrain does not explain its slow frames. Raising the camera to
+2200 m made high-flight p99 worse in a two-core diagnostic run (14.8 to 22.1 ms),
+consistent with more horizon and LOD work; the run was not an A/B of identical scenes.
+
+Temporary timers found 9–12 ms calls in `retire_lods` during the high leg. It checked
+membership in the retired vector while retaining the retirement queue, making a large
+retirement batch quadratic. A set now handles that membership check. On this 16-core host
+restricted to cores 0 and 1 with `taskset`, three alternating old/new pairs of
+`flight --seed 1 --secs 3` gave:
+
+| Pair | Old high p50/p99 (ms) | Draft high p50/p99 (ms) |
+| --- | ---: | ---: |
+| 1 | 6.302 / 16.551 | 4.407 / 11.229 |
+| 2 | 5.147 / 16.122 | 3.625 / 13.360 |
+| 3 | 6.397 / 18.657 | 4.559 / 11.434 |
+
+The draft wins both frame percentiles in each pair. LOD mesh throughput varies across
+the pairs and does not establish a throughput gain. `bench` matched exactly before and
+after: 712,019 chunk vertices and 330,471 LOD vertices, including every LOD level.
+These timings are diagnostic headless CPU runs and cannot be compared numerically with
+the original managed-environment checkpoint. GPU frame time remains unmeasured.
+
+Version 40's steep-bend bank correction adds one upstream profile lookup near river banks.
+`bench` still reports 712,019 chunk and 330,471 LOD vertices, with 224.5 ms chunk meshing
+and 97.7 ms LOD meshing in one run. A single two-core, three-second seed-1 flight had an
+11.566 ms high-leg p99, within the three version-39 draft runs above. That short run does
+not establish GPU cost or a precise frame-time change.
+
+## Startup device loss report (2026-10-27)
+
+A desktop launch warned that random seed 1522288356 was unplayable, then lost the GPU device
+about 39 seconds later. The cache shows that seed's map saved at 09:01:35 and a replacement
+seed 2413427271 saved at 09:01:39. The warning is a rejected map during the normal bounded
+retry loop; it did not stop world generation. The later `DeviceLost` and invalid mapped-buffer
+errors show a render-device failure, but do not identify its cause. No graphics device is
+accessible in this environment, so the GPU failure has not been reproduced here.
+
+For seed 2413427271, a six-second-per-leg headless flight completed at both view distances.
+At 512 chunks it held 405 MB of CPU mesh data after load and 459 MB after walking; at the
+configured 1024 chunks, 478 MB and 532 MB. Peak process RSS was 1.24 GB and 1.32 GB,
+respectively. These are CPU measures, not GPU allocation or frame time. The default game
+still needed a GPU check at the time of this measurement.
+
+A second launch with the original 1024-chunk settings and a different random seed also
+froze the desktop. Its log says seed 1737182360's map was ready and the player spawned
+before the final `bevy_time` warning; the earlier rejected seed was not the blocker.
+The user confirmed a temporary 256-chunk safe preset started, then confirmed a fixed
+seed started with the original 1024-chunk view, 16-chunk full detail and LOD base,
+64-chunk shadows and medium clouds. The safe preset and runtime overrides were removed;
+the original renderer settings remain in `assets/settings.toml`. The fixed-seed success
+shows the full render settings can start on this GPU, though it does not isolate the
+cause of the random-seed freezes. A two-second-per-leg headless flight on seed
+1737182360 at the temporary safe preset completed with 102 MB of mesh data after load,
+105 MB after walking and 624 MB peak process RSS.
+
+## One map per launch
+
+Both reported hangs followed the random-seed retry path: a geography issue caused the
+first map to be discarded, then another map was generated before terrain streaming.
+`load_world` now chooses one seed and loads or generates exactly one map. It does not run
+the geography validator at startup. The gameplay pass still carves passes and places
+spawn regions; the validator remains available to diagnostic map tools. This removes
+the second large map generation and its allocation churn from the startup path. It is
+plausible that the repeated work contributed to the desktop stalls, but the logs do
+not establish that. A fixed-seed launch with the full render settings succeeded on
+the user's GPU; random-seed startup with the one-map build has not been checked.
+At seed 2154739607, which the former validator rejected, a one-second-per-leg headless
+flight now loads that seed directly without a playability warning and completes all legs.
+
+## Initial rock data prototype
+
+The geology fields add five bytes per map cell (20 MiB at the default 2048-square map),
+plus temporary generation and serialization storage. This initial prototype did not
+feed geology into erosion. Its release `bench` at seed 1 matched the previous build at
+every level: 712,019 chunk and 330,471 LOD vertices.
+
+Loading an old cached seed-1 map and initializing a zero-length headless flight on two
+cores took 0.33–0.39 s before and 0.44–0.45 s with geology reconstruction over three
+alternating pairs. Peak process RSS was about 433 MB before and 465 MB after. This was
+measured on the prototype that reconstructed geology from older caches; the subsequent
+erosion change uses version-41 caches instead.
+
+Three alternating old/new headless flights, restricted to two cores, used seed 1 and
+three seconds per leg. High-flight p99 was 11.234/13.277, 10.393/10.838 and
+12.543/12.557 ms (old/new). The new build is higher in these short pairs, by 0.014–2.043
+ms. The extra retained map data may change cache or memory pressure, but these runs do
+not establish a cause; frame time and GPU cost need longer checks. The sample counts
+and timing variance make this a diagnostic rather than a stable performance baseline.
+
+## Rock-dependent stream erosion
+
+The version-41 erosion and water changes alter terrain, spawn surroundings and mesh
+counts. At seed 1, `bench` reports 693,310 chunk and 323,777 LOD vertices, against
+712,019 and 330,471 before; exact vertex equality does not apply to this change.
+Three alternating two-core headless flights, three seconds per leg, gave high-flight p99
+of 10.468/11.105, 13.321/10.597 and 13.598/10.605 ms (before/after). Sprint p99 was
+3.586/3.529, 3.717/4.983 and 4.717/4.631 ms. The second sprint pair regressed by
+1.266 ms; changed terrain and spawn can change streaming work, but these short runs do
+not isolate the cause. No GPU timing is available.
+
+## Mountain river containment
+
+The first general neighbour check sampled all four neighbours throughout the indexed
+river area. On seed 1, one `bench` run spent 650.1 ms building regions, against 179.8 ms
+before the change. A conservative bound using meander movement and possible river-width
+variation skips neighbour sampling where water cannot reach an adjacent block; the same
+benchmark then took 208.2 ms. Mesh output intentionally changed with the bank geometry:
+693,310/693,664 chunk and 323,777/323,873 LOD vertices before/after.
+
+Three alternating two-core headless flights, three seconds per leg, used render distance
+1024 and full-detail distance 16. Load p99 was 4.064/3.223, 1.539/3.980 and 3.636/3.104 ms;
+high-flight p99 was 11.259/11.637, 11.137/10.281 and 9.407/11.062 ms (before/after).
+The second loading and first and third high-flight pairs regressed. Neighbour sampling
+adds work and bank geometry changes the scene; these short, variable runs do not isolate
+their contribution. No GPU timing was collected. These measurements precede the final
+short-circuit that skips width-bound calculations when the nearest river already qualifies.
+The final short-circuit retained the same vertex counts and five water-audit summaries;
+one `bench` run measured 206.6 ms for regions and 98.5 ms for LOD meshing.
+After the clipped-mouth search was included, `bench` still matched those vertex counts,
+with 208.2 ms for regions and 104.2 ms for LOD meshing in one run.
+
+Three more alternating two-core flights used the current full-detail distance of 12.
+Load p99 was 3.185/3.405, 3.338/3.214 and 3.556/2.280 ms; high-flight p99 was
+11.622/11.995, 10.436/11.517 and 11.768/11.257 ms (before/after). High-flight p99 rose
+in the first two pairs by 0.373 and 1.081 ms. The new neighbour checks add work near
+water and the terrain differs; the short runs do not establish how much each contributed.

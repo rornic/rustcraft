@@ -26,7 +26,7 @@ pub struct TerrainSample {
     pub height: f64,
     pub biome: BiomeId,
     pub trees: f64,
-    /// Where the water's surface is over the column, or 0 if it's dry: sea, lake or river.
+    /// Water surface elevation. `water_kind` identifies wet columns: zero is a valid sea level.
     pub water_surface: f32,
     pub water_kind: WaterKind,
     pub spring: SpringPart,
@@ -47,6 +47,10 @@ pub enum SpringPart {
 /// only through this.
 pub trait TerrainSource: Send + Sync {
     fn seed(&self) -> u32;
+
+    fn bounds(&self) -> crate::WorldBounds {
+        crate::WorldBounds::default()
+    }
 
     fn biomes(&self) -> &Biomes;
 
@@ -89,7 +93,7 @@ pub trait TerrainSource: Send + Sync {
     /// The water over the column at (x, z).
     fn water(&self, x: f64, z: f64) -> Water {
         let sample = self.sample(x, z);
-        if sample.water_surface > 0.0 {
+        if sample.water_kind != WaterKind::None {
             Water {
                 kind: sample.water_kind,
                 surface: sample.water_surface,
@@ -102,6 +106,9 @@ pub trait TerrainSource: Send + Sync {
 }
 
 impl<T: TerrainSource + ?Sized> TerrainSource for std::sync::Arc<T> {
+    fn bounds(&self) -> crate::WorldBounds {
+        (**self).bounds()
+    }
     fn seed(&self) -> u32 {
         (**self).seed()
     }

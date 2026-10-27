@@ -12,3 +12,21 @@ cloud_resolution = "medium"
 [debug]
 still_leaves = false
 solid_leaves = false
+
+[world]
+size = 65536
+map_cell = 32
+
+[world.bounds]
+min_y = -1024
+max_y = 2048
+
+[world.tectonics]
+plates = 12
+relief = 1.0
+
+[world.climate]
+# Regional sea-level warmth (0..1); wind points in the direction air travels.
+warmth = 0.68
+wind_x = 1.0
+wind_z = 0.15

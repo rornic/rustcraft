@@ -3,8 +3,6 @@ use ochre_base::biome::Biomes;
 use ochre_base::block::BlockType;
 use ochre_base::WATER_LEVEL;
 
-pub(super) const SOLID_FLOOR: i64 = 16;
-
 // The cell at the water's surface over ground below it is water, not ground: filled by its
 // ground it would draw as a beach at sea level, where the water over it is mostly of the cell.
 pub(super) fn underwater(
@@ -29,16 +27,16 @@ pub(super) fn is_solid(block: BlockType) -> bool {
 }
 
 // Height above the sea where snow starts to settle in a temperate climate (temperature 0.5).
-pub(super) const SNOW_LINE: i64 = 220;
+pub(super) const SNOW_LINE: i64 = 950;
 
 // How many blocks the snow line climbs per unit of temperature.
-pub(super) const SNOW_LINE_PER_DEGREE: f64 = 800.0;
+pub(super) const SNOW_LINE_PER_DEGREE: f64 = 2600.0;
 
 // At or above this temperature it's too hot for snow, and the heights are bare rock.
 pub(super) const SNOW_MAX_TEMPERATURE: f32 = 0.62;
 
 // Above this height over the sea the ground is snow-capped in any climate, in the tropics too.
-pub(super) const SNOWCAP_ABOVE: i64 = 360;
+pub(super) const SNOWCAP_ABOVE: i64 = 1700;
 
 // Below this temperature even the grass is under a layer of snow.
 pub(super) const SNOWY_GRASS_TEMPERATURE: f32 = 0.25;
@@ -90,7 +88,7 @@ pub(super) fn snow_holding_slope(above_sea: i64, snow_line: i64) -> f64 {
 
 // The height, in blocks, the ground of a column `column_height` high is solid up to.
 pub(super) fn ground_top(column_height: i64) -> i64 {
-    column_height.max(SOLID_FLOOR)
+    column_height
 }
 
 pub(super) fn terrain_block(
@@ -203,8 +201,12 @@ pub(super) fn cut_cliff(
         (true, false) => BlockType::Stone,
         (false, true) => {
             if y < water_top {
-                // well above the world's floor, so `terrain_block` sees only the water here
-                terrain_block(y, 0, 0.0, temperature, water_top)
+                // The cut can be below zero: a dummy ground height would refill it with sand.
+                if y >= water_top - ice_depth(temperature) {
+                    BlockType::Ice
+                } else {
+                    BlockType::Water
+                }
             } else {
                 BlockType::Air
             }
@@ -277,4 +279,25 @@ pub fn surface_block(
         temperature,
         water_top,
     )
+}
+
+#[cfg(test)]
+mod negative_elevation_tests {
+    use super::*;
+
+    #[test]
+    fn underwater_cliff_cut_below_zero_fills_with_water() {
+        assert_eq!(
+            cut_cliff(BlockType::Stone, false, -40, 0.68, 0),
+            BlockType::Water
+        );
+        assert_eq!(
+            cut_cliff(BlockType::Stone, false, -1, 0.0, 0),
+            BlockType::Ice
+        );
+        assert_eq!(
+            cut_cliff(BlockType::Stone, false, 5, 0.68, 0),
+            BlockType::Air
+        );
+    }
 }

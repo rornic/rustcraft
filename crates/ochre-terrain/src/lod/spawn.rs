@@ -125,7 +125,10 @@ pub(super) fn known_empty(key: LodKey, regions: &RegionStore) -> bool {
     let Some((lowest, highest)) = range else {
         return false;
     };
-    let (bottom, top) = (min.y - cell, min.y + width + cell);
+    let (bottom, top) = (
+        min.y - cell,
+        min.y + width + cell * crate::generate::generator::SKIRT_CELLS as i64,
+    );
     // coarse nodes' canopies stand at least a cell tall
     let above_terrain = bottom > highest.round() as i64 + 1 + TREE_HEIGHT.max(cell);
     let in_air = bottom > WATER_LEVEL;

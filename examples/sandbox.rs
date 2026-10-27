@@ -37,7 +37,7 @@ fn setup_scene(
     );
 
     let game_world = ochre_world::load_world(layout.region_reach() as u32, settings.world);
-    let world_height = game_world.height;
+    let world_bounds = game_world.bounds;
     info!("world seed is {}", game_world.seed());
     let spawn = game_world.spawn();
     commands.insert_resource(game_world);
@@ -54,7 +54,7 @@ fn setup_scene(
         &mut commands,
         &renderer,
         settings.debug,
-        world_height,
+        world_bounds,
         &ShaderInputs {
             atlas: Some(images.add(block_atlas("assets/textures/blocks.png"))),
             clouds: clouds.clone(),

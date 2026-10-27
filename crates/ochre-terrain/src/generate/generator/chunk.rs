@@ -129,6 +129,9 @@ pub fn generate_chunk_with(
             let spring =
                 (columns.spring(x, z) != SpringPart::None).then(|| biomes.spring_block(biome));
             cells.extend((world_y..world_y + size).map(|y| {
+                if y < regions.terrain().bounds().min_y + 16 {
+                    return BlockType::CompactedStone;
+                }
                 if let Some(block) = spring.filter(|_| y == column_height - 1) {
                     return block;
                 }

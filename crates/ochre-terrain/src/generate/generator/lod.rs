@@ -33,7 +33,7 @@ use ochre_base::WATER_LEVEL;
 use std::cell::LazyCell;
 use std::sync::Arc;
 
-pub(super) const SKIRT_CELLS: i32 = 2;
+pub(crate) const SKIRT_CELLS: i32 = 3;
 
 // How far the tops of crown boxes are drawn in: a ball's, and a pine's nearer a cone's.
 const CROWN_TAPER: f32 = 0.5;

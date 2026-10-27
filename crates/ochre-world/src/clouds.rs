@@ -42,9 +42,9 @@ use ochre_terrain::material::{push_shader_defs, water_level};
 use ochre_terrain::settings::CloudResolution;
 
 /// Height of the clouds' undersides, far above the highest land; matches `BASE` in `cloud_march.wesl`.
-pub const CLOUD_BASE: f32 = 1500.0;
+pub const CLOUD_BASE: f32 = 2400.0;
 // Height the tallest clouds' tops reach; matches `TOP` in `cloud_march.wesl`.
-const CLOUD_TOP: f32 = 2100.0;
+const CLOUD_TOP: f32 = 3000.0;
 // The pattern's cells, in blocks, and how many it has each way: it repeats seamlessly.
 const CELL: f32 = 48.0;
 const PATTERN: usize = 256;
