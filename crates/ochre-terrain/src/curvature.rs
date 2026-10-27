@@ -17,10 +17,10 @@ use bevy::{
 
 use crate::chunk::CHUNK_SIZE;
 use crate::horizon::MAX_RENDER_DISTANCE;
-use ochre_base::{WATER_LEVEL, WORLD_HEIGHT};
+use ochre_base::WATER_LEVEL;
 
 // The tallest land can rise above the sea.
-const TALLEST: f32 = (WORLD_HEIGHT as i64 - WATER_LEVEL) as f32;
+const TALLEST: f32 = 576.0;
 /// Between these heights above sea level the bend eases in, so near the ground the world is
 /// drawn flat as ever and distant mountains don't sink, and from high up the horizon curves away.
 const FADE_START: f32 = 100.0;
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_the_top_of_the_world_sees_to_the_cap() {
         let blocks = MAX_RENDER_DISTANCE * CHUNK_SIZE as f32;
-        assert!((WORLD_CURVE.horizon_distance(WORLD_HEIGHT as f32) - blocks).abs() < 1.0);
+        assert!((WORLD_CURVE.horizon_distance(SEA + TALLEST) - blocks).abs() < 1.0);
         assert!((WORLD_CURVE.horizon_distance(SEA) - blocks / 2.0).abs() < 0.5);
     }
 

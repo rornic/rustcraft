@@ -9,14 +9,14 @@ use bevy::{
 use crate::generate::region_store::{resident_cap_for, RegionStore};
 use ochre_base::block::BlockType;
 use ochre_base::terrain_source::TerrainSource;
-use ochre_base::WORLD_HEIGHT;
+use ochre_base::WorldBounds;
 
 use crate::chunk::{ChunkCoordinate, ChunkData, CHUNK_SIZE};
 
 #[derive(Resource)]
 pub struct World {
     seed: u32,
-    pub height: u64,
+    pub bounds: WorldBounds,
     chunks: HashMap<ChunkCoordinate, Arc<ChunkData>>,
     // what lies below and above the world, which isn't generated, see `beyond_world`
     below: Arc<ChunkData>,
@@ -32,7 +32,8 @@ pub struct World {
 impl World {
     /// A world over `terrain`, spawning on its nearest lowland.
     pub fn with_terrain(seed: u32, region_distance: u32, terrain: Arc<dyn TerrainSource>) -> Self {
-        let height = WORLD_HEIGHT;
+        let bounds = terrain.bounds();
+        bounds.validate().expect("invalid world bounds");
         let (mut spawn_x, mut spawn_z, mut spawn_height) = terrain.find_spawn();
         // OCHRE_SPAWN=x,z[,lift] starts the player there, lift blocks over the ground (20 by default)
         let mut lift = 20.0;
@@ -47,7 +48,7 @@ impl World {
         let region_distance_blocks = region_distance as i64 * CHUNK_SIZE as i64;
         Self {
             seed,
-            height,
+            bounds,
             chunks: HashMap::new(),
             below: Arc::new(ChunkData::from_cells(std::iter::repeat_n(
                 BlockType::Stone,
@@ -83,14 +84,14 @@ impl World {
     }
 
     /// The chunk layers the world is generated in, from the bottom up.
-    pub fn layers(height: u64) -> std::ops::Range<i64> {
-        0..height.div_ceil(CHUNK_SIZE as u64) as i64
+    pub fn layers(bounds: WorldBounds) -> std::ops::Range<i64> {
+        bounds.layers()
     }
 
     // Below the world is solid and above it open sky, standing in for chunks that are never
     // generated, so the chunks at its bottom and top still have neighbours to mesh against.
     fn chunk(&self, coord: ChunkCoordinate) -> Option<&Arc<ChunkData>> {
-        let layers = Self::layers(self.height);
+        let layers = Self::layers(self.bounds);
         if coord.0.y < layers.start {
             Some(&self.below)
         } else if coord.0.y >= layers.end {
@@ -292,9 +293,9 @@ mod tests {
     #[test]
     fn test_beyond_the_world_is_solid_below_and_open_above() {
         let world = World::with_terrain(1, 16, ochre_world::worldmap::test_terrain(1));
-        let top = World::layers(world.height).end;
+        let top = World::layers(world.bounds).end;
         let (below, inside, above) = (
-            ChunkCoordinate(I64Vec3::new(3, -1, 2)),
+            ChunkCoordinate(I64Vec3::new(3, world.bounds.layers().start - 1, 2)),
             ChunkCoordinate(I64Vec3::new(3, 0, 2)),
             ChunkCoordinate(I64Vec3::new(3, top, 2)),
         );
@@ -302,6 +303,9 @@ mod tests {
         assert!(!world.is_chunk_generated(inside));
         assert!(world.get_chunk_data(below).unwrap().opaque());
         assert!(world.get_chunk_data(above).unwrap().empty());
-        assert_eq!(BlockType::Stone, world.get_block_at(I64Vec3::new(0, -1, 0)));
+        assert_eq!(
+            BlockType::Stone,
+            world.get_block_at(I64Vec3::new(0, world.bounds.min_y - 1, 0))
+        );
     }
 }

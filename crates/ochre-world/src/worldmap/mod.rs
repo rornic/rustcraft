@@ -12,7 +12,7 @@ pub mod gameplay;
 pub mod hydrology;
 pub mod io;
 mod source;
-mod terrain;
+pub mod tectonics;
 pub mod water;
 
 use std::sync::Arc;
@@ -22,16 +22,19 @@ pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 38;
+pub const GENERATOR_VERSION: u32 = 39;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, serde::Deserialize)]
 #[serde(default)]
 pub struct WorldConfig {
     /// Blocks across the square world, a multiple of `map_cell`.
     pub size: i64,
     /// Blocks across a map cell.
     pub map_cell: i64,
+    pub bounds: ochre_base::WorldBounds,
+    pub tectonics: tectonics::TectonicConfig,
+    pub climate: climate::ClimateConfig,
 }
 
 impl Default for WorldConfig {
@@ -39,12 +42,23 @@ impl Default for WorldConfig {
         Self {
             size: 65_536,
             map_cell: 32,
+            bounds: Default::default(),
+            tectonics: Default::default(),
+            climate: Default::default(),
         }
     }
 }
 
 impl WorldConfig {
     pub fn validate(&self) -> Result<(), String> {
+        self.bounds.validate()?;
+        if !(3..=64).contains(&self.tectonics.plates)
+            || !self.tectonics.relief.is_finite()
+            || !(0.0..=2.0).contains(&self.tectonics.relief)
+        {
+            return Err("tectonics requires 3–64 plates and finite relief in 0..=2".into());
+        }
+        self.climate.validate()?;
         if self.map_cell < 1 || self.size < 8 * self.map_cell || self.size % self.map_cell != 0 {
             return Err(format!(
                 "world size {} must be a multiple of the map cell {} and at least 8 cells across",
@@ -97,13 +111,19 @@ pub struct WorldMap {
     pub height: Vec<f32>,
     /// How far inland, -1 deep ocean to 1.
     pub continentalness: Vec<f32>,
+    /// Tectonic diagnostics, retained in the cache for worldviewer inspection.
+    pub plate: Vec<u8>,
+    pub boundary: Vec<u8>,
+    pub uplift: Vec<f32>,
+    /// Background precipitation before local freshwater effects, in calibrated relative units.
+    pub precipitation: Vec<f32>,
     /// Cells of land draining through each cell, itself included.
     pub flow: Vec<f32>,
     /// Which neighbour each cell drains into, as an index into `NEIGHBOURS`, or `NO_FLOW`.
     pub down: Vec<u8>,
     /// A `WaterCell` per cell.
     pub water_kind: Vec<u8>,
-    /// Height of the water's surface over each wet cell, 0 over dry ones.
+    /// Water surface elevation; use `water_kind` to distinguish dry cells from sea level zero.
     pub water_surface: Vec<f32>,
     /// Blocks across the river through each cell, 0 where there is none.
     pub river_width: Vec<f32>,
@@ -151,6 +171,10 @@ impl WorldMap {
             config,
             height: vec![0.0; cells],
             continentalness: vec![0.0; cells],
+            plate: vec![0; cells],
+            boundary: vec![0; cells],
+            uplift: vec![0.0; cells],
+            precipitation: vec![0.0; cells],
             flow: vec![0.0; cells],
             down: vec![NO_FLOW; cells],
             water_kind: vec![0; cells],
@@ -224,6 +248,16 @@ impl WorldMap {
 
     /// Catmull-Rom interpolation of the layer: smooth through every cell, no creases at cell edges.
     pub fn bicubic(&self, layer: &[f32], x: f64, z: f64) -> f32 {
+        self.interpolate(layer, x, z, catmull_rom)
+    }
+
+    fn interpolate(
+        &self,
+        layer: &[f32],
+        x: f64,
+        z: f64,
+        curve: impl Fn([f32; 4], f32) -> f32,
+    ) -> f32 {
         let (u, v) = self.to_cell(x, z);
         let (fu, fv) = (u.floor(), v.floor());
         let (cx, cz) = (fu as i64, fv as i64);
@@ -231,7 +265,7 @@ impl WorldMap {
         let mut rows = [0.0; 4];
         for (j, row) in rows.iter_mut().enumerate() {
             let z = cz + j as i64 - 1;
-            *row = catmull_rom(
+            *row = curve(
                 [
                     self.at(layer, cx - 1, z),
                     self.at(layer, cx, z),
@@ -241,17 +275,37 @@ impl WorldMap {
                 tx,
             );
         }
-        catmull_rom(rows, tz)
+        curve(rows, tz)
     }
 
     pub fn height_at(&self, x: f64, z: f64) -> f32 {
-        self.bicubic(&self.height, x, z)
+        self.interpolate(&self.height, x, z, monotone_cubic)
     }
 
     /// An `Arc`ed map, as every chunk task shares it.
     pub fn shared(self) -> Arc<Self> {
         Arc::new(self)
     }
+}
+
+// Harmonic-mean Hermite tangents preserve the endpoint range. Catmull-Rom can
+// overshoot a steep lake rim and create a dry hollow below its water outside the lake's cells.
+fn monotone_cubic(p: [f32; 4], t: f32) -> f32 {
+    let slope = |a: f32, b: f32| {
+        if a * b <= 0.0 {
+            0.0
+        } else {
+            2.0 * a * b / (a + b)
+        }
+    };
+    let m0 = slope(p[1] - p[0], p[2] - p[1]);
+    let m1 = slope(p[2] - p[1], p[3] - p[2]);
+    let t2 = t * t;
+    let t3 = t2 * t;
+    (2.0 * t3 - 3.0 * t2 + 1.0) * p[1]
+        + (t3 - 2.0 * t2 + t) * m0
+        + (-2.0 * t3 + 3.0 * t2) * p[2]
+        + (t3 - t2) * m1
 }
 
 fn catmull_rom(p: [f32; 4], t: f32) -> f32 {
@@ -274,6 +328,7 @@ pub fn test_terrain(seed: u32) -> Arc<WorldTerrain> {
             let config = WorldConfig {
                 size: 16_384,
                 map_cell: 32,
+                ..Default::default()
             };
             Arc::new(WorldTerrain::new(Arc::new(generate(seed, config))))
         })
@@ -337,16 +392,22 @@ pub(crate) fn par_rows<T: Send>(dim: usize, layer: &mut [T], f: impl Fn(usize, &
 /// Makes the whole map for `seed`.
 pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
     config.validate().expect("invalid world config");
-    let mut map = terrain::base_terrain(seed, config);
+    let mut map = tectonics::generate(seed, config);
     // water first, so basins are cut open before the rain wears the ground, then again over the
     // eroded ground, where the rivers really run
     hydrology::run(&mut map, false);
     erosion::run(&mut map);
-    terrain::raise_peaks(&mut map);
+    let floor = (config.bounds.min_y + 16) as f32;
+    for h in &mut map.height {
+        *h = h.max(floor);
+    }
     // ranges get their passes before the rivers settle into the ground they leave
     gameplay::carve_passes(&mut map);
     hydrology::scatter(&mut map);
     hydrology::run(&mut map, true);
+    for h in &mut map.height {
+        *h = h.max(floor);
+    }
     climate::run(&mut map);
     detail::roughness_layer(&mut map);
     gameplay::label(&mut map);
@@ -361,6 +422,7 @@ mod tests {
         let config = WorldConfig {
             size: 1024,
             map_cell: 32,
+            ..Default::default()
         };
         let dim = config.dim();
         let mut map = WorldMap::empty(1, config);
@@ -486,15 +548,31 @@ mod tests {
         assert!(WorldConfig::default().validate().is_ok());
         assert!(WorldConfig {
             size: 1000,
-            map_cell: 32
+            map_cell: 32,
+            ..Default::default()
         }
         .validate()
         .is_err());
         assert!(WorldConfig {
             size: 64,
-            map_cell: 32
+            map_cell: 32,
+            ..Default::default()
         }
         .validate()
         .is_err());
+    }
+
+    #[test]
+    fn steep_rim_interpolation_does_not_create_a_lower_hollow() {
+        for p in [
+            [-500.0, 10.0, 12.0, 900.0],
+            [900.0, 12.0, 10.0, -500.0],
+            [0.0, 20.0, 20.0, 1000.0],
+        ] {
+            for n in 0..=100 {
+                let h = monotone_cubic(p, n as f32 / 100.0);
+                assert!(h >= p[1].min(p[2]) - 1e-4 && h <= p[1].max(p[2]) + 1e-4);
+            }
+        }
     }
 }

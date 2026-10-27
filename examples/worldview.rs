@@ -33,6 +33,7 @@ struct World {
 
 #[derive(Default)]
 struct Server {
+    config: WorldConfig,
     world: Mutex<Option<(u32, Arc<World>)>>,
 }
 
@@ -45,10 +46,7 @@ impl Server {
             }
         }
         let start = Instant::now();
-        let map = Arc::new(ochre_world::worldmap::generate(
-            seed,
-            WorldConfig::default(),
-        ));
+        let map = Arc::new(ochre_world::worldmap::generate(seed, self.config));
         let terrain = Arc::new(WorldTerrain::new(map.clone()));
         let regions = RegionStore::new(terrain.clone()).with_resident_cap(512);
         println!("seed {seed} generated in {:.1?}", start.elapsed());
@@ -116,16 +114,18 @@ fn hsv(h: f32, s: f32, v: f32) -> Rgb {
 fn height_colour(above_sea: f32) -> Rgb {
     ramp(
         &[
-            (-380.0, [8.0, 18.0, 55.0]),
-            (-200.0, [14.0, 34.0, 90.0]),
+            (-900.0, [8.0, 18.0, 55.0]),
+            (-500.0, [14.0, 34.0, 90.0]),
             (-70.0, [25.0, 70.0, 140.0]),
             (-30.0, [55.0, 120.0, 180.0]),
             (0.0, [100.0, 170.0, 205.0]),
             (0.01, [210.0, 200.0, 140.0]),
             (2.0, [90.0, 150.0, 70.0]),
             (40.0, [60.0, 115.0, 50.0]),
-            (140.0, [125.0, 110.0, 95.0]),
-            (250.0, [245.0, 245.0, 250.0]),
+            (250.0, [100.0, 130.0, 70.0]),
+            (600.0, [150.0, 135.0, 100.0]),
+            (1000.0, [140.0, 130.0, 125.0]),
+            (1800.0, [245.0, 245.0, 250.0]),
         ],
         above_sea,
     )
@@ -185,7 +185,10 @@ fn feature_colour(k: FeatureKind) -> [u8; 3] {
 }
 
 fn fill(w: &World, v: &View, grid: &mut [Col], gw: usize) {
-    let (need_block, need_temp) = (v.has("blocks"), v.has("temperature"));
+    let (need_block, need_temp) = (
+        v.has("blocks"),
+        v.has("temperature") || v.has("surface_temperature"),
+    );
     let exact = v.scale <= 2.0;
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
     let rows = grid.len() / gw;
@@ -226,7 +229,7 @@ fn fill(w: &World, v: &View, grid: &mut [Col], gw: usize) {
                                 (h(6, 0) - h(-6, 0)).abs() / 6.0 + (h(0, 6) - h(0, -6)).abs() / 6.0;
                             let s = col.s;
                             let top = s.height.round() as i64;
-                            let water = if s.water_surface > 0.0 {
+                            let water = if s.water_kind != WaterKind::None {
                                 s.water_surface.round() as i64
                             } else {
                                 WATER_LEVEL
@@ -256,6 +259,62 @@ fn layer_pixel(w: &World, v: &View, name: &str, c: &Col) -> Option<(Rgb, f32)> {
     let above = (c.s.height - WATER_LEVEL as f64) as f32;
     let gray = |t: f32| [t.clamp(0.0, 1.0) * 255.0; 3];
     Some(match name {
+        "plates" => {
+            let (u, vv) = map.to_cell(c.x, c.z);
+            let max = (map.dim() - 1) as f64;
+            let i = map.index(
+                u.round().clamp(0.0, max) as usize,
+                vv.round().clamp(0.0, max) as usize,
+            );
+            (
+                hsv((map.plate[i] as f32 * 0.618034).fract(), 0.55, 0.9),
+                1.0,
+            )
+        }
+        "boundaries" => {
+            let (u, vv) = map.to_cell(c.x, c.z);
+            let max = (map.dim() - 1) as f64;
+            let i = map.index(
+                u.round().clamp(0.0, max) as usize,
+                vv.round().clamp(0.0, max) as usize,
+            );
+            let colour = match map.boundary[i] {
+                1 => [240.0, 70.0, 40.0],
+                2 => [220.0, 80.0, 240.0],
+                3 => [40.0, 220.0, 220.0],
+                4 => [250.0, 220.0, 60.0],
+                _ => return None,
+            };
+            (colour, 1.0)
+        }
+        "uplift" => (
+            lerp(
+                [25.0, 25.0, 45.0],
+                [255.0, 100.0, 35.0],
+                (map.bilinear(&map.uplift, c.x, c.z) / 1400.0).clamp(0.0, 1.0),
+            ),
+            1.0,
+        ),
+        "precipitation" => (
+            lerp(
+                [205.0, 175.0, 105.0],
+                [15.0, 70.0, 200.0],
+                map.bilinear(&map.precipitation, c.x, c.z).clamp(0.0, 1.0),
+            ),
+            1.0,
+        ),
+        "surface_temperature" => (
+            ramp(
+                &[
+                    (0.0, [40.0, 60.0, 220.0]),
+                    (0.5, [240.0, 240.0, 120.0]),
+                    (1.0, [230.0, 40.0, 30.0]),
+                ],
+                (c.temp - above.max(0.0) * ochre_world::worldmap::climate::LAPSE_PER_BLOCK)
+                    .clamp(0.0, 1.0),
+            ),
+            1.0,
+        ),
         "height" => (height_colour(above), 1.0),
         "blocks" => {
             let mut colour = block_colour(c.block)?;
@@ -436,7 +495,100 @@ fn render(w: &World, v: &View) -> Vec<u8> {
             }
         }
     }
+    if v.has("rivers") {
+        for (i, &width) in w.map.river_width.iter().enumerate() {
+            if width <= 0.0 || w.map.down[i] == 255 {
+                continue;
+            }
+            let dim = w.map.dim();
+            let (dx, dz) = NEIGHBOURS[w.map.down[i] as usize];
+            let (x, z) = ((i % dim) as i64, (i / dim) as i64);
+            let a = w.map.cell_centre(x as usize, z as usize);
+            let b = w.map.cell_centre((x + dx) as usize, (z + dz) as usize);
+            draw_line(
+                &mut out,
+                v,
+                a,
+                b,
+                (width as f64 / v.scale).clamp(1.5, 6.0),
+                [35, 170, 245],
+            );
+        }
+    }
+    if v.has("motion") {
+        let model = ochre_world::worldmap::tectonics::Tectonics::new(
+            w.map.seed,
+            w.map.config.size,
+            w.map.config.tectonics,
+        );
+        for p in &model.plates {
+            let length = p.vx.hypot(p.vz).max(0.01);
+            let (dx, dz) = (p.vx / length * 1600.0, p.vz / length * 1600.0);
+            for (sx, sz, ex, ez) in [
+                (p.x, p.z, p.x + dx, p.z + dz),
+                (
+                    p.x + dx,
+                    p.z + dz,
+                    p.x + dx * 0.7 - dz * 0.18,
+                    p.z + dz * 0.7 + dx * 0.18,
+                ),
+                (
+                    p.x + dx,
+                    p.z + dz,
+                    p.x + dx * 0.7 + dz * 0.18,
+                    p.z + dz * 0.7 - dx * 0.18,
+                ),
+            ] {
+                let steps = ((ex - sx).hypot(ez - sz) / v.scale).ceil().max(1.0) as usize;
+                for n in 0..=steps {
+                    let t = n as f64 / steps as f64;
+                    let x = ((sx + (ex - sx) * t - v.x) / v.scale) as i64;
+                    let z = ((sz + (ez - sz) * t - v.z) / v.scale) as i64;
+                    if x >= 0 && z >= 0 && x < v.w as i64 && z < v.h as i64 {
+                        let i = (z as usize * v.w + x as usize) * 3;
+                        out[i..i + 3].copy_from_slice(&[255, 255, 255]);
+                    }
+                }
+            }
+        }
+    }
     out
+}
+
+fn draw_line(out: &mut [u8], v: &View, a: (f64, f64), b: (f64, f64), width: f64, colour: [u8; 3]) {
+    let a = ((a.0 - v.x) / v.scale, (a.1 - v.z) / v.scale);
+    let b = ((b.0 - v.x) / v.scale, (b.1 - v.z) / v.scale);
+    let radius = (width * 0.5).ceil() as i64;
+    let margin = radius as f64;
+    if a.0.max(b.0) < -margin
+        || a.1.max(b.1) < -margin
+        || a.0.min(b.0) > v.w as f64 + margin
+        || a.1.min(b.1) > v.h as f64 + margin
+    {
+        return;
+    }
+    let steps = (a.0 - b.0).hypot(a.1 - b.1).ceil().max(1.0) as usize;
+    for n in 0..=steps {
+        let t = n as f64 / steps as f64;
+        let (cx, cz) = (
+            (a.0 + (b.0 - a.0) * t).round() as i64,
+            (a.1 + (b.1 - a.1) * t).round() as i64,
+        );
+        for dz in -radius..=radius {
+            for dx in -radius..=radius {
+                let (x, z) = (cx + dx, cz + dz);
+                if dx * dx + dz * dz <= radius * radius
+                    && x >= 0
+                    && z >= 0
+                    && x < v.w as i64
+                    && z < v.h as i64
+                {
+                    let i = (z as usize * v.w + x as usize) * 3;
+                    out[i..i + 3].copy_from_slice(&colour);
+                }
+            }
+        }
+    }
 }
 
 fn png(rgb: Vec<u8>, w: usize, h: usize) -> Vec<u8> {
@@ -485,6 +637,17 @@ fn info(w: &World, x: f64, z: f64) -> String {
         d => format!("{:?}", NEIGHBOURS[d as usize]),
     };
     let lines = [
+        format!(
+            "plate {} boundary {} uplift {:.1} precipitation {:.3}",
+            map.plate[i], map.boundary[i], map.uplift[i], map.precipitation[i]
+        ),
+        format!(
+            "wind ({:.2}, {:.2}), bounds {}..{}",
+            map.config.climate.wind_x,
+            map.config.climate.wind_z,
+            map.config.bounds.min_y,
+            map.config.bounds.max_y
+        ),
         format!("block x={bx} z={bz}  map cell {cx},{cz}"),
         format!(
             "ground height {:.2} (map bicubic {:.2}), top block y={ground}",
@@ -613,6 +776,34 @@ fn handle(server: &Server, mut stream: TcpStream) {
             "",
             include_bytes!("worldview.html"),
         ),
+        "/summary" => {
+            let world = server.world(seed);
+            let map = &world.map;
+            let mut low = f32::INFINITY;
+            let mut high = f32::NEG_INFINITY;
+            let mut peak = 0;
+            let mut land = 0;
+            for (i, &height) in map.height.iter().enumerate() {
+                low = low.min(height);
+                if height > high {
+                    high = height;
+                    peak = i;
+                }
+                land += (height >= WATER_LEVEL as f32) as usize;
+            }
+            let (x, z) = map.cell_centre(peak % map.dim(), peak / map.dim());
+            let river = map
+                .river_width
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let (rx, rz) = map.cell_centre(river % map.dim(), river / map.dim());
+            let river_cells = map.river_width.iter().filter(|&&w| w > 0.0).count();
+            let body = format!("seed: {seed}\nmin_above_sea: {:.1}\nmax_above_sea: {:.1}\nland_fraction: {:.3}\npeak_x: {x}\npeak_z: {z}\nriver_cells: {river_cells}\nmax_river_width_m: {:.1}\nriver_x: {rx}\nriver_z: {rz}\neffective_runoff_area_km2: {:.2}\n", low - WATER_LEVEL as f32, high - WATER_LEVEL as f32, land as f64 / map.height.len() as f64, map.river_width[river], map.flow[river] * (map.config.map_cell as f32).powi(2) / 1_000_000.0);
+            reply(stream, "200 OK", "text/plain", "", body.as_bytes());
+        }
         "/seed" => {
             server.world(seed);
             reply(stream, "200 OK", "text/plain", "", b"ok");
@@ -679,7 +870,14 @@ fn main() {
         .next()
         .map_or(42, |s| s.parse().expect("seed is a u32"));
     let port: u16 = args.next().map_or(8777, |s| s.parse().expect("port"));
-    let server = Arc::new(Server::default());
+    let config = ochre_engine::settings::Settings::read("assets/settings.toml")
+        .expect("read assets/settings.toml")
+        .world;
+    config.validate().expect("invalid world configuration");
+    let server = Arc::new(Server {
+        config,
+        ..Default::default()
+    });
     let listener = TcpListener::bind(("127.0.0.1", port)).expect("port in use");
     println!("http://127.0.0.1:{port}/?seed={seed}");
     for stream in listener.incoming().flatten() {

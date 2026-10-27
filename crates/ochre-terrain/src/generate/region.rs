@@ -31,7 +31,7 @@ pub struct Region {
     biomes: Vec<BiomeId>,
     // tree density, 0..1 as 0..=255
     trees: Vec<u8>,
-    // the height of the water over each column, 0 where there is none
+    // water elevation, NEG_INFINITY where there is none (zero is valid ocean water)
     water: Vec<f32>,
     // whether that water is a river's or lake's, not the sea's
     fresh: Vec<bool>,
@@ -101,7 +101,11 @@ pub fn compute_region(noise: &dyn TerrainSource, coord: RegionCoord) -> Region {
             heights.push(height);
             biomes.push(sample.biome);
             trees.push((sample.trees * 255.0).round() as u8);
-            water.push(sample.water_surface);
+            water.push(if sample.water_kind == WaterKind::None {
+                f32::NEG_INFINITY
+            } else {
+                sample.water_surface
+            });
             fresh.push(matches!(
                 sample.water_kind,
                 WaterKind::River | WaterKind::Lake
@@ -109,10 +113,10 @@ pub fn compute_region(noise: &dyn TerrainSource, coord: RegionCoord) -> Region {
             springs.push(sample.spring);
             let tile = &mut tile_range[((z / TILE_SIZE) * TILES + x / TILE_SIZE) as usize];
             // the sea is left out: nodes under it are known to be water, see `lod::spawn::known_empty`
-            let inland = if sample.water_kind == WaterKind::Ocean {
-                0.0
-            } else {
+            let inland = if matches!(sample.water_kind, WaterKind::Lake | WaterKind::River) {
                 sample.water_surface
+            } else {
+                f32::NEG_INFINITY
             };
             *tile = (tile.0.min(height), tile.1.max(height.max(inland)));
         }

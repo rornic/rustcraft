@@ -12,6 +12,24 @@ use ochre_base::WATER_LEVEL;
 pub(crate) const RIVER_MIN_AREA: f32 = 400_000.0;
 // No river is narrower, in blocks: one block wide doesn't fill with water reliably.
 const MIN_RIVER_WIDTH: f32 = 2.0;
+
+// A sortable IEEE key, including negative elevations. Raw float bits sort only positive values.
+fn height_key(value: f32) -> u32 {
+    let bits = value.to_bits();
+    if bits & 0x8000_0000 != 0 {
+        !bits
+    } else {
+        bits ^ 0x8000_0000
+    }
+}
+
+fn key_height(key: u32) -> f32 {
+    f32::from_bits(if key & 0x8000_0000 != 0 {
+        key ^ 0x8000_0000
+    } else {
+        !key
+    })
+}
 // Fewer cells than this in a river that never reaches water, and it is no river.
 const MIN_INLAND_RIVER_CELLS: usize = 30;
 
@@ -138,9 +156,9 @@ pub(super) fn priority_flood(height: &[f32], dim: usize, ties: &[u32]) -> Flood 
     let mut seen = vec![false; cells];
     let mut heap = BinaryHeap::new();
     let push = |heap: &mut BinaryHeap<_>, key: f32, i: usize| {
-        // positive floats order as their bits do, then ties go by `ties`
+        // Elevation first, including below sea level, then deterministic flood ties.
         heap.push((
-            Reverse(((key.to_bits() as u64) << 32) | ties[i] as u64),
+            Reverse(((height_key(key) as u64) << 32) | ties[i] as u64),
             i as u32,
         ));
     };
@@ -491,10 +509,10 @@ fn reroute(
     for &i in &sorted[..lake] {
         down[i] = NONE;
         seen.insert(i);
-        heap.push((Reverse(height[i].max(level).to_bits()), i));
+        heap.push((Reverse(height_key(height[i].max(level))), i));
     }
     while let Some((Reverse(bits), i)) = heap.pop() {
-        let filled = f32::from_bits(bits);
+        let filled = key_height(bits);
         let (x, z) = ((i % dim) as i64, (i / dim) as i64);
         for (dx, dz) in NEIGHBOURS {
             let (nx, nz) = (x + dx, z + dz);
@@ -506,7 +524,7 @@ fn reroute(
                 continue;
             }
             down[n] = i as u32;
-            heap.push((Reverse(height[n].max(filled).to_bits()), n));
+            heap.push((Reverse(height_key(height[n].max(filled))), n));
         }
     }
 }
@@ -713,11 +731,48 @@ mod tests {
     use super::*;
     use crate::worldmap::WorldConfig;
 
+    #[test]
+    fn signed_height_keys_sort_and_round_trip() {
+        let heights = [-1008.0, -20.0, -1.0, -0.0, 0.0, 0.5, 1000.0];
+        let keys = heights.map(height_key);
+        assert!(keys.windows(2).all(|p| p[0] < p[1]));
+        for h in heights {
+            assert_eq!(key_height(height_key(h)).to_bits(), h.to_bits());
+        }
+    }
+
+    #[test]
+    fn negative_ocean_shores_do_not_flood_lower_land_from_a_higher_shore() {
+        let dim = 5;
+        let mut heights = vec![100.0; dim * dim];
+        for z in 0..dim {
+            for x in 0..dim {
+                if x == 0 || z == 0 || x + 1 == dim || z + 1 == dim {
+                    heights[z * dim + x] = -20.0;
+                }
+            }
+        }
+        heights[0] = -1.0;
+        heights[6] = 80.0;
+        heights[12] = 5.0;
+        heights[13] = 1.0;
+        let ties = vec![0; heights.len()];
+        let flood = priority_flood(&heights, dim, &ties);
+        assert_eq!(flood.filled[12], 5.0);
+        assert_eq!(flood.filled[13], 1.0);
+        let shifted: Vec<_> = heights.iter().map(|h| h + 100.0).collect();
+        let other = priority_flood(&shifted, dim, &ties);
+        for i in 0..heights.len() {
+            assert_eq!(flood.filled[i] + 100.0, other.filled[i]);
+        }
+    }
+
     // A bowl with a rim, a notch in the rim, and a slope to the sea beyond it.
     fn valley() -> WorldMap {
         let config = WorldConfig {
             size: 64 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let dim = config.dim();
         let mut map = WorldMap::empty(1, config);
@@ -731,7 +786,7 @@ mod tests {
                 } else {
                     482.0 - (r - 12.0) * 2.0
                 };
-                map.height[z * dim + x] = h.max(400.0);
+                map.height[z * dim + x] = h.max(400.0) - 448.0;
             }
         }
         map
@@ -742,8 +797,9 @@ mod tests {
         let config = WorldConfig {
             size: 32_768,
             map_cell: 32,
+            ..Default::default()
         };
-        let mut map = crate::worldmap::terrain::base_terrain(7, config);
+        let mut map = crate::worldmap::tectonics::generate(7, config);
         run(&mut map, false);
         scatter(&mut map);
         let before = map.height.clone();
@@ -765,7 +821,7 @@ mod tests {
     fn test_basins_fill_to_lakes() {
         let mut map = valley();
         let dim = map.dim();
-        // an enclosed basin: floor 464, rim 482
+        // an enclosed basin: floor 16, rim 34
         run(&mut map, true);
         let middle = 32 * dim + 32;
         assert_eq!(WaterCell::Lake as u8, map.water_kind[middle]);
@@ -778,6 +834,7 @@ mod tests {
         let config = WorldConfig {
             size: 340 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let dim = config.dim();
         let mut map = WorldMap::empty(1, config);
@@ -785,9 +842,9 @@ mod tests {
             for x in 0..dim {
                 let r = ((x as f32 - 170.0).powi(2) + (z as f32 - 170.0).powi(2)).sqrt();
                 map.height[z * dim + x] = match r {
-                    r if r < 145.0 => 430.0 + r * 0.4,
-                    r if r < 160.0 => 700.0,
-                    r => (700.0 - (r - 160.0) * 30.0).max(400.0),
+                    r if r < 145.0 => -18.0 + r * 0.4,
+                    r if r < 160.0 => 252.0,
+                    r => (252.0 - (r - 160.0) * 30.0).max(-48.0),
                 };
             }
         }
@@ -796,7 +853,7 @@ mod tests {
         assert_eq!(WaterCell::Lake as u8, map.water_kind[middle]);
         // at least just over the sea, and no higher than its brim
         assert!(map.water_surface[middle] >= WATER_LEVEL as f32 + INLAND_SEA_ABOVE_SEA);
-        assert!(map.water_surface[middle] < 700.0);
+        assert!(map.water_surface[middle] < 252.0);
         // and no water stands over the dry ground beside it, which would end at the cells' edges, past the scatter the flood sees
         for i in 0..dim * dim {
             if map.water_kind[i] != WaterCell::Lake as u8 {
@@ -845,8 +902,9 @@ mod tests {
         let config = WorldConfig {
             size: 32_768,
             map_cell: 32,
+            ..Default::default()
         };
-        let mut map = crate::worldmap::terrain::base_terrain(7, config);
+        let mut map = crate::worldmap::tectonics::generate(7, config);
         run(&mut map, false);
         run(&mut map, true);
         let dim = map.dim();

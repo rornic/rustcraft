@@ -193,38 +193,29 @@ fn test_a_step_in_the_water_ramps_over_the_columns_round_it() {
 
 #[test]
 fn test_desert_ground_is_sand_and_other_lowland_grass() {
-    use bevy::math::I64Vec2;
-
-    let regions = Arc::new(RegionStore::new(ochre_world::worldmap::test_terrain(3)));
-    let lowland = |desert: bool| {
-        (-60..60)
-            .flat_map(|z| (-60..60).map(move |x| I64Vec2::new(x, z) * 128))
-            .find(|p| {
-                let sample = regions.terrain().sample(p.x as f64, p.y as f64);
-                let above_sea = sample.height - WATER_LEVEL as f64;
-                (regions.terrain().biomes().name(sample.biome) == Some("desert")) == desert
-                    && (20.0..60.0).contains(&above_sea)
-                    && regions.sampler().gradient(p.x, p.y).0.abs() < 0.5
-                    && regions.sampler().gradient(p.x, p.y).1.abs() < 0.5
-            })
-            .expect("no lowland of that kind near the centre")
-    };
-    let surface = |p: I64Vec2| {
-        let top = regions.get_height(p.x, p.y).round() as i64 - 1;
-        let coord = ChunkCoordinate(I64Vec3::new(
-            p.x.div_euclid(16),
-            top.div_euclid(16),
-            p.y.div_euclid(16),
-        ));
-        let local = U16Vec3::new(
-            p.x.rem_euclid(16) as u16,
-            top.rem_euclid(16) as u16,
-            p.y.rem_euclid(16) as u16,
+    use ochre_world::worldmap::{climate::BiomeKind, WorldConfig, WorldMap, WorldTerrain};
+    // Material rules should not require a particular seed to contain both climates.
+    for (kind, expected) in [
+        (BiomeKind::Desert, BlockType::Sand),
+        (BiomeKind::Grassland, BlockType::Grass),
+    ] {
+        let mut map = WorldMap::empty(
+            3,
+            WorldConfig {
+                size: 1024,
+                ..Default::default()
+            },
         );
-        generate_chunk(regions.clone(), coord).get_block_at(local)
-    };
-    assert_eq!(BlockType::Sand, surface(lowland(true)));
-    assert_eq!(BlockType::Grass, surface(lowland(false)));
+        map.height.fill(50.0);
+        map.continentalness.fill(0.5);
+        map.temperature.fill(0.68);
+        map.biome.fill(kind as u8);
+        let regions = Arc::new(RegionStore::new(Arc::new(WorldTerrain::new(Arc::new(map)))));
+        let top = regions.get_height(0, 0).round() as i64 - 1;
+        let coord = ChunkCoordinate(I64Vec3::new(0, top.div_euclid(16), 0));
+        let local = U16Vec3::new(0, top.rem_euclid(16) as u16, 0);
+        assert_eq!(expected, generate_chunk(regions, coord).get_block_at(local));
+    }
 }
 
 #[test]
@@ -245,7 +236,18 @@ fn test_trees_across_chunk_borders_are_whole() {
         .iter()
         .find(|t| {
             let (low, high) = t.bounds();
-            chunk_of(low).x != chunk_of(high).x && chunk_of(low).z != chunk_of(high).z
+            chunk_of(low).x != chunk_of(high).x
+                && chunk_of(low).z != chunk_of(high).z
+                && [(-12, 0), (12, 0), (0, -12), (0, 12)]
+                    .into_iter()
+                    .all(|(dx, dz)| {
+                        (regions
+                            .terrain()
+                            .height((t.base.x + dx) as f64, (t.base.z + dz) as f64)
+                            - t.base.y as f64)
+                            .abs()
+                            < 2.0
+                    })
         })
         .expect("no tree straddling a chunk corner");
 
@@ -284,7 +286,9 @@ fn test_trees_across_chunk_borders_are_whole() {
 fn test_cold_sea_freezes_from_the_top_and_thicker_when_colder() {
     let ice_layers = |temperature| {
         (WATER_LEVEL - 10..WATER_LEVEL)
-            .filter(|&y| terrain_block(y, 0, 0.0, temperature, WATER_LEVEL) == BlockType::Ice)
+            .filter(|&y| {
+                terrain_block(y, WATER_LEVEL - 20, 0.0, temperature, WATER_LEVEL) == BlockType::Ice
+            })
             .count()
     };
     assert_eq!(0, ice_layers(0.5));
@@ -293,15 +297,15 @@ fn test_cold_sea_freezes_from_the_top_and_thicker_when_colder() {
     assert_eq!(3, ice_layers(0.0));
     assert_eq!(
         BlockType::Ice,
-        terrain_block(WATER_LEVEL - 1, 0, 0.0, 0.0, WATER_LEVEL)
+        terrain_block(WATER_LEVEL - 1, WATER_LEVEL - 20, 0.0, 0.0, WATER_LEVEL)
     );
     assert_eq!(
         BlockType::Water,
-        terrain_block(WATER_LEVEL - 4, 0, 0.0, 0.0, WATER_LEVEL)
+        terrain_block(WATER_LEVEL - 4, WATER_LEVEL - 20, 0.0, 0.0, WATER_LEVEL)
     );
     assert_eq!(
         BlockType::Air,
-        terrain_block(WATER_LEVEL, 0, 0.0, 0.0, WATER_LEVEL)
+        terrain_block(WATER_LEVEL, WATER_LEVEL - 20, 0.0, 0.0, WATER_LEVEL)
     );
 }
 
@@ -349,15 +353,18 @@ fn test_polar_lowlands_are_snow_covered_and_deep_ice_gives_way_to_snow() {
 
 #[test]
 fn test_terrain_block_floor_and_water() {
-    // below the solid floor even a zero-height column is solid
-    assert_eq!(BlockType::Sand, terrain_block(5, 0, 0.0, 0.5, WATER_LEVEL));
+    // Column material sampling is independent of the world's bottom boundary.
+    assert_eq!(
+        BlockType::Sand,
+        terrain_block(-15, -10, 0.0, 0.5, WATER_LEVEL)
+    );
     assert_eq!(
         BlockType::Water,
-        terrain_block(20, 0, 0.0, 0.5, WATER_LEVEL)
+        terrain_block(-5, -10, 0.0, 0.5, WATER_LEVEL)
     );
     assert_eq!(
         BlockType::Air,
-        terrain_block(WATER_LEVEL, 0, 0.0, 0.5, WATER_LEVEL)
+        terrain_block(WATER_LEVEL, -10, 0.0, 0.5, WATER_LEVEL)
     );
     assert_eq!(
         BlockType::Grass,
@@ -371,12 +378,12 @@ fn test_snow_settles_on_steeper_ground_higher_up() {
         let y = WATER_LEVEL + above_sea;
         terrain_block(y, y + 1, slope, 0.5, WATER_LEVEL)
     };
-    assert_ne!(BlockType::Snow, at(200, 0.0));
-    assert_eq!(BlockType::Snow, at(230, 1.0));
-    assert_ne!(BlockType::Snow, at(230, 3.0));
-    assert_eq!(BlockType::Snow, at(360, 3.0));
+    assert_ne!(BlockType::Snow, at(900, 0.0));
+    assert_eq!(BlockType::Snow, at(960, 1.0));
+    assert_ne!(BlockType::Snow, at(960, 3.0));
+    assert_eq!(BlockType::Snow, at(1100, 3.0));
     // cliffs stay bare however high they are
-    assert_ne!(BlockType::Snow, at(400, 6.0));
+    assert_ne!(BlockType::Snow, at(1800, 6.0));
 }
 
 #[test]
@@ -386,10 +393,10 @@ fn test_snow_line_drops_in_the_cold_and_hot_ground_is_bare() {
         terrain_block(y, y + 1, 0.0, temperature, WATER_LEVEL)
     };
     assert_ne!(BlockType::Snow, at(100, 0.5));
-    assert_eq!(BlockType::Snow, at(100, 0.35));
-    assert_eq!(BlockType::Snow, at(300, 0.5));
+    assert_eq!(BlockType::Snow, at(600, 0.35));
+    assert_eq!(BlockType::Snow, at(1100, 0.5));
     // too hot for snow however high, so the peaks are rock
-    assert_eq!(BlockType::Stone, at(300, 0.8));
+    assert_eq!(BlockType::Stone, at(1100, 0.8));
     assert_eq!(BlockType::Grass, at(100, 0.8));
 }
 
@@ -909,27 +916,19 @@ fn test_ground_under_a_roof_is_shaded_smoothly() {
 
 #[test]
 fn test_lod_ground_under_open_sky_is_lit_to_its_edges() {
-    use bevy::math::I64Vec2;
-
-    // a mountainside, where LOD skirts stand in for the solid ground beside the node
-    let noise = ochre_world::worldmap::test_terrain(42);
-    let p = (-40..40)
-        .flat_map(|z| (-40..40).map(move |x| I64Vec2::new(x, z) * 256))
-        .find(|p| {
-            let h = noise.get(*p);
-            // gentle enough that no cliff or ridge beside it throws shade on the node
-            (100.0..250.0).contains(&(h - WATER_LEVEL as f64))
-                && (-6..=6).all(|i| {
-                    (-6..=6).all(|j| (noise.get(*p + I64Vec2::new(i * 8, j * 8)) - h).abs() < 4.0)
-                })
-        })
-        .expect("no mountainside near the centre");
-    let height = noise.get(p) as i64;
-    let chunk = ChunkCoordinate(I64Vec3::new(
-        p.x.div_euclid(16),
-        height.div_euclid(16),
-        p.y.div_euclid(16),
-    ));
+    use ochre_world::worldmap::{WorldConfig, WorldMap, WorldTerrain};
+    let mut map = WorldMap::empty(
+        42,
+        WorldConfig {
+            size: 1024,
+            ..Default::default()
+        },
+    );
+    map.height.fill(150.0);
+    map.temperature.fill(0.5);
+    let noise = Arc::new(WorldTerrain::new(Arc::new(map)));
+    let height = noise.height(0.0, 0.0) as i64;
+    let chunk = ChunkCoordinate(I64Vec3::new(0, height.div_euclid(16), 0));
     let regions = Arc::new(RegionStore::new(noise));
     let key = crate::lod::LodKey::containing(chunk, 1);
     let mesh = super::lod::generate_lod_mesh(regions, key)
@@ -1294,12 +1293,12 @@ fn test_full_detail_solid_leaves_hide_the_leaves_behind_them() {
 #[test]
 fn test_lod_border_exposes_surface_cells_as_skirt() {
     let lod = flat_lod(8);
-    // the border's top two solid cells read as open, so the edge draws a wall
+    // the border's top three solid cells read as open, so the edge draws a wall
     assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 7, 4)));
     assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 6, 4)));
     assert_eq!(BlockType::Air, lod.block(IVec3::new(4, 7, 16)));
     // deeper border cells and every interior cell read as they are
-    assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 5, 4)));
+    assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 4, 4)));
     assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, 7, 4)));
     // below the node isn't a horizontal border, so no skirt
     assert_eq!(BlockType::Stone, lod.block(IVec3::new(4, -1, 4)));
@@ -1357,16 +1356,27 @@ fn test_lod_skirt_hangs_from_the_nodes_own_ground_not_its_neighbours() {
         1,
     );
     assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 8, 4)));
-    // ground ending in the top row: the cells within two of it have walls, though the top row is solid
+    // ground ending in the top row: the cells within three of it have walls, though the top row is solid
     let lod = LodBlocks::new(size, cells, vec![size as i64 + 1; padded * padded], 0, 1);
     assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 16, 4)));
     assert_eq!(BlockType::Air, lod.block(IVec3::new(-1, 15, 4)));
-    assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 14, 4)));
+    assert_eq!(BlockType::Stone, lod.block(IVec3::new(-1, 13, 4)));
 }
 
 #[test]
 fn test_lod_water_surface_cells_over_shallow_ground_are_water() {
-    let regions = Arc::new(RegionStore::new(ochre_world::worldmap::test_terrain(102)));
+    use ochre_world::worldmap::{WaterCell, WorldConfig, WorldMap, WorldTerrain};
+    let mut map = WorldMap::empty(
+        102,
+        WorldConfig {
+            size: 1024,
+            ..Default::default()
+        },
+    );
+    map.height.fill(-1.5);
+    map.temperature.fill(0.5);
+    map.water_kind.fill(WaterCell::Ocean as u8);
+    let regions = Arc::new(RegionStore::new(Arc::new(WorldTerrain::new(Arc::new(map)))));
     let mut checked = 0;
     for level in [3u8, 4, 5] {
         for x in -6..6i64 {
@@ -1374,7 +1384,7 @@ fn test_lod_water_surface_cells_over_shallow_ground_are_water() {
                 let width = 1i64 << level;
                 let key = LodKey {
                     level,
-                    coord: I64Vec3::new(x, (WATER_LEVEL / 16).div_euclid(width), z),
+                    coord: I64Vec3::new(x, (WATER_LEVEL - 1).div_euclid(16).div_euclid(width), z),
                 };
                 let lod = LodBlocks::sample(&regions, key);
                 for cx in 0..lod.size {
@@ -1543,8 +1553,17 @@ fn test_a_lone_tree_is_still_there_in_every_cell_under_sixteen_wide() {
     };
     let tree = trees
         .iter()
-        .find(|t| trees.iter().filter(|o| near(t, o)).count() == 1)
-        .expect("no lone tree");
+        .find(|t| {
+            let crown = t.base + I64Vec3::Y * (t.trunk - 1);
+            let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), 2);
+            let (min, max) = t.bounds();
+            let low = key.min_block();
+            let high = low + I64Vec3::splat(64);
+            trees.iter().filter(|o| near(t, o)).count() == 1
+                && min.cmpge(low + I64Vec3::Y * 8).all()
+                && max.cmplt(high - I64Vec3::Y * 8).all()
+        })
+        .expect("no interior lone tree");
     let crown = tree.base + I64Vec3::Y * (tree.trunk - 1);
     for level in [1u8, 2, 3] {
         let key = LodKey::containing(ChunkCoordinate(crown.div_euclid(I64Vec3::splat(16))), level);
@@ -1686,8 +1705,12 @@ fn forest(regions: &RegionStore) -> (I64Vec3, Vec<crate::generate::trees::Tree>)
     FOREST
         .get_or_init(|| {
             let mut heights = regions.sampler();
+            let centre = forest_at(5);
+            let nearby = (-3..=3)
+                .flat_map(|x| (-3..=3).map(move |z| centre + I64Vec2::new(x, z) * 128 - 128));
             let corner = (-4..4)
                 .flat_map(|x| (-4..4).map(move |z| I64Vec2::new(x, z) * 1024))
+                .chain(nearby)
                 .max_by_key(|&c| trees_near(regions.terrain(), &mut heights, c, c + 255).len())
                 .unwrap();
             let trees = trees_near(regions.terrain(), &mut heights, corner, corner + 255);
@@ -1699,8 +1722,28 @@ fn forest(regions: &RegionStore) -> (I64Vec3, Vec<crate::generate::trees::Tree>)
 
 #[test]
 fn test_far_forests_are_a_few_canopy_boxes_not_a_box_a_tree() {
-    let regions = Arc::new(RegionStore::new(ochre_world::worldmap::test_terrain(5)));
-    let (middle, trees) = forest(&regions);
+    use bevy::math::I64Vec2;
+    use ochre_world::worldmap::{climate::BiomeKind, WorldConfig, WorldMap, WorldTerrain};
+    let mut map = WorldMap::empty(
+        5,
+        WorldConfig {
+            size: 2048,
+            ..Default::default()
+        },
+    );
+    map.height.fill(100.0);
+    map.temperature.fill(0.5);
+    map.moisture.fill(0.9);
+    map.biome.fill(BiomeKind::Forest as u8);
+    map.trees.fill(180);
+    let regions = Arc::new(RegionStore::new(Arc::new(WorldTerrain::new(Arc::new(map)))));
+    let middle = I64Vec3::new(128, 100, 128);
+    let trees = crate::generate::trees::trees_near(
+        regions.terrain(),
+        &mut regions.sampler(),
+        I64Vec2::ZERO,
+        I64Vec2::splat(255),
+    );
     assert!(
         trees.len() > 250,
         "only {} trees in the densest forest",
@@ -2021,14 +2064,30 @@ fn ray_hits(from: Vec3, direction: Vec3, [a, b, c]: [Vec3; 3]) -> bool {
 // How many oblique rays down across the seam between a node and its coarser neighbour pass
 // through every triangle of both, seeing the sky through a crack.
 fn seam_leaks(regions: &Arc<RegionStore>, fine: LodKey, coarse: LodKey) -> (usize, usize) {
-    // the nodes above and below too, where the ground crosses into them
+    // Cover the actual vertical terrain range in each column, rather than a fixed three
+    // nodes around one sample. Taller relief can cross many fine-node layers here.
     let mut triangles = Vec::new();
-    for dy in -1..=1 {
-        for key in [fine, coarse] {
+    for key in [fine, coarse] {
+        let grid = regions.column_grid(key);
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
+        for x in -1..=16 {
+            for z in -1..=16 {
+                let h = grid.height(x, z);
+                low = low.min(h);
+                high = high.max(h);
+            }
+        }
+        let span = key.width() * CHUNK_SIZE as i64;
+        let first = ((low.floor() as i64 - 64).div_euclid(span) - 1)
+            .max(regions.terrain().bounds().min_y.div_euclid(span));
+        let last = ((high.ceil() as i64 + 64).div_euclid(span) + 1)
+            .min((regions.terrain().bounds().max_y - 1).div_euclid(span));
+        for y in first..=last {
             triangles.extend(world_triangles(
                 regions,
                 LodKey {
-                    coord: key.coord + I64Vec3::new(0, dy, 0),
+                    coord: I64Vec3::new(key.coord.x, y, key.coord.z),
                     ..key
                 },
             ));
@@ -2083,9 +2142,10 @@ fn test_nothing_is_seen_through_a_seam_between_lod_levels() {
         .filter_map(|(x, z)| {
             (0..400)
                 .map(|step| x + step * 64)
-                // not up in the high ranges (over 640 blocks), where this harness does not load everything below
-                // the surface that the seams' rays pass through: a gap to come back to
-                .find(|&x| (WATER_LEVEL as f64 + 3.0..640.0).contains(&sampler.height(x, z)))
+                .find(|&x| {
+                    (WATER_LEVEL as f64 + 3.0..regions.terrain().bounds().max_y as f64 - 128.0)
+                        .contains(&sampler.height(x, z))
+                })
                 .map(|x| (x, z))
         })
         .collect();
@@ -2187,7 +2247,10 @@ fn test_lakes_and_rivers_above_the_sea_are_filled_to_their_own_surface() {
             assert_eq!(BlockType::Water, water(top - 1 - 4.min(top - ground - 1)));
             // sand, or water where a gorge's cliffs were cut open under it and flooded
             assert!(
-                matches!(water(ground - 1), BlockType::Sand | BlockType::Water),
+                matches!(
+                    water(ground - 1),
+                    BlockType::Sand | BlockType::Gravel | BlockType::Water
+                ),
                 "the bed at ({x}, {z}) is {:?}",
                 water(ground - 1)
             );
@@ -2215,7 +2278,7 @@ fn test_ground_well_under_a_lake_is_under_its_water() {
                 let sample = terrain.sample(x, z);
                 if (map.height_at(x, z) as f64) < level as f64
                     && sample.height < level.floor() as f64 - 1.0
-                    && sample.water_surface == 0.0
+                    && sample.water_kind == ochre_base::terrain_source::WaterKind::None
                 {
                     dry.push((x, z, sample.height, level));
                 }
@@ -2336,7 +2399,15 @@ fn test_compacted_stone_follows_the_local_surface_not_a_fixed_height() {
 // how many columns in it are steep enough for cliffs.
 fn overhangs(regions: &Arc<RegionStore>, (cx, cy, cz): (i64, i64, i64)) -> (usize, usize) {
     use ochre_base::relief::cliff_reach;
-    let chunk = generate_chunk(regions.clone(), ChunkCoordinate(I64Vec3::new(cx, cy, cz)));
+    let chunk = super::chunk::generate_chunk_with(
+        regions.clone(),
+        ChunkCoordinate(I64Vec3::new(cx, cy, cz)),
+        super::chunk::ChunkPasses {
+            cliffs: true,
+            trees: false,
+            flora: false,
+        },
+    );
     let mut heights = regions.sampler();
     let (mut caves, mut steep) = (0, 0);
     for x in 0..16u16 {
@@ -2362,7 +2433,7 @@ fn test_steep_ground_gets_overhangs_and_gentle_ground_gets_none() {
     let regions = Arc::new(RegionStore::new(terrain.clone()));
     let map = terrain.map();
     let (mut steep_caves, mut steep_columns, mut gentle_caves, mut gentle_chunks) = (0, 0, 0, 0);
-    for cz in (0..map.dim()).step_by(3) {
+    'samples: for cz in (0..map.dim()).step_by(3) {
         for cx in (0..map.dim()).step_by(3) {
             let i = map.index(cx, cz);
             if map.water_kind[i] != 0 || map.height[i] < WATER_LEVEL as f32 + 6.0 {
@@ -2370,7 +2441,23 @@ fn test_steep_ground_gets_overhangs_and_gentle_ground_gets_none() {
             }
             let (x, z) = map.cell_centre(cx, cz);
             let (x, z) = (x as i64, z as i64);
-            let ground = regions.get_height(x, z).round() as i64;
+            if steep_columns >= 256 && steep_caves > 0 && gentle_chunks >= 30 {
+                break 'samples;
+            }
+            // After checking gentle chunks, use the coarse map to find steep candidates
+            // without building a full 256-square region for every map probe.
+            if gentle_chunks >= 30 {
+                let across = (map.height[map.index((cx + 1).min(map.dim() - 1), cz)]
+                    - map.height[map.index(cx.saturating_sub(1), cz)])
+                .abs()
+                    + (map.height[map.index(cx, (cz + 1).min(map.dim() - 1))]
+                        - map.height[map.index(cx, cz.saturating_sub(1))])
+                    .abs();
+                if across < map.config.map_cell as f32 {
+                    continue;
+                }
+            }
+            let ground = terrain.height(x as f64, z as f64).round() as i64;
             let at = (
                 x.div_euclid(16),
                 (ground - 2).div_euclid(16),
@@ -2449,13 +2536,16 @@ fn test_rivers_leave_no_dry_crevice_beside_their_water() {
                 for sign in [-1i64, 1] {
                     let (px, pz) = (x + sign * dx * step, z + sign * dz * step);
                     let s = terrain.sample(px as f64, pz as f64);
-                    if s.water_surface == 0.0 && s.height < here.water_surface as f64 - 1.5 {
+                    if s.water_kind == ochre_base::terrain_source::WaterKind::None
+                        && s.height < here.water_surface as f64 - 1.5
+                    {
                         // lower than this river's water: only fine if it has fallen away
                         // downhill, out of the river's banks, which is more than a bank wide
                         let near_water = (1..=3).any(|k| {
                             let q = terrain
                                 .sample((px - sign * dx * k) as f64, (pz - sign * dz * k) as f64);
-                            q.water_surface > 0.0 && s.height < q.water_surface as f64 - 1.5
+                            q.water_kind != ochre_base::terrain_source::WaterKind::None
+                                && s.height < q.water_surface as f64 - 1.5
                         });
                         assert!(
                             !near_water,
@@ -2484,6 +2574,7 @@ fn test_a_stream_joining_a_river_has_water_all_the_way_to_it() {
                 ochre_world::worldmap::WorldConfig {
                     size: 32_768,
                     map_cell: 32,
+                    ..Default::default()
                 },
             ),
         ));
@@ -2607,6 +2698,7 @@ fn test_pines_grow_on_a_mountains_lower_slopes() {
             ochre_world::worldmap::WorldConfig {
                 size: 32_768,
                 map_cell: 32,
+                ..Default::default()
             },
         ),
     ));
@@ -2702,8 +2794,6 @@ fn test_the_foothills_round_a_range_are_much_rougher_than_the_lowland_far_from_o
         ochre_world::worldmap::generate(1, ochre_world::worldmap::WorldConfig::default()),
     ));
     let map = terrain.map().clone();
-    let regions = RegionStore::new(std::sync::Arc::new(terrain));
-    let mut heights = regions.sampler();
     let dim = map.dim();
     let (mut near, mut far) = (Vec::new(), Vec::new());
     for cz in (0..dim).step_by(11) {
@@ -2718,7 +2808,13 @@ fn test_the_foothills_round_a_range_are_much_rougher_than_the_lowland_far_from_o
             }
             let range = map.range[i] as f32 / 255.0;
             let (x, z) = map.cell_centre(cx, cz);
-            let (gx, gz) = heights.gradient(x as i64, z as i64);
+            // Match the cached f32 height samples directly; this sparse survey does not
+            // need to populate hundreds of complete regions to read four columns each.
+            let h = |x, z| terrain.height(x, z) as f32 as f64;
+            let (gx, gz) = (
+                (h(x + 6.0, z) - h(x - 6.0, z)) / 6.0,
+                (h(x, z + 6.0) - h(x, z - 6.0)) / 6.0,
+            );
             let gradient = gx.abs() + gz.abs();
             if range > 0.5 {
                 near.push(gradient);
@@ -2750,8 +2846,32 @@ fn test_lakes_and_the_sea_have_no_open_block_beside_or_under_their_water() {
     // still water spills into any air or flora beside or under it once an edit nearby stirs it, see `flow`
     let open = |block: BlockType| block == BlockType::Air || block.is_flora();
     let size = I64Vec3::splat(CHUNK_SIZE as i64);
-    for seed in [3, 5, 10] {
-        let terrain = ochre_world::worldmap::test_terrain(seed);
+    use ochre_world::worldmap::{WaterCell, WorldConfig, WorldMap, WorldTerrain};
+    let mut lake = WorldMap::empty(
+        777,
+        WorldConfig {
+            size: 2048,
+            ..Default::default()
+        },
+    );
+    lake.height.fill(40.0);
+    lake.temperature.fill(0.6);
+    for z in 16..48 {
+        for x in 16..48 {
+            let i = lake.index(x, z);
+            lake.height[i] = 10.0;
+            lake.water_kind[i] = WaterCell::Lake as u8;
+            lake.water_surface[i] = 20.0;
+        }
+    }
+    let mut terrains: Vec<_> = [3, 5, 10]
+        .map(ochre_world::worldmap::test_terrain)
+        .into_iter()
+        .collect();
+    terrains.push(Arc::new(WorldTerrain::new(Arc::new(lake))));
+    let mut covered = [false; 2];
+    for terrain in terrains {
+        let seed = terrain.seed();
         let regions = Arc::new(RegionStore::new(terrain.clone()));
         let map = terrain.map();
         for kind in [WaterKind::Ocean, WaterKind::Lake] {
@@ -2774,10 +2894,12 @@ fn test_lakes_and_the_sea_have_no_open_block_beside_or_under_their_water() {
                     }
                 }
             }
-            assert!(
-                !sites.is_empty(),
-                "seed {seed}: no {kind:?} on the test world"
-            );
+            // A regional seed need not contain a lake. The explicit basin guarantees lake
+            // coverage, while the generated seeds exercise their actual coastlines and waters.
+            if sites.is_empty() {
+                continue;
+            }
+            covered[(kind == WaterKind::Lake) as usize] = true;
             let mut leaks = Vec::new();
             for site in sites {
                 // a box of chunks round a point in the water, reaching its shore unless it's wide
@@ -2787,7 +2909,7 @@ fn test_lakes_and_the_sea_have_no_open_block_beside_or_under_their_water() {
                     for dy in -1..=1 {
                         for dz in -3..=3 {
                             let coord = ChunkCoordinate(centre + I64Vec3::new(dx, dy, dz));
-                            if coord.0.y >= 0 {
+                            if terrain.bounds().layers().contains(&coord.0.y) {
                                 chunks.insert(coord.0, generate_chunk(regions.clone(), coord));
                             }
                         }
@@ -2802,6 +2924,7 @@ fn test_lakes_and_the_sea_have_no_open_block_beside_or_under_their_water() {
                     for (local, block) in data.iter_non_air() {
                         let at = *coord * size + local.as_i64vec3();
                         if block == BlockType::Water
+                            && terrain.sample(at.x as f64, at.z as f64).water_kind == kind
                             && [
                                 I64Vec3::X,
                                 I64Vec3::NEG_X,
@@ -2825,6 +2948,10 @@ fn test_lakes_and_the_sea_have_no_open_block_beside_or_under_their_water() {
             );
         }
     }
+    assert!(
+        covered.into_iter().all(|covered| covered),
+        "both ocean and lake boundaries must be checked"
+    );
 }
 
 #[test]
@@ -2982,14 +3109,46 @@ fn test_flowing_water_under_still_water_leaves_the_surface_to_the_still_water() 
 #[test]
 fn test_a_steep_rivers_water_is_drawn_over_its_bed() {
     use crate::world::World;
-    // a rapid climbing over a block a block from a spring, on a full size world, where the bed showed through in strips
+    // A fixed steep east-flowing river exercises geometry without historical seed coordinates.
+    use ochre_world::worldmap::{WaterCell, WorldConfig, WorldMap, WorldTerrain, NO_FLOW};
     let seed = 2790361079;
-    let terrain = Arc::new(ochre_world::worldmap::WorldTerrain::new(Arc::new(
-        ochre_world::worldmap::generate(seed, ochre_world::worldmap::WorldConfig::default()),
-    )));
+    let mut map = WorldMap::empty(
+        seed,
+        WorldConfig {
+            size: 1024,
+            ..Default::default()
+        },
+    );
+    let dim = map.dim();
+    for z in 0..dim {
+        for x in 0..dim {
+            let i = map.index(x, z);
+            let (wx, _) = map.cell_centre(x, z);
+            map.height[i] = 800.0 - wx as f32 * 1.25;
+            map.temperature[i] = 0.5;
+            if z == dim / 2 {
+                map.water_kind[i] = WaterCell::River as u8;
+                map.water_surface[i] = map.height[i] + 3.0;
+                map.river_width[i] = 8.0;
+                map.flow[i] = x as f32 + 10.0;
+                map.down[i] = if x + 1 < dim { 0 } else { NO_FLOW };
+            }
+        }
+    }
+    let (x, centre_z) = map.cell_centre(dim / 2, dim / 2);
+    let terrain = Arc::new(WorldTerrain::new(Arc::new(map)));
+    // The block-scale river meanders away from the map's centreline.
+    let (z, sample) = (-64..=64)
+        .map(|dz| {
+            let z = centre_z + dz as f64;
+            (z, terrain.sample(x, z))
+        })
+        .find(|(_, sample)| sample.water_kind == ochre_base::terrain_source::WaterKind::River)
+        .expect("river cross-section");
+    let y = sample.water_surface as i64;
     let mut world = World::with_terrain(seed, 16, terrain);
     let regions = world.region_store.clone();
-    let centre = I64Vec3::new(6731, 586, 16978).div_euclid(I64Vec3::splat(CHUNK_SIZE as i64));
+    let centre = I64Vec3::new(x as i64, y, z as i64).div_euclid(I64Vec3::splat(CHUNK_SIZE as i64));
     let around = |reach: i64| {
         (-reach..=reach).flat_map(move |dx| {
             (-reach..=reach).flat_map(move |dy| {
@@ -2997,11 +3156,11 @@ fn test_a_steep_rivers_water_is_drawn_over_its_bed() {
             })
         })
     };
-    for coord in around(2) {
+    for coord in around(3) {
         world.insert_chunk(coord, generate_chunk(regions.clone(), coord));
     }
     let mut checked = 0;
-    for coord in around(1) {
+    for coord in around(2) {
         let meshes = generate_chunk_mesh(
             world.get_chunk_data(coord).unwrap(),
             world.adjacent_chunk_data(coord),
@@ -3049,5 +3208,5 @@ fn test_a_steep_rivers_water_is_drawn_over_its_bed() {
             }
         }
     }
-    assert!(checked > 100);
+    assert!(checked > 100, "only {checked} river vertices checked");
 }

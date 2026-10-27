@@ -393,6 +393,7 @@ fn main() {
     let config = WorldConfig {
         size: args.size,
         map_cell: args.cell,
+        ..Default::default()
     };
     let start = std::time::Instant::now();
     let map = std::sync::Arc::new(ochre_world::worldmap::generate(args.seed, config));

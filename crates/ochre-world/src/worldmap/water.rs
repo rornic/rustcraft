@@ -738,6 +738,7 @@ mod tests {
         let config = WorldConfig {
             size: 32 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let mut map = WorldMap::empty(1, config);
         // east along row 10 to the corner at cell 15, then south down column 15
@@ -778,6 +779,7 @@ mod tests {
         let config = WorldConfig {
             size: 32 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let mut map = WorldMap::empty(1, config);
         // a river running east along row 10, from cell 5 to cell 15

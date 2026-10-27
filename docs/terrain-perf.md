@@ -248,3 +248,30 @@ are unchanged. Pixel counts depend on aspect ratio; this caps width rather than 
 The user reported that both 960×540 and 640×360 retained the desired cloud quality. The second
 cap uses 56% fewer main-march rays than the first at 16:9. GPU timings and frame-time p99 were
 not measured, so no proportional timing improvement is claimed. See `docs/clouds.md` for presets.
+
+## Tectonic MVP checkpoint (2026-10-27)
+
+Release Rust 1.97.1, managed CPU-only environment (2 vCPUs), seed 1, render distance
+1024. `flight --seed 1 --secs 3` uses 179 frames per leg, separate world caches and
+unchanged renderer settings. Before is 96679cb; after is the version-39 tectonic MVP.
+Geometry and spawn surroundings differ, so vertex equality does not apply. These short
+runs are diagnostic, not a stable frame-time benchmark or GPU measurement.
+
+| Headless frame p99 (ms) | Before | After |
+| --- | ---: | ---: |
+| Loading | 8.101 | 6.298 |
+| Walking | 5.730 | 4.816 |
+| Sprinting | 7.791 | 5.779 |
+| High-altitude flight | 11.997 | 41.383 |
+
+Walk-stage mesh storage was 158 MB before and 159 MB after. High-altitude LOD throughput
+fell from 257.0 to 110.5 meshes/s. The larger vertical bounds and increased relief change
+the scene and loading workload; they are hypotheses to profile, not an established cause
+of the p99 regression. This checkpoint is a draft and should not merge until that
+regression is understood or reduced. Normal ground legs do not establish high-altitude
+performance.
+
+Final viewer generation times were 13.0 s (42), 11.4 s (1) and 19.1 s (1337), without
+concurrent builds/tests. Earlier baseline captures were not all taken under equivalent
+load, so no generation speedup or regression ratio is claimed. See
+[tectonic-mvp.md](tectonic-mvp.md) for same-scale visual comparisons and open issues.

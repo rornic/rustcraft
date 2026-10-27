@@ -384,6 +384,7 @@ mod tests {
         let config = WorldConfig {
             size: 256 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let dim = config.dim();
         let mut map = WorldMap::empty(3, config);
@@ -393,8 +394,7 @@ mod tests {
                 let r = (fx * fx + fz * fz).sqrt();
                 // a cone with ridges, on a plain just over the sea
                 let ridges = ((fz.atan2(fx) * 7.0).sin() * 0.5 + 0.5) * (1.0 - r / 120.0).max(0.0);
-                map.height[z * dim + x] =
-                    460.0 + (1.0 - r / 120.0).max(0.0) * 220.0 + ridges * 80.0;
+                map.height[z * dim + x] = 12.0 + (1.0 - r / 120.0).max(0.0) * 220.0 + ridges * 80.0;
             }
         }
         map
@@ -417,14 +417,14 @@ mod tests {
         let dim = map.dim();
         // some sea around the edge
         for i in 0..dim {
-            map.height[i] = 400.0;
+            map.height[i] = -48.0;
         }
         let sea_row: Vec<f32> = map.height[..dim].to_vec();
         let before: f64 = map.height.iter().map(|&h| h as f64).sum();
         run(&mut map);
         let after: f64 = map.height.iter().map(|&h| h as f64).sum();
         assert!(
-            ((after - before) / before).abs() < 0.01,
+            (after - before).abs() < 3.0 * map.height.len() as f64,
             "{before} -> {after}"
         );
         assert_eq!(sea_row, map.height[..dim], "the sea floor is not eroded");
@@ -435,6 +435,7 @@ mod tests {
         let config = WorldConfig {
             size: 32 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let mut map = WorldMap::empty(1, config);
         map.height.fill(500.0);

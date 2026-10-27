@@ -9,20 +9,41 @@ use ochre_base::noise::fbm;
 use ochre_base::WATER_LEVEL;
 
 /// Warmth lost per block of height, the rate snow lines climb at, see `generator::terrain`.
-pub const LAPSE_PER_BLOCK: f32 = 1.0 / 800.0;
+pub const LAPSE_PER_BLOCK: f32 = 1.0 / 3500.0;
 
-// Moisture the wind picks up crossing a cell of warm sea, and how much of what it carries falls
-// on a cell of flat land and on a cell rising a full OROGRAPHIC_RISE.
-const EVAPORATION: f32 = 0.1;
-const BASE_RAIN: f32 = 0.011;
-const OROGRAPHIC_RAIN: f32 = 0.12;
-const OROGRAPHIC_RISE: f32 = 18.0;
-// The share of rain that evaporates again off the land and carries on inland.
-const RECYCLED: f32 = 0.72;
-// The rain this share of the way up the land's rainfall is as wet as it gets.
-const WETTEST_PERCENTILE: f64 = 0.9;
-// Moisture is blurred across the wind this many cells each way, so rows of sweeps don't streak.
-const BLUR: usize = 10;
+/// A regional climate: warmth is a sea-level baseline, not a miniature equator-to-pole map.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(default)]
+pub struct ClimateConfig {
+    pub warmth: f32,
+    pub wind_x: f32,
+    pub wind_z: f32,
+}
+
+impl Default for ClimateConfig {
+    fn default() -> Self {
+        Self {
+            warmth: 0.68,
+            wind_x: 1.0,
+            wind_z: 0.15,
+        }
+    }
+}
+
+impl ClimateConfig {
+    pub fn validate(self) -> Result<(), String> {
+        if !self.warmth.is_finite()
+            || !(0.0..=1.0).contains(&self.warmth)
+            || !self.wind_x.is_finite()
+            || !self.wind_z.is_finite()
+            || !(0.01..=100.0).contains(&self.wind_x.hypot(self.wind_z))
+        {
+            return Err("climate requires warmth in 0..=1 and a finite nonzero wind vector".into());
+        }
+        Ok(())
+    }
+}
+
 // Warmth and moisture are blurred this many cells each way before biomes are picked from them.
 pub(super) const FIELD_BLUR: usize = 4;
 // Cells round a river or lake that it wets and cools, and by how much at the water's edge.
@@ -48,7 +69,7 @@ const PEAK_REACH: usize = 10;
 // Conifers on a mountain's lower slopes, this thick, thinning out between these heights over the
 // sea to nothing: the treeline.
 const ALPINE_FOREST: f64 = 0.3;
-const TREELINE: (f64, f64) = (170.0, 290.0);
+const TREELINE: (f64, f64) = (1100.0, 1650.0);
 
 /// What grows on a stretch of land, stored in `WorldMap::biome`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -142,87 +163,72 @@ fn tree_density(kind: BiomeKind, biomes: &Biomes) -> f64 {
     )
 }
 
-// Warmth at sea level: hot at the equator, cold at the poles, with a little drift.
-fn sea_level_warmth(seed: u32, x: f64, z: f64, half: f64) -> f32 {
-    let latitude = (z.abs() / half).min(1.0);
-    let warmth = (latitude * std::f64::consts::FRAC_PI_2).cos();
-    let drift = fbm(seed.wrapping_add(9 * 101), x, z, 9000.0, 3) * 0.1;
-    (warmth + drift).clamp(0.0, 1.0) as f32
-}
-
-// Wet at the equator and in the mid latitudes, dry in the subtropics and at the poles.
-fn rainy_belt(latitude: f32) -> f32 {
-    0.78 + 0.22 * (3.0 * std::f32::consts::PI * latitude).cos()
-}
-
-/// How warm and how wet each cell is before the rivers' own effect on it: warmth at sea level, and
-/// moisture from the winds' rain. Hydrology reads it too, so rivers born in dry country start thin and
-/// dry up as they cross it.
-pub(super) fn moisture_field(map: &WorldMap) -> (Vec<f32>, Vec<f32>) {
+/// Background climate shared by runoff and vegetation. Transport sweeps in upwind
+/// dependency order, mixing the two upstream neighbours for oblique winds. Rates are
+/// per metre and lift is in metres, rather than per map cell.
+fn climate_fields(map: &WorldMap) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     let dim = map.dim();
-    let half = map.config.half_size() as f64;
-    let sea = WATER_LEVEL as f32;
-    let seed = map.seed;
-
-    let mut temperature = vec![0.0f32; dim * dim];
+    let cfg = map.config.climate;
+    let mut temperature = vec![0.0; dim * dim];
     par_rows(dim, &mut temperature, |row, out| {
-        let z = map.cell_centre(0, row).1;
         for (col, t) in out.iter_mut().enumerate() {
-            *t = sea_level_warmth(seed, map.cell_centre(col, 0).0, z, half);
+            let (x, z) = map.cell_centre(col, row);
+            *t = (cfg.warmth + fbm(map.seed ^ 0xC11A, x, z, 18000.0, 2) as f32 * 0.06)
+                .clamp(0.0, 1.0);
         }
     });
-
-    // the wind blows from the west: each row is swept east, picking moisture up off the sea
-    // and dropping it where the ground rises
+    let norm = cfg.wind_x.hypot(cfg.wind_z);
+    let ax = cfg.wind_x.abs() / norm;
+    let az = cfg.wind_z.abs() / norm;
+    let step = map.config.map_cell as f32 / (ax + az);
+    let mut vapour = vec![0.0f32; dim * dim];
     let mut rain = vec![0.0f32; dim * dim];
-    par_rows(dim, &mut rain, |row, out| {
-        let latitude = ((row as f32 + 0.5) / dim as f32 * 2.0 - 1.0).abs();
-        let belt = rainy_belt(latitude);
-        let mut carried = 0.4 * belt;
-        let mut last = map.height[row * dim];
-        for (col, rain) in out.iter_mut().enumerate() {
-            let i = row * dim + col;
-            let h = map.height[i];
-            if h < sea {
-                carried = (carried + EVAPORATION * belt * (0.3 + 0.7 * temperature[i])).min(1.0);
+    for rz in 0..dim {
+        let z = if cfg.wind_z >= 0.0 { rz } else { dim - 1 - rz };
+        for rx in 0..dim {
+            let x = if cfg.wind_x >= 0.0 { rx } else { dim - 1 - rx };
+            let i = map.index(x, z);
+            let upstream = |horizontal: bool| {
+                let available = if horizontal { rx > 0 } else { rz > 0 };
+                if !available {
+                    return (0.65, map.height[i]);
+                }
+                let j = if horizontal {
+                    map.index(if cfg.wind_x >= 0.0 { x - 1 } else { x + 1 }, z)
+                } else {
+                    map.index(x, if cfg.wind_z >= 0.0 { z - 1 } else { z + 1 })
+                };
+                (vapour[j], map.height[j])
+            };
+            let (qx, hx) = upstream(true);
+            let (qz, hz) = upstream(false);
+            let carried = (ax * qx + az * qz) / (ax + az);
+            if map.height[i] < WATER_LEVEL as f32 {
+                vapour[i] = 1.0 - (1.0 - carried) * (-step * 0.003 * (0.3 + temperature[i])).exp();
             } else {
-                let lift = ((h - last) / OROGRAPHIC_RISE).clamp(0.0, 1.0);
-                let falls = carried * (BASE_RAIN + OROGRAPHIC_RAIN * lift);
-                carried = (carried - falls * (1.0 - RECYCLED)).max(0.0);
-                *rain = falls;
+                let lift = (map.height[i] - (ax * hx + az * hz) / (ax + az)).max(0.0);
+                let fraction = 1.0 - (-0.00045 * step - lift / 700.0).exp();
+                let falls = carried * fraction;
+                vapour[i] = (carried - falls * 0.30).max(0.0);
+                rain[i] = falls * 1000.0 / step;
             }
-            last = h;
         }
-    });
-
-    let rain = blur_across(&rain, dim);
-    let mut land: Vec<f32> = map
-        .height
-        .iter()
-        .zip(&rain)
-        .filter(|(&h, _)| h >= sea)
-        .map(|(_, &r)| r)
-        .collect();
-    land.sort_by(f32::total_cmp);
-    let wettest = land
-        .get(((land.len() as f64 * WETTEST_PERCENTILE) as usize).min(land.len().saturating_sub(1)))
-        .copied()
-        .unwrap_or(1.0)
-        .max(1e-6);
-
-    let mut moisture = vec![1.0f32; dim * dim];
-    for i in 0..dim * dim {
-        if map.height[i] < sea {
+    }
+    let rain = blur_box(&rain, dim, 2);
+    let mut moisture = vec![1.0; dim * dim];
+    for i in 0..moisture.len() {
+        if map.height[i] < WATER_LEVEL as f32 {
             continue;
         }
-        // part how much rain fell, part how it ranks among the land, so every world has its
-        // deserts and its jungles however much rain its winds carried
-        let rank = land.partition_point(|&r| r < rain[i]) as f32 / land.len() as f32;
-        let wet = (rain[i] / wettest).clamp(0.0, 1.0);
-        let (x, z) = map.cell_centre(i % dim, i / dim);
-        let drift = fbm(seed.wrapping_add(10 * 101), x, z, 6000.0, 3) as f32 * 0.12;
-        moisture[i] = (0.6 * rank + 0.4 * wet + drift).clamp(0.0, 1.0);
+        let surface = (temperature[i] - map.height[i].max(0.0) * LAPSE_PER_BLOCK).max(0.0);
+        let demand = 0.20 + 0.50 * surface;
+        moisture[i] = (rain[i] / demand).clamp(0.0, 1.0);
     }
+    (temperature, moisture, rain)
+}
+
+pub(super) fn moisture_field(map: &WorldMap) -> (Vec<f32>, Vec<f32>) {
+    let (temperature, moisture, _) = climate_fields(map);
     (temperature, moisture)
 }
 
@@ -236,7 +242,8 @@ pub fn run(map: &mut WorldMap) {
     let sea = WATER_LEVEL as f32;
     let seed = map.seed;
 
-    let (temperature, moisture) = moisture_field(map);
+    let (temperature, moisture, precipitation) = climate_fields(map);
+    map.precipitation = precipitation;
     let biomes = Biomes::new(seed);
     // smooth over a few cells each way, so a biome doesn't flip back and forth along the edge
     // where its warmth or moisture hovers at a threshold
@@ -498,19 +505,6 @@ fn tidy_biomes(kinds: &[u8], dim: usize) -> Vec<u8> {
     kinds
 }
 
-// A box blur across the wind, along z.
-fn blur_across(layer: &[f32], dim: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; layer.len()];
-    par_rows(dim, &mut out, |row, cells| {
-        let (lo, hi) = (row.saturating_sub(BLUR), (row + BLUR).min(dim - 1));
-        for (col, cell) in cells.iter_mut().enumerate() {
-            let sum: f32 = (lo..=hi).map(|z| layer[z * dim + col]).sum();
-            *cell = sum / (hi - lo + 1) as f32;
-        }
-    });
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,17 +515,18 @@ mod tests {
         let config = WorldConfig {
             size: 256 * 32,
             map_cell: 32,
+            ..Default::default()
         };
         let dim = config.dim();
         let mut map = WorldMap::empty(1, config);
         for z in 0..dim {
             for x in 0..dim {
                 map.height[z * dim + x] = match x {
-                    0..=39 => 380.0,
-                    40..=79 => 452.0,
-                    80..=119 => 452.0 + (x - 79) as f32 * 8.0,
-                    120..=159 => 772.0 - (x - 119) as f32 * 8.0,
-                    _ => 452.0,
+                    0..=39 => -68.0,
+                    40..=79 => 4.0,
+                    80..=119 => 4.0 + (x - 79) as f32 * 8.0,
+                    120..=159 => 324.0 - (x - 119) as f32 * 8.0,
+                    _ => 4.0,
                 };
             }
         }
@@ -553,22 +548,60 @@ mod tests {
     }
 
     #[test]
-    fn test_warmth_falls_towards_the_poles_and_up_mountains() {
+    fn regional_temperature_is_not_an_equator_to_pole_gradient() {
         let mut map = ridge_world();
         run(&mut map);
         let dim = map.dim();
-        let t = |x: usize, z: usize| map.temperature[z * dim + x];
-        assert!(
-            t(60, dim / 2) > t(60, 4) + 0.5,
-            "{} vs {}",
-            t(60, dim / 2),
-            t(60, 4)
+        let north = map.temperature[4 * dim + 60];
+        let centre = map.temperature[(dim / 2) * dim + 60];
+        assert!((north - centre).abs() < 0.12);
+        let sea_level = map.temperature[(dim / 2) * dim + 119];
+        let surface = sea_level - map.height[(dim / 2) * dim + 119] * LAPSE_PER_BLOCK;
+        assert!(surface < sea_level - 0.08);
+    }
+
+    #[test]
+    fn reversing_the_wind_reverses_the_rain_shadow() {
+        let mut west = ridge_world();
+        west.config.climate.wind_z = 0.0;
+        let mut east = west.clone();
+        east.config.climate.wind_x = -1.0;
+        let (_, _, wr) = climate_fields(&west);
+        let (_, _, er) = climate_fields(&east);
+        let row = west.dim() / 2;
+        let average = |rain: &[f32], range: std::ops::Range<usize>| {
+            let count = range.len() as f32;
+            range.map(|x| rain[west.index(x, row)]).sum::<f32>() / count
+        };
+        assert!(average(&wr, 90..115) > average(&wr, 125..150));
+        assert!(average(&er, 125..150) > average(&er, 90..115));
+    }
+
+    #[test]
+    fn a_dry_region_does_not_receive_a_wet_biome_quota() {
+        let mut map = WorldMap::empty(
+            42,
+            WorldConfig {
+                size: 16384,
+                ..Default::default()
+            },
         );
-        // at 70% of the way to the pole the plain is mild and the 320 m ridge is ice
-        let row = dim * 17 / 20;
-        let kind = |x: usize| BiomeKind::from_u8(map.biome[row * dim + x]);
-        assert_ne!(BiomeKind::Glacier, kind(60));
-        assert_eq!(BiomeKind::Glacier, kind(119));
+        map.height.fill(50.0);
+        let (_, moisture) = moisture_field(&map);
+        assert!(moisture.iter().all(|&m| m < 0.6));
+        let centre = map.index(map.dim() / 2, map.dim() / 2);
+        assert!(moisture[centre] < 0.25);
+    }
+
+    #[test]
+    fn wind_direction_not_vector_magnitude_controls_transport() {
+        let a = ridge_world();
+        let mut b = a.clone();
+        b.config.climate.wind_x *= 2.0;
+        b.config.climate.wind_z *= 2.0;
+        let (_, ma) = moisture_field(&a);
+        let (_, mb) = moisture_field(&b);
+        assert!(ma.iter().zip(mb).all(|(a, b)| (a - b).abs() < 1e-5));
     }
 
     // A river along `row` over `x` cells, `width` blocks wide.
@@ -579,7 +612,7 @@ mod tests {
             let i = map.index(x, row);
             map.water_kind[i] = WaterCell::River as u8;
             map.river_width[i] = width;
-            map.water_surface[i] = 460.0;
+            map.water_surface[i] = 12.0;
         }
         map
     }
@@ -631,13 +664,16 @@ mod tests {
     fn test_mountain_slopes_have_a_conifer_belt_that_ends_at_the_treeline_and_the_air_cools_with_height(
     ) {
         use ochre_base::terrain_source::TerrainSource;
-        let map = std::sync::Arc::new(crate::worldmap::generate(
-            3,
-            WorldConfig {
-                size: 32_768,
-                map_cell: 32,
-            },
-        ));
+        let mut fixture = ridge_world();
+        let dim = fixture.dim();
+        for z in 0..dim {
+            for x in 40..dim {
+                let distance = (x as f32 - 125.0).abs();
+                fixture.height[z * dim + x] = (1900.0 - distance * 28.0).max(4.0);
+            }
+        }
+        run(&mut fixture);
+        let map = std::sync::Arc::new(fixture);
         let sea = WATER_LEVEL as f32;
         let (mut lower, mut thick, mut high, mut bare) = (0, 0, 0, 0);
         for i in 0..map.biome.len() {
@@ -645,11 +681,11 @@ mod tests {
                 continue;
             }
             let above = map.height[i] - sea;
-            if (60.0..150.0).contains(&above) {
+            if (150.0..500.0).contains(&above) {
                 lower += 1;
                 thick += (map.trees[i] >= 40) as usize;
             }
-            if above > 330.0 {
+            if above > 1650.0 {
                 high += 1;
                 bare += (map.trees[i] <= 10) as usize;
             }
@@ -665,12 +701,10 @@ mod tests {
         // warmth falls with height at the rate snow lines climb, at one place and then a higher one
         let terrain = crate::worldmap::WorldTerrain::new(map.clone());
         let low = (0..map.height.len())
-            .find(|&i| {
-                map.height[i] > sea + 5.0 && map.height[i] < sea + 20.0 && map.water_kind[i] == 0
-            })
+            .find(|&i| map.height[i] > sea && map.height[i] < sea + 20.0 && map.water_kind[i] == 0)
             .unwrap();
         let peak = (0..map.height.len())
-            .find(|&i| map.height[i] > sea + 330.0)
+            .find(|&i| map.height[i] > sea + 1000.0)
             .unwrap();
         let warmth = |i: usize| {
             let (x, z) = map.cell_centre(i % map.dim(), i / map.dim());
@@ -697,6 +731,7 @@ mod tests {
             WorldConfig {
                 size: 16_384,
                 map_cell: 32,
+                ..Default::default()
             },
         );
         let dim = map.dim();

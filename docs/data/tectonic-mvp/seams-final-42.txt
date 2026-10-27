@@ -1,0 +1,11 @@
+161 windows: 348 ground steps along x beside water; where they fall across a cell (eighths): [31, 37, 56, 53, 56, 55, 39, 21]
+  step 0.27 at 4340,-22946 (0.62 across its cell)
+  step 0.52 at -16686,-22423 (0.56 across its cell)
+  step 0.46 at -16684,-22420 (0.62 across its cell)
+  step 0.46 at -16534,-22408 (0.31 across its cell)
+  step 0.28 at 9209,-21234 (0.78 across its cell)
+  step 0.37 at 9224,-21229 (0.25 across its cell)
+  step 0.51 at 9140,-21208 (0.62 across its cell)
+  step 0.28 at 9147,-21192 (0.84 across its cell)
+  step 0.29 at 9150,-21191 (0.94 across its cell)
+  step 0.29 at 9148,-21190 (0.88 across its cell)

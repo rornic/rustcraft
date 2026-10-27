@@ -7,6 +7,22 @@ use super::{generate, WorldConfig, WorldMap, GENERATOR_VERSION};
 
 const MAGIC: &[u8; 4] = b"RCWM";
 
+fn put_config(out: &mut Vec<u8>, config: WorldConfig) {
+    out.extend(config.size.to_le_bytes());
+    out.extend(config.map_cell.to_le_bytes());
+    out.extend(config.bounds.min_y.to_le_bytes());
+    out.extend(config.bounds.max_y.to_le_bytes());
+    out.push(config.tectonics.plates);
+    for value in [
+        config.tectonics.relief,
+        config.climate.warmth,
+        config.climate.wind_x,
+        config.climate.wind_z,
+    ] {
+        out.extend(value.to_le_bytes());
+    }
+}
+
 fn checksum(bytes: &[u8]) -> u64 {
     // FNV-1a, to catch a truncated or damaged file
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
@@ -48,6 +64,10 @@ impl Reader<'_> {
 
     fn i64(&mut self) -> io::Result<i64> {
         Ok(i64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
+    fn f32(&mut self) -> io::Result<f32> {
+        Ok(f32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
     fn bytes(&mut self, expected: usize) -> io::Result<Vec<u8>> {
@@ -93,10 +113,13 @@ impl WorldMap {
         out.extend(MAGIC);
         out.extend(self.version.to_le_bytes());
         out.extend(self.seed.to_le_bytes());
-        out.extend(self.config.size.to_le_bytes());
-        out.extend(self.config.map_cell.to_le_bytes());
+        put_config(&mut out, self.config);
         put_layer(&mut out, &self.height);
         put_layer(&mut out, &self.continentalness);
+        put_bytes(&mut out, &self.plate);
+        put_bytes(&mut out, &self.boundary);
+        put_layer(&mut out, &self.uplift);
+        put_layer(&mut out, &self.precipitation);
         put_layer(&mut out, &self.flow);
         put_bytes(&mut out, &self.down);
         put_bytes(&mut out, &self.water_kind);
@@ -145,6 +168,19 @@ impl WorldMap {
         let config = WorldConfig {
             size: r.i64()?,
             map_cell: r.i64()?,
+            bounds: ochre_base::WorldBounds {
+                min_y: r.i64()?,
+                max_y: r.i64()?,
+            },
+            tectonics: super::tectonics::TectonicConfig {
+                plates: r.take(1)?[0],
+                relief: r.f32()?,
+            },
+            climate: super::climate::ClimateConfig {
+                warmth: r.f32()?,
+                wind_x: r.f32()?,
+                wind_z: r.f32()?,
+            },
         };
         config.validate().map_err(bad)?;
         let cells = config.dim() * config.dim();
@@ -154,6 +190,10 @@ impl WorldMap {
             config,
             height: r.layer(cells)?,
             continentalness: r.layer(cells)?,
+            plate: r.bytes(cells)?,
+            boundary: r.bytes(cells)?,
+            uplift: r.layer(cells)?,
+            precipitation: r.layer(cells)?,
             flow: r.layer(cells)?,
             down: r.bytes(cells)?,
             water_kind: r.bytes(cells)?,
@@ -189,8 +229,11 @@ impl WorldMap {
 
 /// Where the map for `seed` is cached under `dir`.
 pub(crate) fn cache_path(dir: &Path, seed: u32, config: WorldConfig) -> PathBuf {
+    let mut identity = Vec::new();
+    put_config(&mut identity, config);
+    let identity = checksum(&identity);
     dir.join(format!(
-        "map-v{GENERATOR_VERSION}-seed{seed}-{}m-{}cell.rcmap",
+        "map-v{GENERATOR_VERSION}-seed{seed}-{}m-{}cell-{identity:016x}.rcmap",
         config.size, config.map_cell
     ))
 }
@@ -222,6 +265,7 @@ mod tests {
             WorldConfig {
                 size: 2048,
                 map_cell: 32,
+                ..Default::default()
             },
         )
     }
@@ -256,10 +300,25 @@ mod tests {
         let config = WorldConfig {
             size: 2048,
             map_cell: 32,
+            ..Default::default()
         };
         let first = load_or_generate(&dir, 5, config);
         assert!(cache_path(&dir, 5, config).exists());
         assert_eq!(first, load_or_generate(&dir, 5, config));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn cache_identity_includes_vertical_tectonic_and_climate_settings() {
+        let base = WorldConfig::default();
+        let original = cache_path(Path::new("worlds"), 42, base);
+        let mut variants = [base; 4];
+        variants[0].bounds.min_y = -2048;
+        variants[1].tectonics.plates = 16;
+        variants[2].tectonics.relief = 1.5;
+        variants[3].climate.wind_x = -1.0;
+        for config in variants {
+            assert_ne!(original, cache_path(Path::new("worlds"), 42, config));
+        }
     }
 }

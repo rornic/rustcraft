@@ -42,7 +42,7 @@ const VALLEY_ABOVE_SEA: f64 = 0.6;
 // How far past a river's banks, in blocks, its valley floor eases back out into the land's own ground.
 const VALLEY_WIDTH: f64 = 40.0;
 
-// Cells at least this wide leave a river's channel to the map's own carving.
+// Wider cells resolve only rivers at least a cell wide; finer cells retain every stream.
 const RIVER_DETAIL_CELL: f64 = 16.0;
 // A river rises in a round pool this many blocks across its middle, deepening from the first to the second
 // under its level, in a rim of ground this wide held over it.
@@ -490,6 +490,10 @@ impl WorldTerrain {
 }
 
 impl TerrainSource for WorldTerrain {
+    fn bounds(&self) -> ochre_base::WorldBounds {
+        self.map.config.bounds
+    }
+
     fn seed(&self) -> u32 {
         self.map.seed
     }
@@ -510,16 +514,24 @@ impl TerrainSource for WorldTerrain {
             u.round().clamp(0.0, max) as usize,
             v.round().clamp(0.0, max) as usize,
         );
-        let meandered =
-            (cell <= RIVER_DETAIL_CELL && !self.profiles.near(here).is_empty()).then(|| {
-                let (mx, mz) = meander(seed, x, z);
-                (x + mx, z + mz)
-            });
+        let meandered = (!self.profiles.near(here).is_empty()).then(|| {
+            let (mx, mz) = meander(seed, x, z);
+            (x + mx, z + mz)
+        });
         // the nearest river and, where one joins another, the other too
         let rivers = meandered.map_or([None, None], |(mx, mz)| {
-            map.river_hits(&self.profiles, mx, mz)
+            let mut resolved = [None, None];
+            let mut n = 0;
+            for hit in map.river_hits(&self.profiles, mx, mz).into_iter().flatten() {
+                if cell <= RIVER_DETAIL_CELL || hit.width as f64 >= cell {
+                    resolved[n] = Some(hit);
+                    n += 1;
+                }
+            }
+            resolved
         });
         let spring = meandered
+            .filter(|_| cell <= RIVER_DETAIL_CELL)
             .and_then(|(mx, mz)| self.spring_near(mx, mz))
             .filter(|&(distance, _)| distance < SPRING_POOL + SPRING_RIM + SPRING_MOUND);
         let spring_part = match spring {
@@ -624,7 +636,10 @@ impl TerrainSource for WorldTerrain {
                 ground = ground.max(surface.ceil() as f64 + 0.2 - out);
             }
         }
-        let ground = ground.max(0.0);
+        let ground = ground.clamp(
+            (map.config.bounds.min_y + 16) as f64,
+            (map.config.bounds.max_y - 64) as f64,
+        );
 
         // where two meet, the wider river's level is the water's
         let river_water = rivers
@@ -651,7 +666,7 @@ impl TerrainSource for WorldTerrain {
             } else {
                 (0.0, WaterKind::None)
             };
-        let wet = water_surface > 0.0;
+        let wet = water_kind != WaterKind::None;
         TerrainSample {
             continentalness: map.bilinear(&map.continentalness, x, z) as f64,
             height: ground,
@@ -699,5 +714,76 @@ impl TerrainSource for WorldTerrain {
             .min_by_key(|f| (f.x as i64).abs() + (f.z as i64).abs());
         let (x, z) = nearest.map_or((0, 0), |f| (f.x as i64, f.z as i64));
         (x, z, self.height(x as f64, z as f64))
+    }
+}
+
+#[cfg(test)]
+mod sea_level_tests {
+    use super::*;
+
+    #[test]
+    fn ocean_at_zero_is_wet_and_has_a_negative_bed() {
+        let mut map = WorldMap::empty(
+            42,
+            super::super::WorldConfig {
+                size: 1024,
+                ..Default::default()
+            },
+        );
+        map.height.fill(-100.0);
+        map.continentalness.fill(-0.5);
+        map.water_kind.fill(WaterCell::Ocean as u8);
+        map.temperature.fill(0.68);
+        map.trees.fill(255);
+        let terrain = WorldTerrain::new(std::sync::Arc::new(map));
+        let s = terrain.sample(0.0, 0.0);
+        assert_eq!(s.water_kind, WaterKind::Ocean);
+        assert_eq!(s.water_surface, 0.0);
+        assert!(s.height < -50.0);
+        assert_eq!(s.trees, 0.0);
+        let water = terrain.water(0.0, 0.0);
+        assert_eq!(water.kind, WaterKind::Ocean);
+        assert!(water.depth > 50.0);
+    }
+
+    #[test]
+    fn broad_rivers_remain_water_in_coarse_cells() {
+        let mut map = WorldMap::empty(
+            42,
+            super::super::WorldConfig {
+                size: 2048,
+                ..Default::default()
+            },
+        );
+        map.height.fill(100.0);
+        map.temperature.fill(0.5);
+        let dim = map.dim();
+        for x in 0..dim {
+            let i = map.index(x, dim / 2);
+            map.height[i] = 96.0;
+            map.water_kind[i] = WaterCell::River as u8;
+            map.water_surface[i] = 100.0;
+            map.river_width[i] = 300.0;
+            map.flow[i] = 1000.0;
+            map.down[i] = if x + 1 < dim {
+                0
+            } else {
+                super::super::NO_FLOW
+            };
+        }
+        let terrain = WorldTerrain::new(std::sync::Arc::new(map));
+        for cell in [1.0, 32.0, 64.0, 128.0] {
+            let s = terrain.sample_for_cell(0.0, 16.0, cell);
+            assert_eq!(
+                s.water_kind,
+                WaterKind::River,
+                "river disappeared at cell {cell}"
+            );
+            assert!(s.height < s.water_surface as f64);
+        }
+        assert_eq!(
+            terrain.sample_for_cell(0.0, 16.0, 512.0).water_kind,
+            WaterKind::None
+        );
     }
 }

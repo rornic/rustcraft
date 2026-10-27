@@ -4,10 +4,10 @@ import super::cloud_bindings::{cloud_pattern, cloud_sampler, cloud_layer};
 import super::hash::hash3;
 
 // The cumulus slab's base and top, matching `CLOUD_BASE` and `CLOUD_TOP` in `clouds.rs`.
-const BASE: f32 = 1500.0;
-const TOP: f32 = 2100.0;
+const BASE: f32 = 2400.0;
+const TOP: f32 = 3000.0;
 // The highest land can reach, matching `WORLD_HEIGHT` in `chunks::generate`.
-const LAND_TOP: f32 = 1024.0;
+const LAND_TOP: f32 = 2048.0;
 // Light lost a block into the thickest cloud.
 const EXTINCTION: f32 = 0.025;
 // So little light still through that a march stops there, and counts it as none: the sun's disc is thousands of times brighter than the cloud, and would shine through what's left.
@@ -32,7 +32,7 @@ const NOISE_CELL: f32 = 256.0;
 // How far edge wisps reach into clear sky: less is crisper but shimmers between too few samples.
 const SOFTNESS: f32 = 0.22;
 // Cirrus: its height, streak length and width, and the swirls turning them so they never fan out like rays (whole numbers to the pattern's width).
-const CIRRUS: f32 = 2900.0;
+const CIRRUS: f32 = 3800.0;
 const CIRRUS_CELL: vec2<f32> = vec2<f32>(512.0, 256.0);
 const CIRRUS_SWIRL: f32 = 3072.0;
 const CIRRUS_BEND: f32 = 2500.0;

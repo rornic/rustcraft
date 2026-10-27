@@ -21,7 +21,7 @@ Env vars: `OCHRE_SEED` (fix the world seed), `OCHRE_WORLD_DIR` (saved maps, defa
 Dependencies point down only. `ochre-engine` (root `src/`) re-exports all four and owns `Settings` (`assets/settings.toml`).
 
 ```
-ochre-base      blocks, biomes, noise/math, TerrainSource trait, WORLD_HEIGHT, WATER_LEVEL
+ochre-base      blocks, biomes, noise/math, TerrainSource trait, WorldBounds, WATER_LEVEL
 ochre-terrain   chunks, generation, greedy meshing, octree LODs, materials, loaders (depends on base only)
 ochre-world     world map (erosion, hydrology, climate), sky, clouds, weather, ambience (base, terrain)
 ochre-gameplay  player, collision, birds, critters, debug overlay, flythrough (base, terrain, world)
@@ -37,7 +37,7 @@ ochre-gameplay  player, collision, birds, critters, debug overlay, flythrough (b
 
 - Terrain generation: `ochre-terrain/src/generate/` (columns, regions, trees, light), meshing in `generate/generator/`.
 - LODs: `ochre-terrain/src/lod/`. Chunk streaming: `chunk_loader.rs`. Both run on `TerrainPlugin`.
-- World map pipeline: `ochre-world/src/worldmap/` (erosion, hydrology, water, climate, then `source.rs` as the `TerrainSource`).
+- World map pipeline: `ochre-world/src/worldmap/` (tectonics, erosion, hydrology, water, climate, then `source.rs` as the `TerrainSource`).
 - Lakes, rivers and the sea, and the rule that keeps them from leaking: `docs/water.md`. Read it before changing water.
 - Shaders: `assets/shaders/`. Block textures: `assets/textures/blocks.png`, built by the `block-textures` skill.
 - Examples double as tools: `worldprobe` (CLI probe of a spot), `world_map` (PNG), `water_audit`, `seams`, `lod_sim` (headless loading), `flow_sim` (headless frame times while water flows), `shadow_cull` (what the sun's shadow cascades draw, see `docs/shadow-perf.md`), `flight` (scripted flight report).

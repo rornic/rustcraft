@@ -98,7 +98,7 @@ fn max_in_flight(render_distance: u32) -> usize {
 impl ChunkLoader {
     pub fn new(
         layout: LodLayout,
-        world_height: u64,
+        world_bounds: ochre_base::WorldBounds,
         solid_leaves: bool,
         material: Handle<ChunkMaterial>,
         water_material: Handle<WaterMaterial>,
@@ -110,7 +110,7 @@ impl ChunkLoader {
             render_distance,
             chunk_to_entity: HashMap::new(),
             spawn_queue: ChunkSpawnQueue::new(render_distance + NEIGHBOR_DATA_PADDING)
-                .with_layers(World::layers(world_height)),
+                .with_layers(World::layers(world_bounds)),
             material,
             water_material,
             spray_material,

@@ -26,7 +26,7 @@ struct Config(ochre_terrain::settings::RendererSettings, WorldConfig);
 fn setup(mut commands: Commands, config: Res<Config>, mut assets: TerrainAssets) {
     let renderer = &config.0;
     let world = ochre_world::load_world(renderer.lod_layout().region_reach() as u32, config.1);
-    let (spawn, height) = (world.spawn(), world.height);
+    let (spawn, height) = (world.spawn(), world.bounds);
     commands.insert_resource(world);
     let player = commands.spawn(Transform::from_translation(spawn)).id();
     let camera = commands

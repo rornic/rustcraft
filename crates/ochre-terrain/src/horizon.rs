@@ -13,12 +13,12 @@ use bevy::{
 use crate::chunk::CHUNK_SIZE;
 use crate::curvature::WORLD_CURVE;
 use crate::lod::LodLoader;
-use ochre_base::{WATER_LEVEL, WORLD_HEIGHT};
+use ochre_base::WATER_LEVEL;
 
 /// The farthest terrain is drawn, in chunks, however high up.
 pub const MAX_RENDER_DISTANCE: f32 = 2048.0;
 // How far above the sea the top of the world is.
-const ABOVE_SEA_AT_TOP: f32 = (WORLD_HEIGHT as i64 - WATER_LEVEL) as f32;
+const ABOVE_SEA_AT_TOP: f32 = 2048.0;
 // Smaller changes than this, as a share of the render distance, are let be, so bobbing up
 // and down doesn't keep selecting LOD nodes afresh.
 const RESELECT_CHANGE: f32 = 0.1;
@@ -44,6 +44,7 @@ pub fn render_distance_at(set_distance: f32, height: f32) -> f32 {
 /// `fog.wesl`.
 pub fn update_horizon(
     time: Res<Time>,
+    world: Res<crate::world::World>,
     mut lods: ResMut<LodLoader>,
     mut camera: Query<(&GlobalTransform, &mut DistanceFog, &mut Projection), With<Camera3d>>,
 ) {
@@ -62,7 +63,7 @@ pub fn update_horizon(
         layout.render_distance() * CHUNK_SIZE as f32,
     );
     if let Projection::Perspective(perspective) = &mut *projection {
-        perspective.far = end + WORLD_HEIGHT as f32;
+        perspective.far = end + (world.bounds.max_y - world.bounds.min_y) as f32;
     }
     // underwater, `update_underwater_effects` overrides the fog after this
     if let FogFalloff::Linear {
@@ -81,7 +82,7 @@ mod tests {
     use super::*;
 
     const SEA: f32 = WATER_LEVEL as f32;
-    const TOP: f32 = WORLD_HEIGHT as f32;
+    const TOP: f32 = 2048.0;
 
     #[test]
     fn test_the_ground_draws_the_set_distance() {

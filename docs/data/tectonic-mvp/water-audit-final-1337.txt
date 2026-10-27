@@ -1,0 +1,28 @@
+map 18.70s
+terrain setup 132.85ms
+  step -2.5 at -17916,-21632
+  step -1.9 at -17804,-21520
+  step 2.2 at -15796,-21004
+  wall 4.2 at -15808,-20996
+  wall 4.1 at -15836,-20980
+  step -7.0 at -15844,-20976
+  wall 5.5 at -15840,-20976
+  wall 4.9 at -15844,-20972
+  step 5.9 at -15880,-20944
+  step -3.7 at -15940,-20872
+  step -2.8 at -17796,-20288
+  step -5.1 at -17768,-20260
+  step -2.3 at -17760,-20248
+  step -4.7 at -17744,-20224
+  step -2.0 at -17736,-20212
+  step -2.6 at -17724,-20196
+  tall wall 6.5 at -17244,-16456
+  tall wall 7.1 at -16032,-14812
+  deep cut 32 at -14160,-17744
+  deep cut 27 at -15216,-17488
+  deep cut 27 at -15184,-17488
+  deep cut 27 at -18192,-15760
+AUDIT seed=1337 map uncontained=0 deep14=1677 deep25=257
+AUDIT seed=1337 rivers windows=76 wet=13645 walls=75 tall_walls=2 steps=2183 dry_near=7865 raised=143
+AUDIT seed=1337 lakes windows=45 wet=52894 walls=0 tall_walls=0 steps=3 dry_near=3544 raised=130
+AUDIT seed=1337 coasts windows=101 wet=133207 walls=3 tall_walls=0 steps=53 dry_near=5195 raised=14

@@ -277,7 +277,6 @@ mod tests {
     use crate::lod::{LodKey, LodLayout};
     use crate::world::World;
     use ochre_base::block::BlockType;
-    use ochre_base::WORLD_HEIGHT;
 
     fn world() -> World {
         World::with_terrain(1, 16, ochre_world::worldmap::test_terrain(1))
@@ -496,7 +495,7 @@ mod tests {
             .add_systems(Update, (remesh_edits, apply_remeshes).chain());
         let mut loader = ChunkLoader::new(
             LodLayout::new(32, 128, 2),
-            WORLD_HEIGHT,
+            ochre_base::WorldBounds::default(),
             false,
             Handle::default(),
             Handle::default(),
@@ -589,7 +588,7 @@ mod tests {
             .add_systems(Update, (remesh_edits, apply_remeshes).chain())
             .insert_resource(ChunkLoader::new(
                 LodLayout::new(32, 128, 2),
-                WORLD_HEIGHT,
+                ochre_base::WorldBounds::default(),
                 false,
                 Handle::default(),
                 Handle::default(),
