@@ -82,9 +82,9 @@ mod tests {
         assert_eq!(2, settings.renderer.lod_level_scale);
         assert_eq!(64, settings.renderer.mesh_slab_mb);
         assert!(settings.renderer.mesh_slab_growth > 1.0);
-        // The LOD base starts at 16 chunks.
+        // Full detail reaches 12 chunks, with the LOD base at 16.
         let layout = settings.renderer.lod_layout();
-        assert_eq!(16.0, layout.reach(0));
+        assert_eq!(12.0, layout.reach(0));
         assert_eq!([32.0, 64.0], [layout.reach(1), layout.reach(2)]);
         // the debug switches ship off
         assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);
