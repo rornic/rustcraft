@@ -162,7 +162,7 @@ impl Flight {
             (mesh.get_vertex_buffer_size() + mesh.indices().map_or(0, |i| i.len() * 4)) as f64 / 1e6
         };
         let vertices = |mesh: &Mesh| mesh.count_vertices();
-        let handles: Vec<(Option<u8>, bool, bevy::asset::AssetId<Mesh>)> = {
+        let (handles, water_handles, terrain_handles, attached): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = {
             let mut out = Vec::new();
             let mut lods = world.query::<(&LodNode, &Mesh3d)>();
             for (node, mesh) in lods.iter(world) {
@@ -172,11 +172,39 @@ impl Flight {
             for (_, mesh) in groups.iter(world) {
                 out.push((None, true, mesh.0.id()));
             }
-            out
+            let mut water = world.query::<(&Mesh3d, &MeshMaterial3d<WaterMaterial>)>();
+            let water_handles = water.iter(world).map(|(mesh, _)| mesh.0.id()).collect();
+            let mut terrain = world.query::<(&Mesh3d, &MeshMaterial3d<ChunkMaterial>)>();
+            let terrain_handles = terrain.iter(world).map(|(mesh, _)| mesh.0.id()).collect();
+            let mut all = world.query::<&Mesh3d>();
+            let attached = all.iter(world).map(|mesh| mesh.0.id()).collect();
+            (out, water_handles, terrain_handles, attached)
         };
         let meshes = world.resource::<Assets<Mesh>>();
         let total: f64 = meshes.iter().map(|(_, m)| size(m)).sum();
         let total_vertices: usize = meshes.iter().map(|(_, m)| vertices(m)).sum();
+        let water_mb: f64 = water_handles
+            .iter()
+            .filter_map(|id| meshes.get(*id))
+            .map(size)
+            .sum();
+        let water_vertices: usize = water_handles
+            .iter()
+            .filter_map(|id| meshes.get(*id))
+            .map(vertices)
+            .sum();
+        let terrain_mb: f64 = terrain_handles
+            .iter()
+            .filter_map(|id| meshes.get(*id))
+            .map(size)
+            .sum();
+        let attached: HashSet<_> = attached.into_iter().collect();
+        let unreferenced_mb: f64 = meshes
+            .iter()
+            .filter(|(id, _)| !attached.contains(id))
+            .map(|(_, mesh)| size(mesh))
+            .sum::<f64>()
+            .max(0.0);
         let mut by_level = [(0.0f64, 0usize, 0usize); 12];
         let (mut chunks, mut chunk_vertices, mut chunk_meshes) = (0.0, 0, 0);
         for (level, is_chunk, id) in handles {
@@ -192,8 +220,10 @@ impl Flight {
                 slot.2 += 1;
             }
         }
+        let other_terrain_mb =
+            (terrain_mb - chunks - by_level.iter().map(|level| level.0).sum::<f64>()).max(0.0);
         let mut out = format!(
-            "all meshes: {total:.0} MB, {total_vertices} vertices, {:.1} bytes a vertex\nfull-detail chunk groups: {chunks:.0} MB, {chunk_vertices} vertices, {chunk_meshes} meshes\n",
+            "all meshes: {total:.0} MB, {total_vertices} vertices, {:.1} bytes a vertex\nwater meshes: {water_mb:.0} MB, {water_vertices} vertices\nterrain material meshes: {terrain_mb:.0} MB ({other_terrain_mb:.0} MB beyond opaque chunk and LOD meshes)\nmesh assets not attached to an entity: {unreferenced_mb:.0} MB\nfull-detail chunk groups: {chunks:.0} MB, {chunk_vertices} vertices, {chunk_meshes} meshes\n",
             total * 1e6 / total_vertices.max(1) as f64
         );
         for (level, (mb, v, n)) in by_level.iter().enumerate().filter(|(_, s)| s.2 > 0) {

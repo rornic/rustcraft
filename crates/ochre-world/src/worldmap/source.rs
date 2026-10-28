@@ -837,6 +837,24 @@ mod sea_level_tests {
 mod river_bank_tests {
     use super::*;
 
+    fn river_edge(terrain: &WorldTerrain, centre: (i64, i64)) -> (i64, i64, f32, f64) {
+        for z in centre.1 - 96..=centre.1 + 96 {
+            for x in centre.0 - 96..=centre.0 + 96 {
+                let water = terrain.sample(x as f64, z as f64);
+                if water.water_kind != WaterKind::River {
+                    continue;
+                }
+                for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let bank = terrain.sample((x + dx) as f64, (z + dz) as f64);
+                    if bank.water_kind == WaterKind::None {
+                        return (x, z, water.water_surface, bank.height);
+                    }
+                }
+            }
+        }
+        panic!("no river edge near {centre:?}");
+    }
+
     #[test]
     fn neighbour_meander_search_bound_covers_block_steps() {
         for seed in [1, 42, 3942325500] {
@@ -883,20 +901,17 @@ mod river_bank_tests {
             "distant ground {} was raised above dry terrain {dry}",
             ground.height
         );
-        let water = terrain.sample(14216.0, -5208.0);
-        let bank = terrain.sample(14217.0, -5208.0);
-        assert_eq!(water.water_kind, WaterKind::River);
-        assert_eq!(bank.water_kind, WaterKind::None);
+        let (_, _, water, bank) = river_edge(&terrain, (18000, -6776));
         assert!(
-            ochre_terrain::generate::region_store::bed_top(bank.height as f32, bank.water_surface)
-                >= ochre_terrain::generate::region_store::water_block_top(water.water_surface),
+            ochre_terrain::generate::region_store::bed_top(bank as f32, 0.0)
+                >= ochre_terrain::generate::region_store::water_block_top(water),
             "bank {} does not hold neighboring water {}",
-            bank.height,
-            water.water_surface
+            bank,
+            water
         );
         let mut wet_columns = 0;
-        for z in (-2200..-1600).step_by(8) {
-            for x in (20700..21300).step_by(8) {
+        for z in (-6900..-6650).step_by(8) {
+            for x in (17900..18100).step_by(8) {
                 let water = terrain.sample(x as f64, z as f64);
                 if water.water_kind != WaterKind::River {
                     continue;
@@ -924,63 +939,99 @@ mod river_bank_tests {
     }
 
     #[test]
-    fn joining_stretches_do_not_jump_in_level() {
+    fn adjacent_river_water_and_bank_remain_contained() {
         let map = Arc::new(super::super::generate(1, Default::default()));
         let terrain = WorldTerrain::new(map);
-        let up = terrain.sample(11508.0, -2708.0);
-        let down = terrain.sample(11508.0, -2707.0);
+        let (x, z, water, bank) = river_edge(&terrain, (8220, -5324));
+        let up = terrain.sample(x as f64, z as f64);
+        let down = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            .into_iter()
+            .map(|(dx, dz)| terrain.sample((x + dx) as f64, (z + dz) as f64))
+            .find(|sample| sample.water_kind == WaterKind::River)
+            .expect("river edge should have a wet neighbor");
         assert_eq!(up.water_kind, WaterKind::River);
         assert_eq!(down.water_kind, WaterKind::River);
         assert!(
             (up.water_surface - down.water_surface).abs() < 2.0,
-            "the join jumps from {} to {}",
+            "adjacent river levels jump from {} to {}",
             up.water_surface,
             down.water_surface
         );
-        for (x, z, water) in [(11508.0, -2708.0, up), (11508.0, -2707.0, down)] {
-            for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-                let neighbour = terrain.sample(x + dx, z + dz);
-                if neighbour.water_kind == WaterKind::None {
-                    assert!(
-                        water.water_surface as f64 - neighbour.height <= 1.5,
-                        "water at {x},{z} stands over dry ground at {},{}",
-                        x + dx,
-                        z + dz
-                    );
-                }
+        for (dx, dz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+            let neighbour = terrain.sample(x as f64 + dx, z as f64 + dz);
+            if neighbour.water_kind == WaterKind::None {
+                assert!(
+                    up.water_surface as f64 - neighbour.height <= 1.5,
+                    "water at {x},{z} stands over dry ground at {},{}",
+                    x as f64 + dx,
+                    z as f64 + dz
+                );
             }
         }
 
         // The dry neighbour must reach the water's block, even when both rounded
         // heights are close enough that their continuous surfaces look contained.
-        let water = terrain.sample(7876.0, -5840.0);
-        let bank = terrain.sample(7876.0, -5839.0);
-        assert_eq!(water.water_kind, WaterKind::River);
-        assert_eq!(bank.water_kind, WaterKind::None);
         assert!(
-            ochre_terrain::generate::region_store::bed_top(bank.height as f32, bank.water_surface)
-                >= ochre_terrain::generate::region_store::water_block_top(water.water_surface),
+            ochre_terrain::generate::region_store::bed_top(bank as f32, 0.0)
+                >= ochre_terrain::generate::region_store::water_block_top(water),
             "bank {} does not hold water {}",
-            bank.height,
-            water.water_surface
+            bank,
+            water
         );
     }
 
     #[test]
-    fn spring_rim_holds_water_near_its_outlet() {
+    fn river_edge_holds_water_on_seed_42() {
         let map = Arc::new(super::super::generate(42, Default::default()));
         let terrain = WorldTerrain::new(map);
-        let water = terrain.sample(-16912.0, -17996.0);
-        let bank = terrain.sample(-16913.0, -17996.0);
-        assert_eq!(water.water_kind, WaterKind::River);
-        assert_eq!(bank.water_kind, WaterKind::None);
+        let (_, _, water, bank) = river_edge(&terrain, (13092, -23612));
         assert!(
-            ochre_terrain::generate::region_store::bed_top(bank.height as f32, bank.water_surface)
-                >= ochre_terrain::generate::region_store::water_block_top(water.water_surface),
-            "spring rim {} does not hold water {}",
-            bank.height,
-            water.water_surface
+            ochre_terrain::generate::region_store::bed_top(bank as f32, 0.0)
+                >= ochre_terrain::generate::region_store::water_block_top(water),
+            "bank {} does not hold water {}",
+            bank,
+            water
         );
+    }
+
+    #[test]
+    fn lake_outlet_holds_its_river_water() {
+        let map = Arc::new(super::super::generate(42, Default::default()));
+        let terrain = WorldTerrain::new(map.clone());
+        for i in 0..map.height.len() {
+            if map.water_kind[i] != WaterCell::River as u8 {
+                continue;
+            }
+            let (cx, cz) = (i % map.dim(), i / map.dim());
+            if map.outlet_lake(cx, cz).is_none() {
+                continue;
+            }
+            let (x, z) = map.cell_centre(cx, cz);
+            for dz in -32..=32 {
+                for dx in -32..=32 {
+                    let (x, z) = (x + dx as f64, z + dz as f64);
+                    let water = terrain.sample(x, z);
+                    if water.water_kind != WaterKind::River {
+                        continue;
+                    }
+                    for (nx, nz) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                        let bank = terrain.sample(x + nx, z + nz);
+                        if bank.water_kind == WaterKind::None {
+                            assert!(
+                                ochre_terrain::generate::region_store::bed_top(
+                                    bank.height as f32,
+                                    bank.water_surface
+                                ) >= ochre_terrain::generate::region_store::water_block_top(
+                                    water.water_surface
+                                )
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        panic!("no river bank found at a lake outlet");
     }
 
     #[test]

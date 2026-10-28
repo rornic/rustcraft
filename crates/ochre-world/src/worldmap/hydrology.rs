@@ -806,7 +806,11 @@ mod tests {
         run(&mut map, true);
         let mut rivers = 0;
         for (i, (&was, &now)) in before.iter().zip(&map.height).enumerate() {
-            if map.water_kind[i] == WaterCell::River as u8 {
+            // Draining a small enclosed basin below sea level fills it to the
+            // inland sea floor before river carving; it is not a river cut.
+            if map.water_kind[i] == WaterCell::River as u8
+                && was >= WATER_LEVEL as f32 + LAND_ABOVE_SEA
+            {
                 rivers += 1;
                 assert!(
                     now <= was + 1e-3,

@@ -73,7 +73,7 @@ mod tests {
     fn test_settings_file_parses() {
         let file = std::fs::read_to_string("assets/settings.toml").unwrap();
         let settings: Settings = toml::from_str(&file).unwrap();
-        assert_eq!(16, settings.renderer.full_detail_distance);
+        assert_eq!(12, settings.renderer.full_detail_distance);
         assert_eq!(
             super::CloudResolution::Medium,
             settings.renderer.cloud_resolution
@@ -82,9 +82,9 @@ mod tests {
         assert_eq!(2, settings.renderer.lod_level_scale);
         assert_eq!(64, settings.renderer.mesh_slab_mb);
         assert!(settings.renderer.mesh_slab_growth > 1.0);
-        // Full detail and the LOD base both start at 16 chunks.
+        // Full detail reaches 12 chunks, with the LOD base at 16.
         let layout = settings.renderer.lod_layout();
-        assert_eq!(16.0, layout.reach(0));
+        assert_eq!(12.0, layout.reach(0));
         assert_eq!([32.0, 64.0], [layout.reach(1), layout.reach(2)]);
         // the debug switches ship off
         assert!(!settings.debug.still_leaves && !settings.debug.solid_leaves);

@@ -253,3 +253,28 @@ Both views cover `x=20600..21624, z=-2320..-1296` at one block per pixel. In the
 five seed audits, no sampled river column had an open neighbouring block. The
 four-block scan still flags steep banks and falls; it is
 not a direct test of whether the intervening blocks contain the water.
+
+## Landform variety draft
+
+Plate divergence now makes continental rift valleys with raised shoulders and submarine
+spreading ridges. Lateral motion makes narrower transform valleys. Converging oceanic
+plates produce a trench and a broken volcanic island arc. These shapes enter the map
+before erosion and water routing. Stream erosion still uses the exposed rock type;
+hydraulic and thermal erosion do not yet vary by rock.
+
+The map also stores a relative crust-age indicator: seeded plate ages blend at plate
+edges, with younger values at active spreading zones and volcanic arcs. This is a
+procedural snapshot, not dated geology or a history of plate movement. The viewer's
+`geological_age` layer shows young crust in blue and old crust in gold. Age does not
+yet affect erosion or sedimentary bedding.
+
+Generator version 43 invalidates earlier map caches because the terrain changes.
+Matching overview captures for seeds 1, 42 and 1337 show new island chains and rift
+lakes; these still need ground-level review. Fine water audits on five seeds found no
+sampled open river block edges and no lake or coast wall flags. The coarser river scan
+found 31 tall-wall flags on seed 1337, up from 20 before this draft; steep falls and
+their appearance remain open for review. A seed-42 seam scan reported 28 candidate
+steps across 374 sampled windows; the scan alone does not establish which are artifacts.
+A short seed-1 headless loading simulation reported no holes in its sampled window.
+The headless timing and vertex-count comparison is recorded in
+[terrain-perf.md](terrain-perf.md).
