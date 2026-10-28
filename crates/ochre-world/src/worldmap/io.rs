@@ -142,6 +142,7 @@ impl WorldMap {
         // Geology follows the original map layers.
         put_bytes(&mut out, &self.geology);
         put_layer(&mut out, &self.strata_offset);
+        put_bytes(&mut out, &self.geological_age);
         let sum = checksum(&out);
         out.extend(sum.to_le_bytes());
         out
@@ -196,6 +197,7 @@ impl WorldMap {
             plate: r.bytes(cells)?,
             boundary: r.bytes(cells)?,
             uplift: r.layer(cells)?,
+            geological_age: vec![0; cells],
             geology: vec![0; cells],
             strata_offset: vec![0.0; cells],
             precipitation: r.layer(cells)?,
@@ -215,6 +217,7 @@ impl WorldMap {
         };
         map.geology = r.bytes(cells)?;
         map.strata_offset = r.layer(cells)?;
+        map.geological_age = r.bytes(cells)?;
         if !r.0.is_empty() {
             return Err(bad("unexpected data after geology layers"));
         }
@@ -283,7 +286,9 @@ mod tests {
 
     #[test]
     fn test_map_round_trips_through_bytes() {
-        let map = small();
+        let mut map = small();
+        map.geological_age[0] = 73;
+        map.geological_age[1] = 255;
         assert_eq!(map, WorldMap::from_bytes(&map.to_bytes()).unwrap());
     }
 
@@ -292,7 +297,7 @@ mod tests {
         let map = small();
         let mut old = map.to_bytes();
         // Reproduce the pre-geology version-40 layout, with a valid checksum.
-        old.truncate(old.len() - 8 - 16 - map.height.len() * 5);
+        old.truncate(old.len() - 8 - 16 - map.height.len() * 6);
         old[4..8].copy_from_slice(&40u32.to_le_bytes());
         old.extend(checksum(&old).to_le_bytes());
         assert!(WorldMap::from_bytes(&old)

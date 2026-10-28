@@ -405,3 +405,23 @@ Load p99 was 3.185/3.405, 3.338/3.214 and 3.556/2.280 ms; high-flight p99 was
 11.622/11.995, 10.436/11.517 and 11.768/11.257 ms (before/after). High-flight p99 rose
 in the first two pairs by 0.373 and 1.081 ms. The new neighbour checks add work near
 water and the terrain differs; the short runs do not establish how much each contributed.
+
+## Landform variety draft
+
+With seed 1, one release `bench` run measured 693,664 / 1,896,431 chunk vertices and
+323,873 / 458,404 LOD vertices before / after the landform changes. The generated scene
+and spawn terrain differ, so this is a workload change rather than a like-for-like mesh
+optimization. Chunk meshing took 225.0 / 419.7 ms and total LOD meshing 103.7 / 250.0 ms.
+In the second flight's load snapshot, all mesh assets held 96 / 340 MB (2.66 / 9.31
+million vertices). A separate instrumented after run measured 335 MB: 5 MB was water,
+70 MB was opaque chunk and LOD meshes, and approximately 260 MB was other meshes using
+the terrain material, including cutout and inner-leaf faces. All measured mesh assets
+were attached to entities. The different spawn scenery is a likely contributor, but the
+specific source of the extra terrain-material geometry needs profiling before drawing
+conclusions about GPU memory or render performance.
+
+Three alternating two-core headless flights used full-detail distance 12 and three seconds
+per leg. High-flight p99 was 12.774 / 8.460, 12.917 / 16.633, and 12.579 / 8.426 ms
+before / after. The second pair regressed by 3.716 ms. Changed terrain and mesh workload
+are plausible contributors, but these short runs do not isolate the cause; a viewer export
+also overlapped part of the measurement. GPU performance has not been measured.

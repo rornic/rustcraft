@@ -23,7 +23,7 @@ pub use source::WorldTerrain;
 
 /// Stamped on every saved map and world. Bump it whenever generation changes what it makes: edits
 /// players make are stored against the generated terrain, so a world from another version is refused.
-pub const GENERATOR_VERSION: u32 = 42;
+pub const GENERATOR_VERSION: u32 = 43;
 
 /// How big the world is and how finely its map is drawn. Both are config, not constants.
 #[derive(Debug, Copy, Clone, PartialEq, serde::Deserialize)]
@@ -116,6 +116,8 @@ pub struct WorldMap {
     pub plate: Vec<u8>,
     pub boundary: Vec<u8>,
     pub uplift: Vec<f32>,
+    /// Relative age of tectonic crust, 0 (young) to 255 (old).
+    pub geological_age: Vec<u8>,
     /// Geological province and the elevation offset of its sedimentary beds.
     pub geology: Vec<u8>,
     pub strata_offset: Vec<f32>,
@@ -178,6 +180,7 @@ impl WorldMap {
             plate: vec![0; cells],
             boundary: vec![0; cells],
             uplift: vec![0.0; cells],
+            geological_age: vec![0; cells],
             geology: vec![0; cells],
             strata_offset: vec![0.0; cells],
             precipitation: vec![0.0; cells],

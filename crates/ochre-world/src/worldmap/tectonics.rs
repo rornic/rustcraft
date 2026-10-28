@@ -32,6 +32,7 @@ pub fn generate(seed: u32, config: WorldConfig) -> WorldMap {
         map.plate[i] = s.plate;
         map.boundary[i] = s.boundary;
         map.uplift[i] = s.uplift;
+        map.geological_age[i] = (s.age * 255.0).round() as u8;
     }
     map
 }
@@ -59,6 +60,7 @@ pub struct Plate {
     pub vx: f64,
     pub vz: f64,
     crust: f64,
+    age: f64,
 }
 
 /// Diagnostic codes: quiet, collision, subduction, extension, shear.
@@ -88,6 +90,7 @@ mod tests {
                 vx: 0.7,
                 vz: 0.0,
                 crust: if ocean { -1.5 } else { 1.5 },
+                age: 0.8,
             },
             Plate {
                 x: 8000.0,
@@ -95,6 +98,7 @@ mod tests {
                 vx: -0.7,
                 vz: 0.0,
                 crust: 1.5,
+                age: 0.8,
             },
             Plate {
                 x: 0.0,
@@ -102,6 +106,7 @@ mod tests {
                 vx: 0.0,
                 vz: 0.0,
                 crust: 0.0,
+                age: 0.8,
             },
         ];
         model
@@ -162,6 +167,67 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn extension_and_shear_cut_continental_valleys() {
+        let mut extension = fixture(false);
+        extension.plates[0].vx = -0.7;
+        extension.plates[1].vx = 0.7;
+        let mut shear = extension.clone();
+        shear.plates[0].vx = 0.0;
+        shear.plates[1].vx = 0.0;
+        shear.plates[0].vz = 0.7;
+        shear.plates[1].vz = -0.7;
+        let mut quiet = shear.clone();
+        quiet.plates[0].vz = 0.0;
+        quiet.plates[1].vz = 0.0;
+        let mut rift_depth: f64 = 0.0;
+        let mut shear_depth: f64 = 0.0;
+        let mut shoulder: f64 = 0.0;
+        let mut youngest: f64 = 1.0;
+        for x in (-6000..6000).step_by(100) {
+            let base = quiet.sample(x as f64, 0.0).height;
+            let sample = extension.sample(x as f64, 0.0);
+            let rift = sample.height - base;
+            youngest = youngest.min(sample.age);
+            let fault = shear.sample(x as f64, 0.0).height - base;
+            rift_depth = rift_depth.max(-rift);
+            shear_depth = shear_depth.max(-fault);
+            shoulder = shoulder.max(rift);
+        }
+        assert!(
+            rift_depth > 100.0 && shoulder > 80.0,
+            "rift {rift_depth}, shoulder {shoulder}"
+        );
+        assert!(shear_depth > 70.0, "shear valley {shear_depth}");
+        assert!(
+            youngest < 0.4,
+            "extension should expose young crust: {youngest}"
+        );
+    }
+
+    #[test]
+    fn oceanic_boundaries_build_ridges_and_island_arcs() {
+        let mut ocean = fixture(true);
+        ocean.plates[1].crust = -1.5;
+        let mut quiet = ocean.clone();
+        quiet.plates[0].vx = 0.0;
+        quiet.plates[1].vx = 0.0;
+        let mut divergent = ocean.clone();
+        divergent.plates[0].vx = -0.7;
+        divergent.plates[1].vx = 0.7;
+        let mut arc: f64 = 0.0;
+        let mut ridge: f64 = 0.0;
+        for z in (-8000..8000).step_by(400) {
+            for x in (-5000..5000).step_by(200) {
+                let base = quiet.sample(x as f64, z as f64).height;
+                arc = arc.max(ocean.sample(x as f64, z as f64).height - base);
+                ridge = ridge.max(divergent.sample(x as f64, z as f64).height - base);
+            }
+        }
+        assert!(arc > 400.0, "island arc {arc}");
+        assert!(ridge > 200.0, "spreading ridge {ridge}");
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -171,6 +237,8 @@ pub struct Sample {
     pub plate: u8,
     pub boundary: u8,
     pub uplift: f32,
+    /// Relative crust age, from newly formed (0) to old (1).
+    pub age: f64,
 }
 
 impl Tectonics {
@@ -198,6 +266,7 @@ impl Tectonics {
                 vx: 2.0 * u(0x73) - 1.0,
                 vz: 2.0 * u(0x74) - 1.0,
                 crust: (u(0x75) - 0.5) * 0.45,
+                age: 0.3 + u(0x76) * 0.7,
             });
         }
         Self {
@@ -243,6 +312,12 @@ impl Tectonics {
             .enumerate()
             .map(|(i, p)| weights[i] * p.crust / sum)
             .sum();
+        let inherited_age: f64 = self
+            .plates
+            .iter()
+            .enumerate()
+            .map(|(i, p)| weights[i] * p.age / sum)
+            .sum();
         let crust = self.crust(wx, wz) + bias;
         let continentalness = crust.clamp(-1.0, 1.0);
         let land = smooth(-0.10, 0.16, crust);
@@ -251,6 +326,9 @@ impl Tectonics {
             + 70.0 * fbm(self.seed ^ 0xB01, x, z, 7000.0, 3) * land;
         let mut uplift = 0.0;
         let mut trench = 0.0;
+        let mut spreading = 0.0;
+        let mut valley = 0.0;
+        let mut resurfacing: f64 = 0.0;
         let mut dominant = (0.0, 0);
         for a in 0..self.plates.len() {
             if weights[a] == 0.0 {
@@ -275,12 +353,14 @@ impl Tectonics {
                 let shear = ((pa.vx - pb.vx) * nz - (pa.vz - pb.vz) * nx).abs();
                 let pair_weight = (weights[a] * weights[b]).sqrt();
                 let active = smooth(0.08, 0.9, compression);
+                let divergent = smooth(0.08, 0.9, -compression);
+                let lateral =
+                    smooth(0.15, 0.9, shear) * (1.0 - smooth(0.08, 0.4, compression.abs()));
                 let boundary_x = wx - signed * nx;
                 let boundary_z = wz - signed * nz;
                 let ca = self.crust(boundary_x - nx * 3500.0, boundary_z - nz * 3500.0) + pa.crust;
                 let cb = self.crust(boundary_x + nx * 3500.0, boundary_z + nz * 3500.0) + pb.crust;
                 let collision = ca > 0.0 && cb > 0.0;
-                let subduction = (ca > 0.0) != (cb > 0.0);
                 let la = smooth(-0.14, 0.14, ca);
                 let lb = smooth(-0.14, 0.14, cb);
                 let along = -wx * nz + wz * nx;
@@ -302,6 +382,31 @@ impl Tectonics {
                         * 350.0
                         * (-((continental_side + 1500.0) / 1000.0).powi(2)).exp();
                 }
+                // Oceanic convergence builds a chain on one side of the trench. The
+                // stable plate order keeps the overriding side fixed across the boundary.
+                let ocean_pair = (1.0 - la) * (1.0 - lb);
+                let arc = (-((signed - 2200.0) / 1400.0).powi(2)).exp();
+                let islands = smooth(0.25, 0.72, ridged(self.seed ^ 0xB03, along, 0.0, 3500.0, 3));
+                resurfacing = resurfacing.max(
+                    pair_weight * (divergent * belt + active * ocean_pair * arc * islands).min(1.0),
+                );
+                uplift += active * pair_weight * ocean_pair * arc * islands * 1500.0;
+                trench += active
+                    * pair_weight
+                    * ocean_pair
+                    * 240.0
+                    * (-((signed + 1200.0) / 900.0).powi(2)).exp();
+
+                // Continental extension opens a trough between raised shoulders;
+                // in the ocean it creates a broad submarine spreading ridge.
+                let rift = (-(signed / 1200.0).powi(2)).exp();
+                let shoulders = (-((signed.abs() - 2600.0) / 1500.0).powi(2)).exp();
+                valley += divergent * pair_weight * land * 240.0 * rift;
+                uplift += divergent * pair_weight * land * 220.0 * shoulders;
+                spreading += divergent * pair_weight * (1.0 - land) * 420.0 * belt;
+                // Strike-slip motion makes a narrower linear depression without
+                // raising an artificial wall across the drainage network.
+                valley += lateral * pair_weight * land * 150.0 * (-(signed / 850.0).powi(2)).exp();
                 let rise =
                     (collision_rise + subduction_rise) * (650.0 + 1050.0 * ridges.powi(2)) * land;
                 uplift += active * pair_weight * rise;
@@ -309,10 +414,8 @@ impl Tectonics {
                 let kind = if compression > 0.08 {
                     if collision {
                         COLLISION
-                    } else if subduction {
-                        SUBDUCTION
                     } else {
-                        0
+                        SUBDUCTION
                     }
                 } else if compression < -0.08 {
                     EXTENSION
@@ -332,11 +435,13 @@ impl Tectonics {
         let edge = smooth(0.70, 0.94, rounded + wander);
         let relief = self.config.relief as f64;
         Sample {
-            height: (base + uplift * relief - trench) * (1.0 - edge) - 700.0 * edge,
+            height: (base + (uplift + spreading - valley) * relief - trench) * (1.0 - edge)
+                - 700.0 * edge,
             continentalness: continentalness * (1.0 - edge) - edge,
             plate: nearest.1 as u8,
             boundary: if dominant.0 > 0.10 { dominant.1 } else { 0 },
             uplift: (uplift * relief * (1.0 - edge)) as f32,
+            age: (inherited_age * (1.0 - resurfacing)).clamp(0.0, 1.0),
         }
     }
 }

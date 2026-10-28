@@ -295,6 +295,14 @@ fn layer_pixel(w: &World, v: &View, name: &str, c: &Col) -> Option<(Rgb, f32)> {
             ),
             1.0,
         ),
+        "geological_age" => (
+            lerp(
+                [30.0, 90.0, 190.0],
+                [235.0, 170.0, 55.0],
+                b(&map.geological_age),
+            ),
+            1.0,
+        ),
         "geology" => {
             use ochre_world::worldmap::geology::Rock;
             let colour = match map.rock_at(c.x, c.s.height as f32, c.z) {
@@ -651,8 +659,12 @@ fn info(w: &World, x: f64, z: f64) -> String {
     let lines = [
         format!("surface rock {:?}", map.rock_at(x, s.height as f32, z)),
         format!(
-            "plate {} boundary {} uplift {:.1} precipitation {:.3}",
-            map.plate[i], map.boundary[i], map.uplift[i], map.precipitation[i]
+            "plate {} boundary {} uplift {:.1} crust age {:.2} precipitation {:.3}",
+            map.plate[i],
+            map.boundary[i],
+            map.uplift[i],
+            map.geological_age[i] as f32 / 255.0,
+            map.precipitation[i]
         ),
         format!(
             "wind ({:.2}, {:.2}), bounds {}..{}",
