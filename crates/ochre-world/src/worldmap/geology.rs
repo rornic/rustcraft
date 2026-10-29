@@ -15,6 +15,17 @@ pub enum Rock {
 }
 
 impl Rock {
+    /// Fraction of a droplet's erosion demand taken from this material.
+    pub fn hydraulic_erodibility(self) -> f32 {
+        match self {
+            Self::Stone | Self::Limestone => 0.8,
+            Self::Basalt => 0.55,
+            Self::Marble => 0.7,
+            Self::Clay => 1.0,
+            Self::Sandstone => 0.85,
+        }
+    }
+
     /// Relative rate at which streams cut this material. These are artistic tuning values.
     pub fn stream_erodibility(self) -> f32 {
         match self {
@@ -165,5 +176,70 @@ mod tests {
         let hard_sum: f64 = hard.height.iter().map(|&h| h as f64).sum();
         let soft_sum: f64 = soft.height.iter().map(|&h| h as f64).sum();
         assert!(soft_sum < hard_sum, "soft {soft_sum}, hard {hard_sum}");
+    }
+
+    #[test]
+    fn softer_rock_slumps_further_without_losing_mass() {
+        let config = WorldConfig {
+            size: 1024,
+            ..Default::default()
+        };
+        let mut hard = WorldMap::empty(1, config);
+        hard.height.fill(500.0);
+        hard.geology.fill(VOLCANIC);
+        let spike = hard.index(16, 16);
+        hard.height[spike] = 900.0;
+        let mut soft = hard.clone();
+        soft.geology.fill(SEDIMENTARY);
+        // The spike begins in a clay bed and exposes lower beds as it slumps.
+        soft.strata_offset.fill(500.0);
+        let before: f64 = hard.height.iter().map(|&h| h as f64).sum();
+        super::super::erosion::thermal(&mut hard);
+        super::super::erosion::thermal(&mut soft);
+        assert!(
+            soft.height[spike] < hard.height[spike],
+            "soft {}, hard {}",
+            soft.height[spike],
+            hard.height[spike]
+        );
+        for map in [&hard, &soft] {
+            let after: f64 = map.height.iter().map(|&h| h as f64).sum();
+            assert!((after - before).abs() < 1.0, "mass {before} -> {after}");
+        }
+    }
+
+    #[test]
+    fn droplets_cut_soft_rock_more_than_hard_rock() {
+        let config = WorldConfig {
+            size: 4096,
+            ..Default::default()
+        };
+        let mut hard = WorldMap::empty(7, config);
+        let dim = hard.dim();
+        for z in 0..dim {
+            for x in 0..dim {
+                let i = hard.index(x, z);
+                hard.height[i] = 340.0 + z as f32;
+                hard.geology[i] = VOLCANIC;
+            }
+        }
+        let mut soft = hard.clone();
+        soft.geology.fill(SEDIMENTARY);
+        let before = hard.height.clone();
+        super::super::erosion::hydraulic(&mut hard);
+        super::super::erosion::hydraulic(&mut soft);
+        let cut = |map: &WorldMap| -> f64 {
+            before
+                .iter()
+                .zip(&map.height)
+                .map(|(a, b)| (a - b).max(0.0) as f64)
+                .sum()
+        };
+        assert!(
+            cut(&soft) > cut(&hard),
+            "soft {}, hard {}",
+            cut(&soft),
+            cut(&hard)
+        );
     }
 }

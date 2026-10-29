@@ -48,15 +48,18 @@ impl Rng {
 }
 
 // A window of the height grid a tile's droplets run on.
-struct Window {
+struct Window<'a> {
     w: usize,
     h: usize,
     cells: Vec<f32>,
     // cells at or under this are the sea, which droplets don't wear
     sea: f32,
+    map: &'a WorldMap,
+    x0: usize,
+    z0: usize,
 }
 
-impl Window {
+impl Window<'_> {
     fn at(&self, x: usize, z: usize) -> f32 {
         self.cells[z * self.w + x]
     }
@@ -125,9 +128,15 @@ impl Window {
                     if cx < 0 || cz < 0 || cx >= self.w as i32 || cz >= self.h as i32 {
                         continue;
                     }
-                    let cell = &mut self.cells[cz as usize * self.w + cx as usize];
+                    let (cx, cz) = (cx as usize, cz as usize);
+                    let cell = &mut self.cells[cz * self.w + cx];
+                    let rock = self.map.rock_at_cell(
+                        (self.z0 + cz) * self.map.dim() + self.x0 + cx,
+                        *cell / HEIGHT_SCALE,
+                    );
                     // never wear into the sea
-                    let taken = (amount * weight).min((*cell - self.sea).max(0.0));
+                    let taken = (amount * weight * rock.hydraulic_erodibility())
+                        .min((*cell - self.sea).max(0.0));
                     *cell -= taken;
                     sediment += taken;
                 }
@@ -158,7 +167,9 @@ fn brush() -> Vec<(i32, i32, f32)> {
 }
 
 // One round of droplets over the whole grid, in tiles shifted by `shift` cells.
-fn hydraulic_round(grid: &mut [f32], dim: usize, seed: u32, round: u32, shift: usize) {
+fn hydraulic_round(grid: &mut [f32], map: &WorldMap, round: u32, shift: usize) {
+    let dim = map.dim();
+    let seed = map.seed;
     let sea = WATER_LEVEL as f32 * HEIGHT_SCALE;
     let brush = brush();
     let tiles = (dim + shift).div_ceil(TILE);
@@ -178,7 +189,7 @@ fn hydraulic_round(grid: &mut [f32], dim: usize, seed: u32, round: u32, shift: u
                         batch
                             .iter()
                             .filter_map(|&(tx, tz)| {
-                                tile(grid, dim, (tx, tz), shift, (seed, round), sea, brush)
+                                tile(grid, map, (tx, tz), shift, (seed, round), sea, brush)
                             })
                             .collect::<Vec<_>>()
                     })
@@ -200,15 +211,16 @@ fn hydraulic_round(grid: &mut [f32], dim: usize, seed: u32, round: u32, shift: u
 }
 
 // Runs a tile's droplets on a window of the grid and returns the window and where it goes back.
-fn tile(
+fn tile<'a>(
     grid: &[f32],
-    dim: usize,
+    map: &'a WorldMap,
     (tx, tz): (usize, usize),
     shift: usize,
     (seed, round): (u32, u32),
     sea: f32,
     brush: &[(i32, i32, f32)],
-) -> Option<(usize, usize, Window)> {
+) -> Option<(usize, usize, Window<'a>)> {
+    let dim = map.dim();
     let lo = |t: usize| (t * TILE).saturating_sub(shift);
     let hi = |t: usize| ((t + 1) * TILE).saturating_sub(shift).min(dim);
     let (ix0, ix1, iz0, iz1) = (lo(tx), hi(tx), lo(tz), hi(tz));
@@ -223,6 +235,9 @@ fn tile(
         h,
         cells: Vec::with_capacity(w * h),
         sea,
+        map,
+        x0,
+        z0,
     };
     for z in z0..z1 {
         window
@@ -247,12 +262,11 @@ fn tile(
 
 /// Rain wears the land: gullies and valleys on the slopes, silt in the flats.
 pub(crate) fn hydraulic(map: &mut WorldMap) {
-    let dim = map.dim();
     let mut grid: Vec<f32> = map.height.iter().map(|h| h * HEIGHT_SCALE).collect();
     for round in 0..ROUNDS {
         // each round's tiles sit across the last's seams
         let shift = if round % 2 == 0 { 0 } else { TILE / 2 };
-        hydraulic_round(&mut grid, dim, map.seed, round, shift);
+        hydraulic_round(&mut grid, map, round, shift);
     }
     for (h, g) in map.height.iter_mut().zip(grid) {
         *h = g / HEIGHT_SCALE;
@@ -278,6 +292,13 @@ pub(crate) fn thermal(map: &mut WorldMap) {
     let mut delta = vec![0.0f32; dim * dim];
     for _ in 0..THERMAL_PASSES {
         let h = &map.height;
+        // Both sides of a transfer use the donor's exposed rock and the same
+        // threshold, so distributing the shed material still conserves mass.
+        let talus: Vec<f32> = h
+            .iter()
+            .enumerate()
+            .map(|(i, &height)| TALUS / map.rock_at_cell(i, height).stream_erodibility().sqrt())
+            .collect();
         let get = |x: i64, z: i64| h[z as usize * dim + x as usize];
         let inside = |x: i64, z: i64| x >= 0 && z >= 0 && x < dim as i64 && z < dim as i64;
         // per cell: how much it sheds, and the total drop it sheds over
@@ -291,7 +312,7 @@ pub(crate) fn thermal(map: &mut WorldMap) {
                 let (mut max_drop, mut total) = (0.0f32, 0.0f32);
                 for &(dx, dz, dist) in &offsets {
                     if inside(x + dx, z + dz) {
-                        let rest = TALUS * cell * dist;
+                        let rest = talus[row * dim + col] * cell * dist;
                         let drop = here - get(x + dx, z + dz) - rest;
                         if drop > 0.0 {
                             max_drop = max_drop.max(drop);
@@ -314,7 +335,7 @@ pub(crate) fn thermal(map: &mut WorldMap) {
                     }
                     let n = (z + dz) as usize * dim + (x + dx) as usize;
                     let (give, total) = shed[n];
-                    let drop = get(x + dx, z + dz) - here - TALUS * cell * dist;
+                    let drop = get(x + dx, z + dz) - here - talus[n] * cell * dist;
                     if total > 0.0 && drop > 0.0 {
                         change += give * drop / total;
                     }

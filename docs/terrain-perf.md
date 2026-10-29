@@ -425,3 +425,20 @@ per leg. High-flight p99 was 12.774 / 8.460, 12.917 / 16.633, and 12.579 / 8.426
 before / after. The second pair regressed by 3.716 ms. Changed terrain and mesh workload
 are plausible contributors, but these short runs do not isolate the cause; a viewer export
 also overlapped part of the measurement. GPU performance has not been measured.
+
+## Rock-dependent slumping draft
+
+One seed-1 release `bench` run before / after reported 1,896,431 / 1,896,431 chunk
+vertices and 458,404 / 458,590 LOD vertices. Region generation took 124.8 / 123.4 ms,
+chunk meshing 417.9 / 416.3 ms and total LOD meshing 249.9 / 253.7 ms. These single
+runs do not establish a performance change. The map and mesh workload change with
+erosion; map generation and frame-time A/B comparisons remain to be measured.
+
+## Lake shore transition draft
+
+Three alternating seed-1 release `bench` runs before / after the wider lake search
+measured region generation at 123.7 / 144.2, 124.5 / 143.8 and 123.7 / 143.1 ms.
+Total LOD meshing was 253.0 / 267.6, 252.7 / 268.3 and 252.8 / 268.6 ms. The wider
+per-sample search is a likely contributor. The sampled scene produced 1,891,787 chunk
+and 458,029 LOD vertices in both builds, but the shore change alters terrain elsewhere.
+Frame-time p99 and GPU performance were not measured.
