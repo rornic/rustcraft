@@ -85,11 +85,11 @@ stands past a rim's crest on ground falling away beyond it. The same holds for t
 `contain` then holds the ground to the side of the water its smooth ground is on: under the level
 where the smooth ground is, by as much as it is up to `HOLD`, and over it by as much where it's over.
 The detail laid on the ground can't poke an island through the water or dig a dry pit under its
-level beside it. The hold on the dry side is looked up a cell further out than the water (`still_by`),
-so it carries on past the farthest the water reaches, and fades out over that extra cell by `near`,
-how much of the point lies within a cell of the water's cells: a hold or calm that stopped at a cell's
-edge would step the ground there. Detail is also calmed to nothing at the water's edge over `CALM`
-blocks, for smooth shores.
+level beside it. The hold on the dry side is looked up beyond the water (`still_by`) and fades by
+`near`, so it does not stop at a cell edge. Lake shore smoothing extends over one more map cell,
+with a gradual falloff. This eases the transition into deep detail gullies outside a lake rather
+than forcing the whole drop into one cell. Sea smoothing retains its original reach. Detail is
+also calmed to nothing at the water's edge over `CALM` blocks, for smooth shores.
 
 Inland, out of any lake, the ground is never under the sea (`LAND_ABOVE_SEA`).
 

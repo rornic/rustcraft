@@ -278,3 +278,58 @@ steps across 374 sampled windows; the scan alone does not establish which are ar
 A short seed-1 headless loading simulation reported no holes in its sampled window.
 The headless timing and vertex-count comparison is recorded in
 [terrain-perf.md](terrain-perf.md).
+
+## Rock-dependent slumping draft
+
+Thermal erosion now varies its angle of rest with the exposed rock in each map cell.
+The threshold uses the inverse square root of the existing stream-erodibility tuning:
+harder basalt and marble retain steeper slopes, while softer sedimentary beds slump
+further. The donor's threshold is used for both removal and distribution. These are
+artistic values, and deposited material is not tracked as a separate sediment layer.
+At this point hydraulic droplets still used a uniform erosion rate; geological age
+remains diagnostic.
+Generator version 44 invalidates earlier terrain caches and saved edits.
+
+For seed 42, matching 64 m/pixel overview exports changed 656 of 1,048,576 pixels,
+mostly in steep terrain. Drainage changed near the old seed-42 river-edge fixture,
+which was moved to a new river reach. Fine water audits for seeds 1, 42 and 1337 found
+no sampled open river block edges and no lake or coast wall flags. The coarse river
+scan reported 5, 0 and 17 tall-wall flags respectively. Those flags, drainage changes,
+and ground-level appearance need visual review; the sampled audits do not prove every
+bank is contained.
+
+## Rock-dependent hydraulic erosion draft
+
+Droplets now scale their erosion demand at each brush cell by the exposed rock, sampled
+again as its height changes. Basalt resists cutting more than clay. The coefficients are
+artistic values at most one, so the brush cannot take more than the original downhill
+limit. Sediment carried by a droplet still equals the material removed; deposition and
+the existing handling of droplets leaving the grid are unchanged. Version 44 includes
+both rock-dependent passes.
+
+On seed 42, matching 64 m/pixel overview exports before and after this hydraulic pass
+changed 4,231 of 1,048,576 pixels, including changes to lakes and drainage. Fine water
+audits for seeds 1, 42 and 1337 found no sampled open river block edges and no lake or
+coast wall flags. The coarse river scan reported 0, 1 and 20 tall-wall flags respectively.
+These sampled checks do not establish containment everywhere. Ground-level scenery,
+waterfalls, seam candidates and changed drainage still need visual review.
+
+## Foothill relief adjustment
+
+Foothill scarps, gullies and the range-driven roughness floor now use 60% of their
+previous strength. Mountain relief keeps its own full-strength treatment. A matching
+block-scale view around seed 300059728 at `x=-12594, z=-340` changed 22,837 of
+1,048,576 pixels; the foothills still need ground-level review. A fine water audit on
+that seed found no sampled open river edges or lake and coast wall flags. Generator
+version 45 prevents terrain from version 44 being reused with the adjusted foothills.
+
+The lake near `x=-8240, z=3068` has a conspicuous shore band. At `x=-8304, z=3108`,
+the surrounding terrain detail would place ground about 20 blocks below the lake, so the
+shore hold raises it to contain the water. Previously the hold and calming faded within
+one map cell, leaving a steep bank. A wider lake-only falloff spreads the transition.
+Along the sampled transect its largest four-block rise near the old transition falls
+from about 9 blocks to under 2. A ground-level appearance review remains needed.
+Fill-spill routes water on the map before block-scale detail is applied; it cannot see
+these later gullies. The wider fade reduces the abrupt correction but does not make
+lake routing account for detailed terrain. Generator version 46 invalidates version-45
+terrain and saved edits.

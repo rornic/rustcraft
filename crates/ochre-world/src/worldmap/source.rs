@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use super::climate::{BiomeKind, LAPSE_PER_BLOCK};
-use super::detail::{detail, dunes, foothill_weight, gully_relief, scarps, terraced};
+use super::detail::{
+    detail, dunes, foothill_weight, gully_relief, scarps, terraced, FOOTHILL_RELIEF,
+};
 use super::water::{freeboard, RiverHit, RiverProfiles};
 use super::FeatureKind;
 use super::{WaterCell, WorldMap};
@@ -85,8 +87,7 @@ fn bank_width(river: RiverHit) -> f32 {
 struct Still {
     level: f64,
     kind: WaterKind,
-    // how much a point lies within a cell of this water's cells, 0..1, smooth across cells: 1 wherever
-    // the water can stand, falling to nothing a cell past that, so what it does to the ground fades out
+    // Influence of this water on nearby ground, 0..1, fading across map cells.
     near: f64,
     // how much of the four cells round a point are this water's, 0..1, smooth across cells
     cover: f64,
@@ -264,49 +265,66 @@ impl WorldTerrain {
         let (fx, fz) = (u - u.floor(), v - v.floor());
         let max = map.dim() as i64 - 1;
         let mut still: [Option<Still>; 4] = [None; 4];
-        // which of the four cells round the point are within a cell of each water's cells
-        let mut corners = [[false; 4]; 4];
+        // Nearer cells fill the limited lake slots first, before the outer smoothing band.
+        let mut corners = [[0.0f64; 4]; 4];
         // and which are each water's own cells
         let mut owns = [[false; 4]; 4];
-        for dz in 1 - reach..=reach {
-            for dx in 1 - reach..=reach {
-                let i = map.index(
-                    (cx + dx).clamp(0, max) as usize,
-                    (cz + dz).clamp(0, max) as usize,
-                );
-                let (slot, level, kind) = match WaterCell::from_u8(map.water_kind[i]) {
-                    WaterCell::Ocean => (0, WATER_LEVEL as f64, WaterKind::Ocean),
-                    WaterCell::Lake => {
-                        let level = map.water_surface[i].floor() as f64;
-                        let Some(slot) =
-                            (1..4).find(|&k| still[k].is_none_or(|w: Still| w.level == level))
-                        else {
-                            continue;
-                        };
-                        (slot, level, WaterKind::Lake)
+        let inner = reach.min(2);
+        let offsets = (1 - inner..=inner)
+            .flat_map(|dz| (1 - inner..=inner).map(move |dx| (dx, dz)))
+            .chain((1 - reach..=reach).flat_map(|dz| {
+                (1 - reach..=reach)
+                    .filter(move |&dx| dx < 1 - inner || dx > inner || dz < 1 - inner || dz > inner)
+                    .map(move |dx| (dx, dz))
+            }));
+        for (dx, dz) in offsets {
+            let i = map.index(
+                (cx + dx).clamp(0, max) as usize,
+                (cz + dz).clamp(0, max) as usize,
+            );
+            let (slot, level, kind) = match WaterCell::from_u8(map.water_kind[i]) {
+                WaterCell::Ocean => {
+                    if dx < 1 - inner || dx > inner || dz < 1 - inner || dz > inner {
+                        continue;
                     }
-                    _ => continue,
-                };
-                still[slot] = Some(Still {
-                    level,
-                    kind,
-                    near: 0.0,
-                    cover: 0.0,
-                });
-                for (c, (a, b)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
-                    corners[slot][c] |= (dx - a).abs() <= 1 && (dz - b).abs() <= 1;
-                    owns[slot][c] |= dx == a && dz == b;
+                    (0, WATER_LEVEL as f64, WaterKind::Ocean)
                 }
+                WaterCell::Lake => {
+                    let level = map.water_surface[i].floor() as f64;
+                    let Some(slot) =
+                        (1..4).find(|&k| still[k].is_none_or(|w: Still| w.level == level))
+                    else {
+                        continue;
+                    };
+                    (slot, level, WaterKind::Lake)
+                }
+                _ => continue,
+            };
+            still[slot] = Some(Still {
+                level,
+                kind,
+                near: 0.0,
+                cover: 0.0,
+            });
+            for (c, (a, b)) in [(0, 0), (1, 0), (0, 1), (1, 1)].into_iter().enumerate() {
+                let distance = (dx - a).abs().max((dz - b).abs());
+                let weight = match distance {
+                    0 | 1 => 1.0,
+                    2 if reach >= 3 && kind == WaterKind::Lake => 0.5,
+                    _ => 0.0,
+                };
+                corners[slot][c] = corners[slot][c].max(weight);
+                owns[slot][c] |= dx == a && dz == b;
             }
         }
-        let blend = |bits: [bool; 4]| {
-            let at = |c: usize| if bits[c] { 1.0 } else { 0.0 };
-            (at(0) * (1.0 - fx) + at(1) * fx) * (1.0 - fz) + (at(2) * (1.0 - fx) + at(3) * fx) * fz
+        let blend = |weights: [f64; 4]| {
+            (weights[0] * (1.0 - fx) + weights[1] * fx) * (1.0 - fz)
+                + (weights[2] * (1.0 - fx) + weights[3] * fx) * fz
         };
         for ((w, near), own) in still.iter_mut().zip(corners).zip(owns) {
             if let Some(w) = w {
                 w.near = blend(near);
-                w.cover = blend(own);
+                w.cover = blend(own.map(|v| if v { 1.0 } else { 0.0 }));
             }
         }
         still
@@ -321,10 +339,9 @@ impl WorldTerrain {
         self.still_near(x, z, 1)
     }
 
-    // The still water whose shore a point may be near: within a cell more each way than `still_round`, so the
-    // ground is held and calmed on past the farthest the water reaches.
+    // Include an additional cell for a gradual transition back to the surrounding terrain.
     fn still_by(&self, x: f64, z: f64) -> [Option<Still>; 4] {
-        self.still_near(x, z, 2)
+        self.still_near(x, z, 3)
     }
 
     // The ground at a point with no river or lake water on it: the map's smooth height with the
@@ -431,7 +448,8 @@ impl WorldTerrain {
         // ridges cut into it, as the range's own faces are
         let mountain = self.kind_cover(BiomeKind::Mountain, x, z);
         let near_range = map.bilinear_bytes(&map.range, x, z) as f64 / 255.0;
-        let foothills = (1.0 - mountain) * foothill_weight(near_range, base - sea);
+        let foothills =
+            (1.0 - mountain) * FOOTHILL_RELIEF * foothill_weight(near_range, base - sea);
         let rough = mountain + foothills;
         detail += scarps(seed, x, z, foothills, base + detail) - (base + detail);
         detail += gully_relief(
@@ -837,6 +855,48 @@ mod sea_level_tests {
 mod river_bank_tests {
     use super::*;
 
+    #[test]
+    fn nearby_lake_takes_priority_over_outer_smoothing_band() {
+        let config = super::super::WorldConfig {
+            size: 1024,
+            ..Default::default()
+        };
+        let mut map = super::super::WorldMap::empty(1, config);
+        for (x, z, level) in [
+            (14, 14, 10.0),
+            (15, 14, 20.0),
+            (16, 14, 30.0),
+            (16, 16, 40.0),
+        ] {
+            let i = map.index(x, z);
+            map.water_kind[i] = WaterCell::Lake as u8;
+            map.water_surface[i] = level;
+        }
+        let (x, z) = map.cell_centre(16, 16);
+        let terrain = WorldTerrain::new(Arc::new(map));
+        assert!(terrain
+            .still_by(x, z)
+            .iter()
+            .flatten()
+            .any(|w| w.level == 40.0));
+    }
+
+    #[test]
+    fn lake_bank_eases_into_deep_adjacent_gully() {
+        let map = Arc::new(super::super::generate(300059728, Default::default()));
+        let terrain = WorldTerrain::new(map);
+        assert_eq!(terrain.sample(-8284.0, 3108.0).water_kind, WaterKind::Lake);
+        let mut previous = terrain.sample(-8340.0, 3108.0).height;
+        for x in (-8336..=-8312).step_by(4) {
+            let height = terrain.sample(x as f64, 3108.0).height;
+            assert!(
+                (height - previous).abs() < 3.0,
+                "bank step at {x}: {previous} to {height}"
+            );
+            previous = height;
+        }
+    }
+
     fn river_edge(terrain: &WorldTerrain, centre: (i64, i64)) -> (i64, i64, f32, f64) {
         for z in centre.1 - 96..=centre.1 + 96 {
             for x in centre.0 - 96..=centre.0 + 96 {
@@ -984,7 +1044,7 @@ mod river_bank_tests {
     fn river_edge_holds_water_on_seed_42() {
         let map = Arc::new(super::super::generate(42, Default::default()));
         let terrain = WorldTerrain::new(map);
-        let (_, _, water, bank) = river_edge(&terrain, (13092, -23612));
+        let (_, _, water, bank) = river_edge(&terrain, (12040, -24720));
         assert!(
             ochre_terrain::generate::region_store::bed_top(bank as f32, 0.0)
                 >= ochre_terrain::generate::region_store::water_block_top(water),
@@ -1057,8 +1117,9 @@ mod river_bank_tests {
         assert_eq!(wet.water_kind, WaterKind::River);
         assert_eq!(bank.water_kind, WaterKind::None);
         assert!(
-            bank.height >= wet.water_surface as f64,
-            "dry bank {} stands under river surface {}",
+            ochre_terrain::generate::region_store::bed_top(bank.height as f32, 0.0)
+                >= ochre_terrain::generate::region_store::water_block_top(wet.water_surface),
+            "dry bank {} does not hold river surface {}",
             bank.height,
             wet.water_surface
         );

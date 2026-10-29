@@ -142,6 +142,8 @@ const SCARP_PATCH_WAVELENGTH: f64 = 500.0;
 const SCARP_CELL: f64 = 900.0;
 const GULLY_WAVELENGTH: f64 = 85.0;
 const GULLY_HEIGHT: f64 = 22.0;
+// Keep foothill relief gentler than the mountain faces it surrounds.
+pub(crate) const FOOTHILL_RELIEF: f64 = 0.6;
 
 /// How much of the way, 0..1, ground `above_sea` blocks up and `range` (0..1) near a mountain range
 /// is foothills: none far from a range or on the lowlands, all of it on the higher ground against one.
@@ -272,7 +274,7 @@ pub fn roughness_layer(map: &mut WorldMap) {
             }
             // the foothills are rough too, the more the nearer a range
             let range = map.range[row * dim + col] as f64 / 255.0;
-            r = r.max(0.8 * foothill_weight(range, above_sea));
+            r = r.max(0.8 * FOOTHILL_RELIEF * foothill_weight(range, above_sea));
             r *= match kind {
                 BiomeKind::Desert => 0.6,
                 BiomeKind::Glacier => 0.5,
